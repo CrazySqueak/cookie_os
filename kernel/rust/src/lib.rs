@@ -34,7 +34,7 @@ pub extern "C" fn _kmain() -> ! {
     
     writer.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
     
-    for i in 1..10 {
+    for i in 1..11 {
         let s = format!("\n\nBeep {}",i);
         writer.write_string(&s);
     }

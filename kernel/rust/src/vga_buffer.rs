@@ -79,7 +79,7 @@ impl VGABuffer {
         self.chars[y][x].write(chr);
     }
     
-    pub fn get_byte(&mut self, x: usize, y: usize) -> VGAChar { self.chars[y][x].read() }
+    pub fn get_vgachar(&mut self, x: usize, y: usize) -> VGAChar { self.chars[y][x].read() }
 }
 
 pub fn get_standard_vga_buffer() -> &'static mut VGABuffer {
@@ -114,7 +114,7 @@ impl<'a> VGAConsoleWriter<'a> {
     pub fn advance_down(&mut self){
         self.row_pos += 1;
         if self.row_pos >= VGA_HEIGHT {
-            todo!();
+            self.scroll(1);
         }
     }
     pub fn return_to_left(&mut self){
@@ -124,6 +124,29 @@ impl<'a> VGAConsoleWriter<'a> {
     pub fn new_line(&mut self){
         self.return_to_left();
         self.advance_down();
+    }
+    
+    // Scroll the screen up to make space for new text
+    pub fn scroll(&mut self, nlines: usize){
+        // Move text up
+        for newy in 0..(VGA_HEIGHT-nlines) {
+            let oldy = newy+nlines;
+            for x in 0..VGA_WIDTH {
+                let old = self.buffer.get_vgachar(x, oldy);
+                self.buffer.put_vgachar(x, newy, old);
+            }
+        }
+        
+        // Clear bottom lines
+        for y in (VGA_HEIGHT-nlines)..nlines {
+            for x in 0..VGA_WIDTH {
+                self.buffer.put_byte(x,y, b' ', self.colour);
+            }
+        }
+        
+        // Move cursor to correct position
+        if self.row_pos < nlines { self.row_pos = 0; }
+        else { self.row_pos -= nlines; }
     }
     
     pub fn write_byte(&mut self, byte: u8){

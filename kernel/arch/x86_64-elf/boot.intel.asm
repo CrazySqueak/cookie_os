@@ -29,12 +29,15 @@ start:
     call check_cpuid
     call check_long_mode
     
+    ; Enable Paging and enter Long Mode
+    call configure_identity_paging
+    call enable_paging_and_long_mode
+    
     ; ok
     mov dword [0xb8000], 0x2f4b2f4f
     hlt
     
 ; CHECKS
-
 check_multiboot:
     cmp eax, 0x36d76289
     jne .no_multiboot
@@ -96,6 +99,66 @@ check_long_mode:
     mov eax, 3
     jmp boot_error
 
+; Paging
+%define PAGEFLAG_PRESENT_WRITEABLE      0b0000_0011
+%define PAGEFLAG_PRESENT_WRITEABLE_HUGE 0b1000_0011
+%define PAGETABLE_NUM_ENTRIES 512
+configure_identity_paging:
+    ; P4 = Page-Map Level-4 Table (address bits 47-39, each entry covers 512GiB of virtual address space)
+    ; P3 = Page-Directory Pointer Table (address bits 38-30, each entry covers 1GiB of virtual address space)
+    ; P2 = Page-Directory Table (address bits 29-21, each entry covers 2MiB of virtual address space)
+    ; P1 = Page Table (address bits 20-12, each entry covers 4KiB of virtual address space)
+    ; map first P4 entry (0x0000_0000... - 0x0000_0080...)
+    mov eax, p3_table
+    or eax, PAGEFLAG_PRESENT_WRITEABLE
+    mov [p4_table], eax
+    
+    ; map first P3 entry (0x...0000_0000 - 0x...4000_0000)
+    mov eax, p2_table
+    or eax, PAGEFLAG_PRESENT_WRITEABLE
+    mov [p3_table], eax
+    
+    ; map each P2 entry to a huge page (a huge page covers the entire address space for that entry, instead of pointing to another table containing subdivisions)
+    mov ecx, 0
+    .map_p2
+    mov eax, 0x20_0000 ;2MiB
+    mul ecx ; multiplied by ecx gives us our start address of the ecx-th page in P2 (when identity paging, assuming this is the first P2)
+    or eax, PAGEFLAG_PRESENT_WRITEABLE_HUGE
+    mov [p2_table + ecx * 8], eax ; place in map (indexed by counter)
+    
+    inc ecx
+    cmp ecx, PAGETABLE_NUM_ENTRIES
+    jne .map_p2  ; keep going
+    ret  ; else return
+
+; Enable Paging + Long Mode
+%define CR4FLAG_PAE 1<<5
+%define MSR_EFER 0xC0000080
+%define EFERFLAG_LONGMODE 1<<8
+%define CR0FLAG_PAGING 1<<31
+enable_paging_and_long_mode:
+    ; load P4 into CR3
+    mov eax, p4_table
+    mov cr3, eax
+    
+    ; enable PAE in cr4
+    mov eax, cr4
+    or eax, CR4FLAG_PAE
+    mov cr4, eax
+    
+    ; set long mode in the EFER MSR
+    mov ecx, MSR_EFER
+    rdmsr
+    or eax, EFERFLAG_LONGMODE
+    wrmsr
+    
+    ; Enable paging
+    mov eax, cr0
+    or eax, CR0FLAG_PAGING
+    mov cr0, eax
+    
+    ret
+
 ; Error handling
 ; Prints `ERR: ` and the given error message to screen and hangs.
 ; parameter: error code in eax, which is an index into our table of error codes
@@ -134,7 +197,16 @@ db 'NO_CPUID',0
 db 'NO_THIS_IS_AN_INTEL_8086',0
 
 section .bss
+; identity paging
+align 4096
+p4_table:
+    resb 4096
+p3_table:
+    resb 4096
+p2_table:
+    resb 4096
 ; stack
+align 16
 bstack_bottom:
     resb 16384
 bstack_top:

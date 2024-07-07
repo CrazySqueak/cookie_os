@@ -4,16 +4,25 @@ export LD := $(ARCH)-ld
 export NASM := nasm -f elf64
 export QEMU := qemu-system-x86_64
 
-export SYSROOT := $(abspath build/sysroot)
+export BUILDNAME := $(ARCH)
 
 ifeq ($(INCLUDE_DEBUG_SYMBOLS),1)
+$(info Including debug symbols.)
 export NASM := $(NASM) -g -F dwarf
+export BUILDNAME := $(BUILDNAME)-withsymbols
 else
+$(info Stripping debug symbols.)
 export LD := $(LD) -S
 endif
 
+export BUILDROOT := build
+export BUILDDIR := $(BUILDROOT)/$(BUILDNAME)
+export SYSROOT := $(abspath $(BUILDDIR)/sysroot)
+export DISTROOT := dist
+export ISONAME := $(DISTROOT)/boot-$(BUILDNAME).iso
+export KBINNAME := $(DISTROOT)/kernel-$(BUILDNAME).bin
 
-dist/boot.iso: $(SYSROOT)/boot/kernel.bin $(SYSROOT)/boot/grub/grub.cfg
+$(ISONAME): $(SYSROOT)/boot/kernel.bin $(SYSROOT)/boot/grub/grub.cfg
 	@mkdir -p $(dir $@)
 	grub-mkrescue -o $@ $(SYSROOT)
 
@@ -24,17 +33,21 @@ $(SYSROOT)/boot/grub/grub.cfg: grub.cfg
 $(SYSROOT)/boot/kernel.bin: FORCE
 	@mkdir -p $(dir $@)
 	$(MAKE) -C kernel
-	cp -u kernel/dist/kernel.bin $@
+	cp -u kernel/$(KBINNAME) $@
 
 clean:
-	-rm -r build
-	-rm -r dist
+	-rm -r $(BUILDROOT)
+	-rm -r $(DISTROOT)
 	$(MAKE) -C kernel clean
 
-run: dist/boot.iso
-	$(QEMU) --cdrom $^
-debug: dist/boot.iso $(SYSROOT)/boot/kernel.bin
-	$(QEMU) --cdrom $^ -s -S &
+run: $(ISONAME)
+	$(QEMU) --cdrom $(ISONAME)
+debug: $(ISONAME) $(SYSROOT)/boot/kernel.bin
+	@if [ "$$INCLUDE_DEBUG_SYMBOLS" != "1" ]; then\
+		echo -e "\033[0;33mWARNING: Debug symbols were not included in this build! Set $$INCLUDE_DEBUG_SYMBOLS to 1 to include them!\033[0m";\
+		sleep 1;\
+	fi
+	$(QEMU) --cdrom $(ISONAME) -s -S &
 	gdb --symbols=$(SYSROOT)/boot/kernel.bin -ex "target remote localhost:1234" -ex "tui layout asm" -ex "tui layout reg"
 
 FORCE:

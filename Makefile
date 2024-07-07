@@ -15,6 +15,16 @@ $(info Stripping debug symbols.)
 export LD := $(LD) -S
 endif
 
+ifeq ($(RELEASE_BUILD),1)
+$(info Building rust code in release mode.)
+export CARGOFLAGS := $(CARGOFLAGS) --release
+export RS_TARGET_DIR := target/release
+else
+$(info Building rust code in development mode.)
+export RS_TARGET_DIR := target/debug
+export BUILDNAME := $(BUILDNAME)-rsdev
+endif
+
 export BUILDROOT := build
 export BUILDDIR := $(BUILDROOT)/$(BUILDNAME)
 export SYSROOT := $(abspath $(BUILDDIR)/sysroot)

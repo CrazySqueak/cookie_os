@@ -12,9 +12,6 @@ long_mode_start:
     mov fs, ax
     mov gs, ax
     
-    ; print `OKAY` to screen
-    ; that's so fucking cool that the tutorial demonstrates our use of RAX
-    ; by adding two VGA letters to the "OK" example, I wasn't expecting that /gen
-    mov rax, 0x2f592f412f4b2f4f
-    mov qword [0xb8000], rax
-    hlt
+    ; Hand control over to rust
+    extern _kmain
+    call _kmain

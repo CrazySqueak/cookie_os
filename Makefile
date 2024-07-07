@@ -58,6 +58,6 @@ debug: $(ISONAME) $(SYSROOT)/boot/kernel.bin
 		sleep 1;\
 	fi
 	$(QEMU) --cdrom $(ISONAME) -s -S &
-	gdb --symbols=$(SYSROOT)/boot/kernel.bin -ex "target remote localhost:1234" -ex "tui layout asm" -ex "tui layout reg"
+	gdb --symbols=$(SYSROOT)/boot/kernel.bin -ex "target remote localhost:1234"
 
 FORCE:

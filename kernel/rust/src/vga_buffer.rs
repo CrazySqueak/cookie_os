@@ -64,21 +64,22 @@ pub struct VGAChar {
     colour: VGAColour,
 }
 
+use volatile::Volatile;
 const VGA_HEIGHT: usize = 25;
 const VGA_WIDTH: usize = 80;
 #[repr(transparent)]
 pub struct VGABuffer {
-    chars: [[VGAChar; VGA_WIDTH]; VGA_HEIGHT],
+    chars: [[Volatile<VGAChar>; VGA_WIDTH]; VGA_HEIGHT],
 }
 impl VGABuffer {
     pub fn put_byte(&mut self, x: usize, y: usize, c: u8, colour: VGAColour) {
-        self.chars[y][x] = VGAChar { ascii_code: c, colour: colour }
+        self.chars[y][x].write(VGAChar { ascii_code: c, colour: colour });
     }
     pub fn put_vgachar(&mut self, x: usize, y: usize, chr: VGAChar){
-        self.chars[y][x] = chr
+        self.chars[y][x].write(chr);
     }
     
-    pub fn get_byte(&mut self, x: usize, y: usize) -> VGAChar { self.chars[y][x] }
+    pub fn get_byte(&mut self, x: usize, y: usize) -> VGAChar { self.chars[y][x].read() }
 }
 
 pub fn get_standard_vga_buffer() -> &'static mut VGABuffer {

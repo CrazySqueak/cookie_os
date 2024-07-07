@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+buddy_system_allocator = "0.10.0"
+volatile = "0.2.6"
 
 [lib]
 crate-type = ["staticlib"]

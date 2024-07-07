@@ -24,7 +24,7 @@ start:
     ; Initialise stack
     mov esp, bstack_top
     
-    ; Check multiboot
+    ; Checks
     call check_multiboot
     call check_cpuid
     call check_long_mode

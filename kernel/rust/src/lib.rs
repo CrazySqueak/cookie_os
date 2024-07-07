@@ -8,6 +8,9 @@ use buddy_system_allocator::LockedHeap;
 
 mod vga_buffer;
 
+// arch-specific
+mod lowlevel;
+
 #[no_mangle]
 pub extern "C" fn _kmain() -> ! {
     // Init heap
@@ -41,7 +44,7 @@ pub extern "C" fn _kmain() -> ! {
     panic!("Test panic. Don't panic!");
     
     // TODO
-    loop {}
+    lowlevel::halt();
 }
 
 /// This function is called on panic.
@@ -53,7 +56,7 @@ fn panic(_info: &PanicInfo) -> ! {
     // Write message and location
     writer.write_string(&format!("KERNEL PANICKED: {}", _info));
     
-    loop {}
+    lowlevel::halt();
 }
 
 #[global_allocator]

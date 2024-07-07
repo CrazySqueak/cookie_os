@@ -120,7 +120,7 @@ configure_identity_paging:
     
     ; map each P2 entry to a huge page (a huge page covers the entire address space for that entry, instead of pointing to another table containing subdivisions)
     mov ecx, 0
-    .map_p2
+    .map_p2:
     mov eax, 0x20_0000 ;2MiB
     mul ecx ; multiplied by ecx gives us our start address of the ecx-th page in P2 (when identity paging, assuming this is the first P2)
     or eax, PAGEFLAG_PRESENT_WRITEABLE_HUGE

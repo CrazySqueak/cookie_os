@@ -16,6 +16,7 @@ header_start:
 header_end:
 
 global start
+extern long_mode_start
 
 ; big thanks to https://os.phil-opp.com/entering-longmode/
 section .text
@@ -33,9 +34,10 @@ start:
     call configure_identity_paging
     call enable_paging_and_long_mode
     
-    ; ok
-    mov dword [0xb8000], 0x2f4b2f4f
-    hlt
+    ; load the 64-bit GDT
+    lgdt [gdt64.pointer]
+    ; And far jump to start
+    jmp gdt64.kcode:long_mode_start
     
 ; CHECKS
 check_multiboot:
@@ -162,6 +164,7 @@ enable_paging_and_long_mode:
 ; Error handling
 ; Prints `ERR: ` and the given error message to screen and hangs.
 ; parameter: error code in eax, which is an index into our table of error codes
+global boot_error
 boot_error:
     mov dword [0xb8000], 0x4f524f45
     mov dword [0xb8004], 0x4f3a4f52
@@ -195,6 +198,14 @@ db 'NO_MULTIBOOT',0
 db 'NO_CPUID',0
 .err_8086:
 db 'NO_THIS_IS_AN_INTEL_8086',0
+; global descriptor table
+gdt64:
+    dq 0 ; null entry
+.kcode: equ $ - gdt64 ; pointer to entry #1
+    dq (1<<43) | (1<<44) | (1<<47) | (1<<53) ; entry #1 - kernel code (64-bit)
+.pointer:
+    dw $ - gdt64 - 1
+    dq gdt64
 
 section .bss
 ; identity paging

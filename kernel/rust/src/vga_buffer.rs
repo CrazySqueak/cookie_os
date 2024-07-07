@@ -134,4 +134,10 @@ impl<'a> VGAConsoleWriter<'a> {
             }
         }
     }
+    
+    pub fn write_string(&mut self, s: &str){
+        for c in s.bytes(){
+            self.write_byte(c);
+        }
+    }
 }

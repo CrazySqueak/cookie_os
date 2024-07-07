@@ -126,6 +126,10 @@ impl<'a> VGAConsoleWriter<'a> {
         self.advance_down();
     }
     
+    pub fn set_colour(&mut self, colour: VGAColour){
+        self.colour = colour
+    }
+    
     // Scroll the screen up to make space for new text
     pub fn scroll(&mut self, nlines: usize){
         // Move text up

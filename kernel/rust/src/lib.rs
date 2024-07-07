@@ -38,6 +38,7 @@ pub extern "C" fn _kmain() -> ! {
         let s = format!("\n\nBeep {}",i);
         writer.write_string(&s);
     }
+    panic!("Test panic. Don't panic!");
     
     // TODO
     loop {}
@@ -46,6 +47,12 @@ pub extern "C" fn _kmain() -> ! {
 /// This function is called on panic.
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
+    let mut writer = vga_buffer::VGAConsoleWriter::new();
+    writer.set_colour(vga_buffer::VGAColour::new(vga_buffer::BaseColour::LightGray,vga_buffer::BaseColour::Red,true,false));
+    
+    // Write message and location
+    writer.write_string(&format!("KERNEL PANICKED: {}", _info));
+    
     loop {}
 }
 

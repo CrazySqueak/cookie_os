@@ -12,7 +12,8 @@ RUSTSRC_ARCH_DIR=$(ARCHDIR)/rust
 # I just hadn't read that part
 # oh well, keeps my mind sharp
 RUST_ARCHIVE_NAME=kernel_rs
-RUST_ARCHIVE=$(RUST_MERGED_DIR)/$(RS_TARGET_DIR)/lib$(RUST_ARCHIVE_NAME).a
+# Weird cargo bug or something?? libkernel_rs.a is placed in target/target/<profile>/ instead of target/<profile>
+RUST_ARCHIVE=$(RUST_MERGED_DIR)/target/$(RS_TARGET_DIR)/lib$(RUST_ARCHIVE_NAME).a
 
 OBJECTS=$(ARCH_OBJS)
 LINK_OBJS=$(OBJECTS) $(RUST_ARCHIVE)
@@ -31,8 +32,8 @@ $(ARCHBUILDDIR)/%.o: $(ARCHDIR)/%.intel.asm
 # Rust
 rust-merge: FORCE
 	@mkdir -p $(RUST_MERGED_DIR)
-	if [ -d "$(RUSTSRC_COMMON_DIR)" ]; then cp -ru $(RUSTSRC_COMMON_DIR)/* $(RUST_MERGED_DIR); fi
-	if [ -d "$(RUSTSRC_ARCH_DIR)" ]; then cp -ru $(RUSTSRC_ARCH_DIR)/* $(RUST_MERGED_DIR); fi
+	if [ -d "$(RUSTSRC_COMMON_DIR)" ]; then cp -Tru $(RUSTSRC_COMMON_DIR) $(RUST_MERGED_DIR); fi
+	if [ -d "$(RUSTSRC_ARCH_DIR)" ]; then cp -Tru $(RUSTSRC_ARCH_DIR) $(RUST_MERGED_DIR); fi
 
 $(RUST_ARCHIVE): rust-merge
 	cd $(RUST_MERGED_DIR) && cargo build $(CARGOFLAGS)

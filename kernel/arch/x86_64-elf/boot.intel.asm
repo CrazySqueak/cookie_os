@@ -104,7 +104,10 @@ check_long_mode:
 ; Paging
 %define PAGEFLAG_PRESENT_WRITEABLE      0b0000_0011
 %define PAGEFLAG_PRESENT_WRITEABLE_HUGE 0b1000_0011
+%define PAGEFLAG_ABSENT                 0b0000_0000
 %define PAGETABLE_NUM_ENTRIES 512
+%define P2_HUGE_SIZE 0x20_0000 ;2MiB
+%define P1_SIZE        4096    ;4KiB
 configure_identity_paging:
     ; P4 = Page-Map Level-4 Table (address bits 47-39, each entry covers 512GiB of virtual address space)
     ; P3 = Page-Directory Pointer Table (address bits 38-30, each entry covers 1GiB of virtual address space)
@@ -123,7 +126,7 @@ configure_identity_paging:
     ; map each P2 entry to a huge page (a huge page covers the entire address space for that entry, instead of pointing to another table containing subdivisions)
     mov ecx, 0
     .map_p2:
-    mov eax, 0x20_0000 ;2MiB
+    mov eax, P2_HUGE_SIZE
     mul ecx ; multiplied by ecx gives us our start address of the ecx-th page in P2 (when identity paging, assuming this is the first P2)
     or eax, PAGEFLAG_PRESENT_WRITEABLE_HUGE
     mov [p2_table + ecx * 8], eax ; place in map (indexed by counter)
@@ -131,7 +134,37 @@ configure_identity_paging:
     inc ecx
     cmp ecx, PAGETABLE_NUM_ENTRIES
     jne .map_p2  ; keep going
-    ret  ; else return
+    
+    ; map a P2 entry to the P1 guard table
+    ; Figure out which P2 entry contains our guard page
+    mov edi, guard_page
+    shr edi, 21  ; 20_0000h -> 1
+    mov eax, p1_table_withguard
+    or eax, PAGEFLAG_PRESENT_WRITEABLE
+    mov [p2_table + edi * 8], eax
+    
+    ; identity-map each P1 entry
+    shl edi, 21  ; 1 -> 20_0000h
+    mov ecx, 0
+    .map_p1:
+    mov eax, P1_SIZE
+    mul ecx
+    add eax, edi
+    or eax, PAGEFLAG_PRESENT_WRITEABLE
+    mov [p1_table_withguard + ecx * 8], eax
+    
+    inc ecx
+    cmp ecx, PAGETABLE_NUM_ENTRIES
+    jne .map_p1
+    
+    ; overwrite guard page mapping with an absent mapping
+    mov esi, guard_page
+    sub esi, edi  ; guard_page - page_offset = memory offset inside the jurisdiction of P1
+    shr esi, 12   ; offset -> index (equivalent to dividing by 4096 (the jurisdiction of a P1 entry))
+    mov eax, PAGEFLAG_ABSENT
+    mov [p1_table_withguard + esi * 8], eax
+    
+    ret
 
 ; Enable Paging + Long Mode
 %define CR4FLAG_PAE 1<<5
@@ -221,8 +254,16 @@ global p3_table
 global p2_table
 global bstack_bottom
 global bstack_top
+p1_table_withguard:  ; allocate a p1 table for the stack & guard page
+    resb 4096
+global p1_table_withguard
+global guard_page
 ; stack
-align 16
+; note: attempting to align this properly triggers a NASM error so you just have to hope to god that this doesn't cross a page boundrary
+align 4096
+guard_page:  ; The guard page is an extra page which is never present, and so will always trigger a page fault
+             ; thus ensuring that a stack overflow won't silently corrupt memory
+    resb 4096  ; align on a P1 page boundrary
 bstack_bottom:
     resb 65536
 bstack_top:

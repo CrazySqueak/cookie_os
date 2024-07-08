@@ -44,7 +44,7 @@ pub extern "C" fn _kmain() -> ! {
     writer.write_string("OKAY!! 👌👌👌👌");
     
     // invoke a breakpoint exception
-    //x86_64::instructions::interrupts::int3();
+    x86_64::instructions::interrupts::int3();
     
     writer.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
     

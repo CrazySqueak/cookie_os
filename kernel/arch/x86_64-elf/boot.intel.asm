@@ -216,8 +216,13 @@ p3_table:
     resb 4096
 p2_table:
     resb 4096
+global p4_table
+global p3_table
+global p2_table
+global bstack_bottom
+global bstack_top
 ; stack
 align 16
 bstack_bottom:
-    resb 16384
+    resb 65536
 bstack_top:

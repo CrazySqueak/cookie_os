@@ -8,7 +8,7 @@ export BUILDNAME := $(ARCH)
 
 ifeq ($(INCLUDE_DEBUG_SYMBOLS),1)
 $(info Including debug symbols.)
-export NASM := $(NASM) -g -F dwarf
+export NASM := $(NASM) -g -F stabs
 export BUILDNAME := $(BUILDNAME)-withsymbols
 else
 $(info Stripping debug symbols.)

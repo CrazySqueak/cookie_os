@@ -1,4 +1,5 @@
 #![no_std]
+#![feature(abi_x86_interrupt)]
 extern crate alloc;
 
 use core::panic::PanicInfo;
@@ -16,8 +17,7 @@ use serial::SERIAL1;
 mod lowlevel;
 mod interrupts;
 
-#[no_mangle]
-pub extern "C" fn _kmain() -> ! {
+pub fn _kinit() {
     // Init heap
     // TODO: page this and properly configure it
     unsafe {
@@ -32,13 +32,19 @@ pub extern "C" fn _kmain() -> ! {
         // TODO: Perform an exorcism
     }
     
-    //unsafe {
-    //    let vga_ok: u64 = 0x2f592f412f4b2f4f;
-    //    let vga_ptr: *mut u64 = 0xb8000 as *mut u64;
-    //    (*vga_ptr) = vga_ok
-    //}
+    // Initialise interrupts
+    interrupts::init();
+}
+
+#[no_mangle]
+pub extern "C" fn _kmain() -> ! {
+    _kinit();
+    
     let mut writer = VGA_WRITER.lock();
     writer.write_string("OKAY!! 👌👌👌👌");
+    
+    // invoke a breakpoint exception
+    //x86_64::instructions::interrupts::int3();
     
     writer.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
     
@@ -48,7 +54,7 @@ pub extern "C" fn _kmain() -> ! {
     }
     
     
-    write!(SERIAL1.lock(), "Hello World!");
+    let _ = write!(SERIAL1.lock(), "Hello World!");
     
     // TODO
     lowlevel::halt();
@@ -61,9 +67,9 @@ fn panic(_info: &PanicInfo) -> ! {
     writer.set_colour(vga_buffer::VGAColour::new(vga_buffer::BaseColour::LightGray,vga_buffer::BaseColour::Red,true,false));
     
     // Write message and location
-    writer.write_string(&format!("KERNEL PANICKED: {}", _info));
+    let _ = writer.write_string(&format!("KERNEL PANICKED: {}", _info));
     // Write to serial as well
-    write!(SERIAL1.lock(), "Kernel Rust-Panic!: {}", _info);
+    let _ = write!(SERIAL1.lock(), "Kernel Rust-Panic!: {}", _info);
     
     lowlevel::halt();
 }

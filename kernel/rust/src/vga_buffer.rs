@@ -1,3 +1,6 @@
+
+use lazy_static::lazy_static;
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -166,8 +169,22 @@ impl<'a> VGAConsoleWriter<'a> {
     }
 }
 
-use lazy_static::lazy_static;
-use spin::Mutex;
+// This writer uses spinlocks and without_interrupts(...) to ensure that no deadlocks or race conditions occur
+use crate::util::mutex_no_interrupts;
+mutex_no_interrupts!(LockedVGAConsoleWriter, 'a, VGAConsoleWriter<'a>);
+impl<'a> LockedVGAConsoleWriter<'a>{
+    pub fn scroll(&self, nlines: usize){
+        self.with_lock(|mut w|w.scroll(nlines));
+    }
+    
+    pub fn write_byte(&self, byte: u8){
+        self.with_lock(|mut w|w.write_byte(byte));
+    }
+    pub fn write_string(&self, s: &str){
+        self.with_lock(|mut w|w.write_string(s));
+    }
+}
+
 lazy_static! {
-    pub static ref VGA_WRITER: Mutex<VGAConsoleWriter<'static>> = Mutex::new(VGAConsoleWriter::new_with_buffer(get_standard_vga_buffer()));
+    pub static ref VGA_WRITER: LockedVGAConsoleWriter<'static> = LockedVGAConsoleWriter::wraps(VGAConsoleWriter::new_with_buffer(get_standard_vga_buffer()));
 }

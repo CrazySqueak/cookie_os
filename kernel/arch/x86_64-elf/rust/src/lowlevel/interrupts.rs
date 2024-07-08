@@ -1,9 +1,9 @@
-use core::fmt::Write;
 
 use lazy_static::lazy_static;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use pic8259::ChainedPics;
 use spin::Mutex;
+use crate::util::LockedWrite;
 
 use crate::serial::SERIAL1;
 
@@ -36,12 +36,12 @@ pub fn init(){
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame){
-    let _ = write!(SERIAL1.lock(),"Breakpoint! Frame={:?}", stack_frame);
+    let _ = write!(SERIAL1,"Breakpoint! Frame={:?}", stack_frame);
     // TODO
 }
 
 extern "x86-interrupt" fn fuck_you_too(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode){
-    let _ = write!(SERIAL1.lock(),"Page Fault! Frame={:?} Code={:?}", stack_frame, error_code);
+    let _ = write!(SERIAL1,"Page Fault! Frame={:?} Code={:?}", stack_frame, error_code);
 }
 
 extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> ! {
@@ -75,6 +75,6 @@ macro_rules! pic_interrupt_handler {
     }
 }
 pic_interrupt_handler!(PICInterrupt::Timer.as_u8(), timer_handler, {
-    let _ = write!(SERIAL1.lock(),"Beep");
+    let _ = write!(SERIAL1,"Beep");
     // TODO
 });

@@ -20,3 +20,8 @@ pub fn halt() -> ! {
         }
     }
 }
+
+pub fn without_interrupts<R,F: FnOnce()->R>(f: F) -> R{
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(f)
+}

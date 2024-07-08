@@ -3,7 +3,6 @@
 extern crate alloc;
 
 use core::panic::PanicInfo;
-use core::fmt::Write;
 use alloc::format;
 
 use buddy_system_allocator::LockedHeap;
@@ -12,6 +11,8 @@ mod vga_buffer;
 use vga_buffer::VGA_WRITER;
 mod serial;
 use serial::SERIAL1;
+mod util;
+use crate::util::LockedWrite;
 
 // arch-specific "lowlevel" module
 mod lowlevel;
@@ -38,18 +39,17 @@ pub fn _kinit() {
 pub extern "C" fn _kmain() -> ! {
     _kinit();
     
-    let mut writer = VGA_WRITER.lock();
-    writer.write_string("OKAY!! 👌👌👌👌");
+    VGA_WRITER.write_string("OKAY!! 👌👌👌👌");
     
-    writer.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
+    VGA_WRITER.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
     
     for i in 1..11 {
         let s = format!("\n\nBeep {}",i);
-        writer.write_string(&s);
+        VGA_WRITER.write_string(&s);
     }
     
     
-    let _ = write!(SERIAL1.lock(), "Hello World!");
+    let _ = write!(SERIAL1, "Hello World!");
     
     // TODO
     loop{}//lowlevel::halt();
@@ -64,7 +64,7 @@ fn panic(_info: &PanicInfo) -> ! {
     // Write message and location
     let _ = writer.write_string(&format!("KERNEL PANICKED: {}", _info));
     // Write to serial as well
-    let _ = write!(SERIAL1.lock(), "Kernel Rust-Panic!: {}", _info);
+    let _ = write!(SERIAL1, "Kernel Rust-Panic!: {}", _info);
     
     lowlevel::halt();
 }

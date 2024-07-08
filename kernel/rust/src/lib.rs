@@ -7,6 +7,7 @@ use alloc::format;
 use buddy_system_allocator::LockedHeap;
 
 mod vga_buffer;
+use vga_buffer::VGA_WRITER;
 
 // arch-specific
 mod lowlevel;
@@ -32,16 +33,19 @@ pub extern "C" fn _kmain() -> ! {
     //    let vga_ptr: *mut u64 = 0xb8000 as *mut u64;
     //    (*vga_ptr) = vga_ok
     //}
-    let mut writer = vga_buffer::VGAConsoleWriter::new();
+    let mut writer = VGA_WRITER.lock();
     writer.write_string("OKAY!! 👌👌👌👌");
     
     writer.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
+    
+    if 1+1 == 2 {
+    panic!("beep");
+    }
     
     for i in 1..11 {
         let s = format!("\n\nBeep {}",i);
         writer.write_string(&s);
     }
-    panic!("Test panic. Don't panic!");
     
     // TODO
     lowlevel::halt();
@@ -50,7 +54,7 @@ pub extern "C" fn _kmain() -> ! {
 /// This function is called on panic.
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    let mut writer = vga_buffer::VGAConsoleWriter::new();
+    let mut writer = vga_buffer::VGAConsoleWriter::new_with_buffer(vga_buffer::get_standard_vga_buffer());  // we can't lock the normal writer as it may be already held by the current thread, which would cause a deadlock
     writer.set_colour(vga_buffer::VGAColour::new(vga_buffer::BaseColour::LightGray,vga_buffer::BaseColour::Red,true,false));
     
     // Write message and location

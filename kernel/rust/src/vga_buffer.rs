@@ -93,10 +93,6 @@ pub struct VGAConsoleWriter<'a> {
     buffer: &'a mut VGABuffer,
 }
 impl<'a> VGAConsoleWriter<'a> {
-    pub fn new() -> Self {
-        Self::new_with_buffer(get_standard_vga_buffer())
-    }
-    
     pub fn new_with_buffer(buffer: &'a mut VGABuffer) -> Self {
         VGAConsoleWriter {
             column_pos: 0, row_pos: 0,
@@ -168,4 +164,10 @@ impl<'a> VGAConsoleWriter<'a> {
             self.write_byte(c);
         }
     }
+}
+
+use lazy_static::lazy_static;
+use spin::Mutex;
+lazy_static! {
+    pub static ref VGA_WRITER: Mutex<VGAConsoleWriter<'static>> = Mutex::new(VGAConsoleWriter::new_with_buffer(get_standard_vga_buffer()));
 }

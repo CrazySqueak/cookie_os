@@ -34,16 +34,12 @@ pub fn _kinit() {
     lowlevel::init();
 }
 
-pub fn stackoverflow(){ stackoverflow() }
-
 #[no_mangle]
 pub extern "C" fn _kmain() -> ! {
     _kinit();
     
     let mut writer = VGA_WRITER.lock();
     writer.write_string("OKAY!! 👌👌👌👌");
-    
-    stackoverflow();
     
     writer.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
     
@@ -56,7 +52,7 @@ pub extern "C" fn _kmain() -> ! {
     let _ = write!(SERIAL1.lock(), "Hello World!");
     
     // TODO
-    lowlevel::halt();
+    loop{}//lowlevel::halt();
 }
 
 /// This function is called on panic.

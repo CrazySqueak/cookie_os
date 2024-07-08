@@ -51,7 +51,7 @@ clean:
 	$(MAKE) -C kernel clean
 
 run: $(ISONAME)
-	$(QEMU) --cdrom $(ISONAME)
+	$(QEMU) --cdrom $(ISONAME) -serial stdio
 debug: $(ISONAME) $(SYSROOT)/boot/kernel.bin
 	@if [ "$$INCLUDE_DEBUG_SYMBOLS" != "1" ]; then\
 		echo -e "\033[0;33mWARNING: Debug symbols were not included in this build! Set $$INCLUDE_DEBUG_SYMBOLS to 1 to include them!\033[0m";\

@@ -2,12 +2,15 @@
 extern crate alloc;
 
 use core::panic::PanicInfo;
+use core::fmt::Write;
 use alloc::format;
 
 use buddy_system_allocator::LockedHeap;
 
 mod vga_buffer;
 use vga_buffer::VGA_WRITER;
+mod serial;
+use serial::SERIAL1;
 
 // arch-specific
 mod lowlevel;
@@ -38,14 +41,13 @@ pub extern "C" fn _kmain() -> ! {
     
     writer.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
     
-    if 1+1 == 2 {
-    panic!("beep");
-    }
-    
     for i in 1..11 {
         let s = format!("\n\nBeep {}",i);
         writer.write_string(&s);
     }
+    
+    
+    write!(SERIAL1.lock(), "Hello World!");
     
     // TODO
     lowlevel::halt();
@@ -59,6 +61,8 @@ fn panic(_info: &PanicInfo) -> ! {
     
     // Write message and location
     writer.write_string(&format!("KERNEL PANICKED: {}", _info));
+    // Write to serial as well
+    write!(SERIAL1.lock(), "Kernel Rust-Panic!: {}", _info);
     
     lowlevel::halt();
 }

@@ -16,6 +16,7 @@ use serial::SERIAL1;
 // arch-specific
 mod lowlevel;
 mod interrupts;
+mod gdt;
 
 pub fn _kinit() {
     // Init heap
@@ -32,6 +33,8 @@ pub fn _kinit() {
         // TODO: Perform an exorcism
     }
     
+    // Initialise GDT
+    gdt::init();
     // Initialise interrupts
     interrupts::init();
 }

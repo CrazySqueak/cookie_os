@@ -105,6 +105,7 @@ check_long_mode:
 %define PAGEFLAG_PRESENT_WRITEABLE      0b0000_0011
 %define PAGEFLAG_PRESENT_WRITEABLE_HUGE 0b1000_0011
 %define PAGEFLAG_ABSENT                 0b0000_0000
+%define PAGE_SPECIAL_GUARDPAGE          0xFA7B_EEF0  ; fat beef - stop allocating shit on the stack, fatty | last bit (present) is set to 0 to ensure pagefault occurs
 %define PAGETABLE_NUM_ENTRIES 512
 %define P2_HUGE_SIZE 0x20_0000 ;2MiB
 %define P1_SIZE        4096    ;4KiB
@@ -161,7 +162,7 @@ configure_identity_paging:
     mov esi, guard_page
     sub esi, edi  ; guard_page - page_offset = memory offset inside the jurisdiction of P1
     shr esi, 12   ; offset -> index (equivalent to dividing by 4096 (the jurisdiction of a P1 entry))
-    mov eax, PAGEFLAG_ABSENT
+    mov eax, PAGE_SPECIAL_GUARDPAGE
     mov [p1_table_withguard + esi * 8], eax
     
     ret

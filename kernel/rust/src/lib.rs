@@ -13,10 +13,8 @@ use vga_buffer::VGA_WRITER;
 mod serial;
 use serial::SERIAL1;
 
-// arch-specific
+// arch-specific "lowlevel" module
 mod lowlevel;
-mod interrupts;
-mod gdt;
 
 pub fn _kinit() {
     // Init heap
@@ -33,10 +31,7 @@ pub fn _kinit() {
         // TODO: Perform an exorcism
     }
     
-    // Initialise GDT
-    gdt::init();
-    // Initialise interrupts
-    interrupts::init();
+    lowlevel::init();
 }
 
 pub fn stackoverflow(){ stackoverflow() }

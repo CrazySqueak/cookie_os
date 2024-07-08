@@ -1,5 +1,13 @@
 use core::arch::asm;
 
+mod gdt;
+mod interrupts;
+
+pub fn init() {
+    gdt::init();
+    interrupts::init();
+}
+
 pub fn halt() -> ! {
     // SAFETY: This code does not modify memory besides disabling interupts, and does not return
     // it is an end point after which nothing more should happen

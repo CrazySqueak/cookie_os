@@ -32,8 +32,14 @@ $(ARCHBUILDDIR)/%.o: $(ARCHDIR)/%.intel.asm
 # Rust
 rust-merge: FORCE
 	@mkdir -p $(RUST_MERGED_DIR)
+	@# Merge source files
 	if [ -d "$(RUSTSRC_COMMON_DIR)" ]; then cp -Tru $(RUSTSRC_COMMON_DIR) $(RUST_MERGED_DIR); fi
 	if [ -d "$(RUSTSRC_ARCH_DIR)" ]; then cp -Tru $(RUSTSRC_ARCH_DIR) $(RUST_MERGED_DIR); fi
+	@# Merge cargo.toml (keeping mtime correct)
+	if [ -f "$(RUSTSRC_ARCH_DIR)/Cargo.toml.merge" ]; then \
+	toml-union "$(RUSTSRC_COMMON_DIR)/Cargo.toml" "$(RUSTSRC_ARCH_DIR)/Cargo.toml.merge" -o "$(RUST_MERGED_DIR)/Cargo.toml";\
+	python3 -c 'import os;os.utime("$(RUST_MERGED_DIR)/Cargo.toml",tuple([int(max(fn("$(RUSTSRC_COMMON_DIR)/Cargo.toml"),fn("$(RUSTSRC_ARCH_DIR)/Cargo.toml.merge"))) for fn in [os.path.getatime,os.path.getmtime]]))';\
+	fi
 
 $(RUST_ARCHIVE): rust-merge
 	cd $(RUST_MERGED_DIR) && cargo build $(CARGOFLAGS)

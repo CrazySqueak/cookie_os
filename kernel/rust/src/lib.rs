@@ -14,6 +14,7 @@ use serial::SERIAL1;
 
 // arch-specific
 mod lowlevel;
+mod interrupts;
 
 #[no_mangle]
 pub extern "C" fn _kmain() -> ! {

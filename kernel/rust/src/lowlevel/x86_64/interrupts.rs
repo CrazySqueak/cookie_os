@@ -1,3 +1,4 @@
+use alloc::format;
 
 use lazy_static::lazy_static;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
@@ -21,6 +22,7 @@ lazy_static! {
         }
         
         idt[PICInterrupt::Timer.as_u8()].set_handler_fn(timer_handler);
+        idt[PICInterrupt::Keyboard.as_u8()].set_handler_fn(ps2keyboard_handler);
         
         idt
     };
@@ -56,7 +58,7 @@ pub static PICS: Mutex<ChainedPics> = Mutex::new(unsafe { ChainedPics::new(PIC_1
 #[repr(u8)]
 pub enum PICInterrupt {
     Timer = PIC_1_OFFSET+0,
-    
+    Keyboard = PIC_1_OFFSET+1,
 }
 impl PICInterrupt {
     fn as_u8(self) -> u8 { self as u8 }
@@ -78,3 +80,26 @@ pic_interrupt_handler!(PICInterrupt::Timer.as_u8(), timer_handler, {
     let _ = write!(SERIAL1,"Beep");
     // TODO
 });
+
+// PS/2 Keyboard
+use crate::coredrivers::keyboard_ps2::PS2Keyboard;
+lazy_static! {
+    // Safety: for the time being this will be the only reference to the keyboard
+    // TODO: Move this somewhere else?
+    static ref PS2KEYBOARD: PS2Keyboard = unsafe { PS2Keyboard::new(print_key) };
+}
+
+pic_interrupt_handler!(PICInterrupt::Keyboard.as_u8(), ps2keyboard_handler, {
+    // Safety: This is the interrupt handler that gets called when another byte is ready
+    // this should never be called otherwise
+    unsafe { PS2KEYBOARD.recv_next_byte(); };
+});
+fn print_key(key: pc_keyboard::DecodedKey){
+    let _ = write!(SERIAL1,"{:?}", key);
+    
+    // Echo on-screen
+    match key {
+        pc_keyboard::DecodedKey::Unicode(chr) => crate::vga_buffer::VGA_WRITER.write_string(&format!("{}",chr)),
+        _ => {},
+    }
+}

@@ -16,6 +16,7 @@ features = ["spin_no_std"]
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 x86_64 = "0.15.1"
 pic8259 = "0.10.1"
+pc-keyboard = "0.7.0"
 
 [lib]
 crate-type = ["staticlib"]

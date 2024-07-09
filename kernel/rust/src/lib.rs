@@ -14,8 +14,10 @@ use serial::SERIAL1;
 mod util;
 use crate::util::LockedWrite;
 
+mod coredrivers;
+
 // arch-specific "lowlevel" module
-#[cfg_attr(target_arch = "x86_64", path = "lowlevel/mod.rs")]
+#[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
 mod lowlevel;
 
 pub fn _kinit() {

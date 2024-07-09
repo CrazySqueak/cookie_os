@@ -51,6 +51,10 @@ pub extern "C" fn _kmain() -> ! {
         VGA_WRITER.write_string(&s);
     }
     
+    for entry in unsafe { (*lowlevel::multiboot::multiboot_info_ptr).get_memmap().unwrap() } {
+        VGA_WRITER.write_string(&format!("\n{:?}",entry));
+    }
+    
     let _ = write!(SERIAL1, "Hello World!");
     
     // TODO

@@ -24,6 +24,10 @@ bits 32 ; we are started in protected mode
 start:
     ; Initialise stack
     mov esp, bstack_top
+    ; Save multiboot_info_ptr as we won't have it later
+    mov [multiboot_info_ptr], ebx  ; x86_64 is little_endian, so we place this at the low end
+    mov edx, 0
+    mov dword [multiboot_info_ptr+4], edx  ; and zero out the high end
     
     ; Checks
     call check_multiboot
@@ -205,13 +209,13 @@ boot_error:
     mov word  [0xb8008], 0x4f20
     
     mov dword eax, [.err_table + eax*4]
-    mov dword ebx, 0xb800a
+    mov dword ecx, 0xb800a
     .displp:
     mov byte dl, [eax]
-    mov byte [ebx], dl
-    mov byte [ebx+1], 0x4f
+    mov byte [ecx], dl
+    mov byte [ecx+1], 0x4f
     add eax, 1
-    add ebx, 2
+    add ecx, 2
     cmp byte [eax], 0
     jne .displp
     
@@ -268,3 +272,8 @@ guard_page:  ; The guard page is an extra page which is never present, and so wi
 bstack_bottom:
     resb 65536
 bstack_top:
+; multiboot info ptr
+global multiboot_info_ptr
+align 8  ; Note: this is allocated as a 64-bit pointer to allow for it to be easily used once we transition to long mode
+multiboot_info_ptr:
+    resb 8

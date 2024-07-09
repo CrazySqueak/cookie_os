@@ -3,6 +3,7 @@
 use lazy_static::lazy_static;
 
 // arch-specific
+// TODO: re-organise that mess
 mod serial_impl;
 
 //pub trait UARTSerialPortT: core::fmt::Write {

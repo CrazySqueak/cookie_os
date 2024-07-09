@@ -1,6 +1,5 @@
 export ARCH ?= x86_64-elf
-export LD := $(ARCH)-ld
-
+export LD := x86_64-elf-ld
 export NASM := nasm -f elf64
 export QEMU := qemu-system-x86_64
 
@@ -18,10 +17,10 @@ endif
 ifeq ($(RELEASE_BUILD),1)
 $(info Building rust code in release mode.)
 export CARGOFLAGS := $(CARGOFLAGS) --release
-export RS_TARGET_DIR := target/release
+export RS_TARGET_DIR := target-$(ARCH)/release
 else
 $(info Building rust code in development mode.)
-export RS_TARGET_DIR := target/debug
+export RS_TARGET_DIR := target-$(ARCH)/debug
 export BUILDNAME := $(BUILDNAME)-rsdev
 endif
 

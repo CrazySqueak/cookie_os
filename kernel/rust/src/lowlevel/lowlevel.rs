@@ -1,7 +1,5 @@
 use core::arch::asm;
-
-mod gdt;
-mod interrupts;
+use super::{gdt,interrupts};
 
 pub fn init() {
     gdt::init();

@@ -15,7 +15,7 @@ mod util;
 use crate::util::LockedWrite;
 
 // arch-specific "lowlevel" module
-#[cfg_attr(target_arch = "x86_64", path = "lowlevel.rs")]
+#[cfg_attr(target_arch = "x86_64", path = "lowlevel/mod.rs")]
 mod lowlevel;
 
 pub fn _kinit() {

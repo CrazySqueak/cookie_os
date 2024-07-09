@@ -2,9 +2,7 @@
 //use uart_16550::{SerialPort,MmioSerialPort};
 use lazy_static::lazy_static;
 
-// arch-specific
-// TODO: re-organise that mess
-mod serial_impl;
+use super::serial_impl;
 
 //pub trait UARTSerialPortT: core::fmt::Write {
 //    fn send(&mut self, data: u8);

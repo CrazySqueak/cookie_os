@@ -43,7 +43,10 @@ extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame){
 }
 
 extern "x86-interrupt" fn fuck_you_too(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode){
-    let _ = write!(SERIAL1,"Page Fault! Frame={:?} Code={:?}", stack_frame, error_code);
+    use x86_64::registers::control::Cr2;
+    let accessed_addr = Cr2::read();
+    
+    let _ = write!(SERIAL1,"Page Fault! Frame={:?} Code={:?} Addr={:?}", stack_frame, error_code, accessed_addr);
 }
 
 extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> ! {

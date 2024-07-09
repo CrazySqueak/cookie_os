@@ -51,7 +51,6 @@ pub extern "C" fn _kmain() -> ! {
         VGA_WRITER.write_string(&s);
     }
     
-    
     let _ = write!(SERIAL1, "Hello World!");
     
     // TODO

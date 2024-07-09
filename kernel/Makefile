@@ -19,12 +19,13 @@ LINK_LIST=$(OBJECTS) -L$(dir $(RUST_ARCHIVE)) -l$(RUST_ARCHIVE_NAME)
 $(KBINNAME): $(LINK_OBJS) $(ARCHDIR)/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) -n -T $(ARCHDIR)/linker.ld -o $@ $(LINK_LIST)
-	grub-file --is-x86-multiboot2 $@
+	grub-file --is-x86-multiboot $@
 
 $(ARCHBUILDDIR)/%.o: $(ARCHDIR)/%.intel.asm
 	@#Assemble with NASM
 	@mkdir -p $(dir $@)
 	$(NASM) $^ -o $@
+
 
 # Rust
 $(RUST_ARCHIVE): FORCE

@@ -1,19 +1,14 @@
+MBH_MAGIC equ 0x1BADB002
+MBF_ALIGN equ 1<<0
+MBF_MEMINFO equ 1<<1
+MBH_FLAGS equ MBF_ALIGN | MBF_MEMINFO
+MBH_CHECKSUM equ -(MBH_MAGIC + MBH_FLAGS)
+
 section .multiboot_header
 align 4
-header_start:
-    dd 0xe85250d6                ; magic number (multiboot 2)
-    dd 0                         ; architecture 0 (protected mode i386)
-    dd header_end - header_start ; header length
-    ; checksum
-    dd 0x100000000 - (0xe85250d6 + 0 + (header_end - header_start))
-
-    ; insert optional multiboot tags here
-
-    ; required end tag
-    dw 0    ; type
-    dw 0    ; flags
-    dd 8    ; size
-header_end:
+    dd MBH_MAGIC
+    dd MBH_FLAGS
+    dd MBH_CHECKSUM
 
 global start
 extern long_mode_start
@@ -42,10 +37,11 @@ start:
     lgdt [gdt64.pointer]
     ; And far jump to start
     jmp gdt64.kcode:long_mode_start
-    
+
+
 ; CHECKS
 check_multiboot:
-    cmp eax, 0x36d76289
+    cmp eax, 0x2BADB002
     jne .no_multiboot
     ret
 .no_multiboot:

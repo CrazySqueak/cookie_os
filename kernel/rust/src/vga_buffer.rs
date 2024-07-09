@@ -141,7 +141,7 @@ impl<'a> VGAConsoleWriter<'a> {
         }
         
         // Clear bottom lines
-        for y in (VGA_HEIGHT-nlines)..nlines {
+        for y in (VGA_HEIGHT-nlines)..VGA_HEIGHT {
             for x in 0..VGA_WIDTH {
                 self.buffer.put_byte(x,y, b' ', self.colour);
             }

@@ -1,6 +1,12 @@
 use core::arch::asm;
 use super::{gdt,interrupts};
 
+/* The offset between the kernel's virtual memory and the computer's physical memory.
+    As this is a higher-half kernel, any memory mapped I/O, page table locations, etc. should be converted using this constant.
+    (the kernel will always be mapped between the given physical memory and virtual memory)
+    Note that converting userspace addresses by this constant will not end well, as they are mapped by their page table (and are not necessarily contiguous in physical memory.) */
+pub const HIGHER_HALF_OFFSET: usize = 0xFFFF800000000000;
+
 pub fn init() {
     gdt::init();
     interrupts::init();

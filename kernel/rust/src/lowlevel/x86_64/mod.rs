@@ -4,4 +4,4 @@ mod interrupts;
 mod lowlevel;
 pub mod multiboot;
 
-pub use lowlevel::{init, halt, without_interrupts};
+pub use lowlevel::{HIGHER_HALF_OFFSET, init, halt, without_interrupts};

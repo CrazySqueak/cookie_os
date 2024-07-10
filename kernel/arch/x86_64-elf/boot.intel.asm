@@ -142,7 +142,7 @@ configure_identity_paging:
     
     ; map a P2 entry to the P1 guard table
     ; Figure out which P2 entry contains our guard page
-    mov edi, guard_page
+    mov edi, kstack_guard_page
     shr edi, 21  ; 20_0000h -> 1
     mov eax, p1_table_withguard
     or eax, PAGEFLAG_PRESENT_WRITEABLE
@@ -163,8 +163,8 @@ configure_identity_paging:
     jne .map_p1
     
     ; overwrite guard page mapping with an absent mapping
-    mov esi, guard_page
-    sub esi, edi  ; guard_page - page_offset = memory offset inside the jurisdiction of P1
+    mov esi, kstack_guard_page
+    sub esi, edi  ; kstack_guard_page - page_offset = memory offset inside the jurisdiction of P1
     shr esi, 12   ; offset -> index (equivalent to dividing by 4096 (the jurisdiction of a P1 entry))
     mov eax, PAGE_SPECIAL_GUARDPAGE
     mov [p1_table_withguard + esi * 8], eax
@@ -244,14 +244,6 @@ gdt64:
 .pointer:
     dw $ - gdt64 - 1
     dq gdt64
-; kernel heap initial size
-global kheap_initial_addr
-global kheap_initial_size
-align 4
-kheap_initial_addr:
-    dd kheap_initial_start
-kheap_initial_size:
-    dd (kheap_initial_end - kheap_initial_start)
 
 section .bss
 ; identity paging
@@ -270,25 +262,13 @@ global bstack_top
 p1_table_withguard:  ; allocate a p1 table for the stack & guard page
     resb 4096
 global p1_table_withguard
-global guard_page
-; stack
-; note: attempting to align this properly triggers a NASM error so you just have to hope to god that this doesn't cross a page boundrary
+extern kstack_guard_page
+; bootstrap stack - for bootstrapping prior to entering long mode / kmain
+; Note: setting up a guard page for the bootstrap stack is too much hassle considering it should NEVER come close to overflowing
 align 4096
-guard_page:  ; The guard page is an extra page which is never present, and so will always trigger a page fault
-             ; thus ensuring that a stack overflow won't silently corrupt memory
-    resb 4096  ; align on a P1 page boundrary
 bstack_bottom:
-    resb 65536
+    resb 16384  ; 16KiB should be plenty
 bstack_top:
-; multiboot info ptr
-global multiboot_info_ptr
-align 8  ; Note: this is allocated as a 64-bit pointer to allow for it to be easily used once we transition to long mode
-multiboot_info_ptr:
-    resb 8
-; initial kernel heap
-; a small amount of space reserved for the kernel heap
-; prior to getting a proper allocator for memory set up (which requires processing the ram map and many other things)
-align 4
-kheap_initial_start:
-resb 0x100_0000 ; 16MiB
-kheap_initial_end:
+; We save multiboot_info_ptr somewhere so that
+; the kernel can access it later
+extern multiboot_info_ptr

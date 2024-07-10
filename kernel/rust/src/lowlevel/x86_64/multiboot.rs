@@ -76,7 +76,7 @@ impl MBTag {
                                    let mut entries = Vec::with_capacity(((header.tag_size - header_size) / num_entries).try_into().unwrap());
                                    
                                    // Read entries
-                                   for i in 0..num_entries {
+                                   for _ in 0..num_entries {
                                        // Read entry
                                        entries.push(*entry_ptr);
                                        // Increment entry ptr
@@ -117,4 +117,8 @@ lazy_static! {
         };
         tags
     }};
+    
+    pub static ref MULTIBOOT_MEMORY_MAP: Option<&'static Vec<MemoryMapEntry>> = { for tag in &*MULTIBOOT_TAGS {
+        if let MBTagContents::MemoryMap { ref entries, .. } = tag.content { return Some(entries); }
+    }; None};
 }

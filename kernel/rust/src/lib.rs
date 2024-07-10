@@ -50,7 +50,8 @@ pub extern "C" fn _kmain() -> ! {
     }
     
     //VGA_WRITER.write_string(&format!("\n{:?}",*lowlevel::multiboot::MULTIBOOT_TAGS));
-    let _ = write!(SERIAL1, "\n{:?}",*lowlevel::multiboot::MULTIBOOT_TAGS);
+    let _ = write!(SERIAL1, "\nTags={:?}",*lowlevel::multiboot::MULTIBOOT_TAGS);
+    let _ = write!(SERIAL1, "\nMemMap={:#?}",*lowlevel::multiboot::MULTIBOOT_MEMORY_MAP);
     
     // TODO
     loop{}//lowlevel::halt();

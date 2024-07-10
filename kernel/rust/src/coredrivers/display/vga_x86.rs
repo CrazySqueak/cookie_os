@@ -85,7 +85,7 @@ impl VGABuffer {
     pub fn get_vgachar(&mut self, x: usize, y: usize) -> VGAChar { self.chars[y][x].read() }
 }
 
-pub fn get_standard_vga_buffer() -> &'static mut VGABuffer {
+fn get_standard_vga_buffer() -> &'static mut VGABuffer {
     return unsafe { &mut *(0xb8000 as *mut VGABuffer) };
 }
 

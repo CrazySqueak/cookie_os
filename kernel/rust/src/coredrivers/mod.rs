@@ -10,3 +10,5 @@ By the time the OS has finished booting, these should have been replaced with no
 pub mod keyboard_ps2;
 #[cfg_attr(target_arch = "x86_64", path = "serial/uart_x86_64.rs")]
 pub mod serial_uart;
+#[cfg_attr(target_arch = "x86_64", path = "display/vga_x86.rs")]
+pub mod display_vga;

@@ -8,6 +8,7 @@ use spin::Mutex;
 use crate::util::LockedWrite;
 use crate::coredrivers::serial_uart::SERIAL1;
 use crate::coredrivers::keyboard_ps2 as keyboard;
+use crate::coredrivers::display_vga::VGA_WRITER;
 
 // TODO: Create public API that is as architecture-independent as possible
 
@@ -100,7 +101,7 @@ fn print_key(key: pc_keyboard::DecodedKey){
     
     // Echo on-screen
     match key {
-        pc_keyboard::DecodedKey::Unicode(chr) => crate::vga_buffer::VGA_WRITER.write_string(&format!("{}",chr)),
+        pc_keyboard::DecodedKey::Unicode(chr) => VGA_WRITER.write_string(&format!("{}",chr)),
         _ => {},
     }
 }

@@ -7,13 +7,12 @@ use alloc::format;
 
 use buddy_system_allocator::LockedHeap;
 
-mod vga_buffer;
-use vga_buffer::VGA_WRITER;
 mod util;
-use crate::util::LockedWrite;
+use crate::util::{LockedNoInterrupts,LockedWrite};
 
 mod coredrivers;
 use coredrivers::serial_uart::SERIAL1;
+use coredrivers::display_vga; use display_vga::VGA_WRITER;
 
 // arch-specific "lowlevel" module
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
@@ -53,19 +52,21 @@ pub extern "C" fn _kmain() -> ! {
     let _ = write!(SERIAL1, "\nMemMap={:#?}",*lowlevel::multiboot::MULTIBOOT_MEMORY_MAP);
     
     // TODO
+    VGA_WRITER.with_lock(|mut w|panic!("test"));
     loop{}//lowlevel::halt();
 }
 
 /// This function is called on panic.
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    let mut writer = vga_buffer::VGAConsoleWriter::new_with_buffer(vga_buffer::get_standard_vga_buffer());  // we can't lock the normal writer as it may be already held by the current thread, which would cause a deadlock
-    writer.set_colour(vga_buffer::VGAColour::new(vga_buffer::BaseColour::LightGray,vga_buffer::BaseColour::Red,true,false));
+    // Forcefully acquire a reference to the current writer, bypassing the lock (which may have been locked at the time of the panic and will not unlock as we don't have stack unwinding)
+    let mut writer = unsafe{let wm=core::mem::transmute::<&display_vga::LockedVGAConsoleWriter,&spin::Mutex<display_vga::VGAConsoleWriter>>(&*VGA_WRITER);wm.force_unlock();wm.lock()};
+    writer.set_colour(display_vga::VGAColour::new(display_vga::BaseColour::LightGray,display_vga::BaseColour::Red,true,false));
     
     // Write message and location
-    let _ = writer.write_string(&format!("KERNEL PANICKED: {}", _info));
+    let _ = writer.write_string(&format!("\n\n\n\n\nKERNEL PANICKED: {}", _info));
     // Write to serial as well
-    let _ = write!(SERIAL1, "Kernel Rust-Panic!: {}", _info);
+    let _ = write!(SERIAL1, "\n\n\n\n\nKernel Rust-Panic!: {}", _info);
     
     lowlevel::halt();
 }

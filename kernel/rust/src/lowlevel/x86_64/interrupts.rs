@@ -4,9 +4,10 @@ use lazy_static::lazy_static;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use pic8259::ChainedPics;
 use spin::Mutex;
-use crate::util::LockedWrite;
 
+use crate::util::LockedWrite;
 use crate::serial::SERIAL1;
+use crate::coredrivers::keyboard_ps2 as keyboard;
 
 // TODO: Create public API that is as architecture-independent as possible
 
@@ -21,8 +22,11 @@ lazy_static! {
             idt.double_fault.set_handler_fn(double_fault_handler).set_stack_index(super::gdt::DOUBLE_FAULT_IST_INDEX);
         }
         
+        // Timer
         idt[PICInterrupt::Timer.as_u8()].set_handler_fn(timer_handler);
+        // PS/2 Keyboard
         idt[PICInterrupt::Keyboard.as_u8()].set_handler_fn(ps2keyboard_handler);
+        keyboard::set_key_callback(print_key);
         
         idt
     };
@@ -86,17 +90,10 @@ pic_interrupt_handler!(PICInterrupt::Timer.as_u8(), timer_handler, {
 });
 
 // PS/2 Keyboard
-use crate::coredrivers::keyboard_ps2::PS2Keyboard;
-lazy_static! {
-    // Safety: for the time being this will be the only reference to the keyboard
-    // TODO: Move this somewhere else?
-    static ref PS2KEYBOARD: PS2Keyboard = unsafe { PS2Keyboard::new(print_key) };
-}
-
 pic_interrupt_handler!(PICInterrupt::Keyboard.as_u8(), ps2keyboard_handler, {
     // Safety: This is the interrupt handler that gets called when another byte is ready
     // this should never be called otherwise
-    unsafe { PS2KEYBOARD.recv_next_byte(); };
+    unsafe { keyboard::KEYBOARD.recv_next_byte(); };
 });
 fn print_key(key: pc_keyboard::DecodedKey){
     let _ = write!(SERIAL1,"{:?}", key);

@@ -2,6 +2,7 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use alloc::vec;
 
+use lazy_static::lazy_static;
 use x86_64::instructions::port::Port;
 use spin::{Mutex,MutexGuard};
 use pc_keyboard::{DecodedKey,Keyboard,ScancodeSet1};
@@ -44,8 +45,7 @@ pub struct PS2Keyboard {
     command_queue: Mutex<VecDeque<KeyboardCommand>>,
 }
 impl PS2Keyboard {
-    // SAFETY: No attempt is made to verify that no other interface with the PS2 keyboard is currently active
-    pub unsafe fn new(key_callback: fn(DecodedKey)) -> Self {
+    fn new(key_callback: fn(DecodedKey)) -> Self {
         let me = Self {
             state: Mutex::new(PS2KeyboardState {
                 port: Port::new(KB_IO_PORT),
@@ -60,8 +60,7 @@ impl PS2Keyboard {
         me
     }
     
-    // UNSAFE: Calling this when a new byte is not waiting may cause issues
-    // idk
+    // UNSAFE: Calling this when a new byte is not waiting may cause issues. THIS SHOULD ONLY BE CALLED FROM THE PS/2 KEYBOARD INTERRUPT HANDLER.
     /** Recieve the next byte from the controller. */
     pub unsafe fn recv_next_byte(&self){
         let mut state = self.state.lock();
@@ -143,4 +142,19 @@ impl PS2Keyboard {
             }
         });
     }
+}
+
+// Public API
+lazy_static! {
+    pub static ref KEYBOARD: PS2Keyboard = PS2Keyboard::new(handle_key);
+}
+static KEY_HANDLER: Mutex<fn(DecodedKey)> = Mutex::new(ignore_key);
+fn ignore_key(_k: DecodedKey){}
+fn handle_key(k: DecodedKey){
+    KEY_HANDLER.lock()(k)
+}
+pub fn set_key_callback(f: fn(DecodedKey)){
+    crate::lowlevel::without_interrupts(|| {  // must be without interrupts to avoid a deadlock if the keyboard interrupt fires while we do this
+        (*KEY_HANDLER.lock()) = f;
+    });
 }

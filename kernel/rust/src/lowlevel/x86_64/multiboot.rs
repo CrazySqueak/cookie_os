@@ -48,6 +48,13 @@ pub struct MemoryMapEntry {
     mem_type: u32,
     reserved: u32,
 }
+impl MemoryMapEntry {
+    pub fn is_for_general_use(&self) -> bool {
+        // If 1, then this is available for use by the OS
+        // If any other number, then it is reserved by the BIOS/ACPI/UEFI/etc.
+        self.mem_type == 1
+    }
+}
 
 impl MBTag {
     // Read a tag from the following pointer, and return a safe
@@ -70,17 +77,18 @@ impl MBTag {
                 
                 6 => MemoryMap{entry_size: tag_raw.mem_map.0, entry_version: tag_raw.mem_map.1,
                                entries: {
-                                   let num_entries = tag_raw.mem_map.0;
+                                   let entry_size: usize = tag_raw.mem_map.0.try_into().unwrap();
                                    let mut entry_ptr = addr_of!(tag_raw.mem_map.2);
                                    let header_size: u32 = entry_ptr.byte_offset_from(ptr).try_into().unwrap();
-                                   let mut entries = Vec::with_capacity(((header.tag_size - header_size) / num_entries).try_into().unwrap());
+                                   let num_entries: usize = (header.tag_size - header_size) as usize / entry_size;
+                                   let mut entries = Vec::with_capacity(num_entries);
                                    
                                    // Read entries
                                    for _ in 0..num_entries {
                                        // Read entry
                                        entries.push(*entry_ptr);
                                        // Increment entry ptr
-                                       entry_ptr=entry_ptr.add(1);
+                                       entry_ptr=entry_ptr.byte_add(entry_size);
                                    }
                                    
                                    entries

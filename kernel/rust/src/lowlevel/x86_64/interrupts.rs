@@ -6,7 +6,7 @@ use pic8259::ChainedPics;
 use spin::Mutex;
 
 use crate::util::LockedWrite;
-use crate::serial::SERIAL1;
+use crate::coredrivers::serial_uart::SERIAL1;
 use crate::coredrivers::keyboard_ps2 as keyboard;
 
 // TODO: Create public API that is as architecture-independent as possible

@@ -9,12 +9,11 @@ use buddy_system_allocator::LockedHeap;
 
 mod vga_buffer;
 use vga_buffer::VGA_WRITER;
-mod serial;
-use serial::SERIAL1;
 mod util;
 use crate::util::LockedWrite;
 
 mod coredrivers;
+use coredrivers::serial_uart::SERIAL1;
 
 // arch-specific "lowlevel" module
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]

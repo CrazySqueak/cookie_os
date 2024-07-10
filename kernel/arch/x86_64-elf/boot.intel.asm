@@ -244,6 +244,14 @@ gdt64:
 .pointer:
     dw $ - gdt64 - 1
     dq gdt64
+; kernel heap initial size
+global kheap_initial_addr
+global kheap_initial_size
+align 4
+kheap_initial_addr:
+    dd kheap_initial_start
+kheap_initial_size:
+    dd (kheap_initial_end - kheap_initial_start)
 
 section .bss
 ; identity paging
@@ -277,3 +285,10 @@ global multiboot_info_ptr
 align 8  ; Note: this is allocated as a 64-bit pointer to allow for it to be easily used once we transition to long mode
 multiboot_info_ptr:
     resb 8
+; initial kernel heap
+; a small amount of space reserved for the kernel heap
+; prior to getting a proper allocator for memory set up (which requires processing the ram map and many other things)
+align 4
+kheap_initial_start:
+resb 0x100_0000 ; 16MiB
+kheap_initial_end:

@@ -20,19 +20,17 @@ mod coredrivers;
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
 mod lowlevel;
 
+extern "C" {
+    // Provided by boot.intel.asm
+    pub static kheap_initial_addr: u32;
+    pub static kheap_initial_size: u32;
+}
+
 pub fn _kinit() {
     // Init heap
     // TODO: page this and properly configure it
     unsafe {
-        ALLOCATOR.lock().init(0x800_000,128*1024);  // TODO: figure out wtf is going on here this heap is haunted ISTG
-        // At first I thought it was an issue with my paging setup but the paging seemed fine (well, as fine as I could tell - couldn't get a sensible disassembly out of gdb which made life a pain (movabs with a 64-bit operand in protected mode????? the fuck are you smoking?))
-        // and after testing, a paging issue would cause a triple-fault instead (since I don't have a handler for page faults nor for double faults yet)
-        // So uhh
-        // Idk
-        // QEMU bug? Some issue with my own code that i haven't figured out yet?
-        // if I init() with 128*1024, it's fine, but if I init() with 128*1024*1024, the heap appears to be write-only
-        // ????????????
-        // TODO: Perform an exorcism
+        ALLOCATOR.lock().init(kheap_initial_addr as usize,kheap_initial_size as usize);
     }
     
     lowlevel::init();

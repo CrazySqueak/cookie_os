@@ -19,9 +19,9 @@ use coredrivers::display_vga; use display_vga::VGA_WRITER;
 mod lowlevel;
 
 extern "C" {
-    // Provided by boot.intel.asm
-    pub static kheap_initial_addr: u32;
-    pub static kheap_initial_size: u32;
+    // Provided by longmode.intel.asm (64-bit)
+    pub static kheap_initial_addr: usize;
+    pub static kheap_initial_size: usize;
 }
 
 pub fn _kinit() {
@@ -52,7 +52,6 @@ pub extern "C" fn _kmain() -> ! {
     let _ = write!(SERIAL1, "\nMemMap={:#?}",*lowlevel::multiboot::MULTIBOOT_MEMORY_MAP);
     
     // TODO
-    VGA_WRITER.with_lock(|mut w|panic!("test"));
     loop{}//lowlevel::halt();
 }
 

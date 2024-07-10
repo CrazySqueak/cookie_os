@@ -14,7 +14,20 @@ long_mode_start:
     
     ; Initialise kernel stack
     ; (the bootstrapping stack is no longer needed)
-    mov esp, kstack_top
+    mov rsp, kstack_top
+    
+    ; Convert multiboot_info_ptr from physical address to virtual address in higher-half
+    ; (we couldn't do this in 32-bit code for obvious reasons)
+    mov rdx, multiboot_info_ptr
+    mov rax, [rdx]
+    mov rcx, 0xFFFF800000000000
+    add rax, rcx
+    mov [rdx], rax
+    
+    ; un-map lower half of virtual memory (testing)
+    extern p4_table
+    mov rdx, p4_table
+    mov qword [rdx], 0
     
     ; Hand control over to rust
     extern _kmain
@@ -43,18 +56,18 @@ kheap_initial_start:
 resb 0x100_0000 ; 16MiB
 kheap_initial_end:
 
+; multiboot info ptr
+global multiboot_info_ptr
+align 8
+multiboot_info_ptr:
+    resb 8
+
 section .rodata
 ; kernel heap initial size
 global kheap_initial_addr
 global kheap_initial_size
-align 4
+align 8
 kheap_initial_addr:
-    dd kheap_initial_start
+    dq kheap_initial_start
 kheap_initial_size:
-    dd (kheap_initial_end - kheap_initial_start)
-    
-; multiboot info ptr
-global multiboot_info_ptr
-align 8  ; Note: this is allocated as a 64-bit pointer to allow for it to be easily used once we transition to long mode
-multiboot_info_ptr:
-    resb 8
+    dq (kheap_initial_end - kheap_initial_start)

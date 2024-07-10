@@ -18,7 +18,7 @@ LINK_LIST=$(OBJECTS) -L$(dir $(RUST_ARCHIVE)) -l$(RUST_ARCHIVE_NAME)
 
 $(KBINNAME): $(LINK_OBJS) $(ARCHDIR)/linker.ld
 	@mkdir -p $(dir $@)
-	$(LD) -n -T $(ARCHDIR)/linker.ld -o $@ $(LINK_LIST)
+	$(LD) -n -T $(ARCHDIR)/linker.ld -o $@ $(LINK_LIST) --no-relax
 	grub-file --is-x86-multiboot2 $@
 
 $(ARCHBUILDDIR)/%.o: $(ARCHDIR)/%.intel.asm

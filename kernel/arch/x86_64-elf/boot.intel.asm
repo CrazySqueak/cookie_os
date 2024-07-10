@@ -16,7 +16,6 @@ header_start:
 header_end:
 
 global start
-extern long_mode_start
 
 ; big thanks to https://os.phil-opp.com/entering-longmode/
 section .text
@@ -25,9 +24,9 @@ start:
     ; Initialise stack
     mov esp, bstack_top
     ; Save multiboot_info_ptr as we won't have it later
-    mov [multiboot_info_ptr], ebx  ; x86_64 is little_endian, so we place this at the low end
+    mov [multiboot_info_ptr_P], ebx  ; x86_64 is little_endian, so we place this at the low end
     mov edx, 0
-    mov dword [multiboot_info_ptr+4], edx  ; and zero out the high end
+    mov dword [multiboot_info_ptr_P+4], edx  ; and zero out the high end
     
     ; Checks
     call check_multiboot
@@ -41,7 +40,7 @@ start:
     ; load the 64-bit GDT
     lgdt [gdt64.pointer]
     ; And far jump to start
-    jmp gdt64.kcode:long_mode_start
+    jmp gdt64.kcode:long_mode_bridge
     
 ; CHECKS
 check_multiboot:
@@ -123,6 +122,11 @@ configure_identity_paging:
     or eax, PAGEFLAG_PRESENT_WRITEABLE
     mov [p4_table], eax
     
+    ; map second P4 entry for higher half kernel
+    mov eax, p3_table  ; point to the same physical addresses
+    or eax, PAGEFLAG_PRESENT_WRITEABLE
+    mov [p4_table + 256 * 8 ], eax
+    
     ; map first P3 entry (0x...0000_0000 - 0x...4000_0000)
     mov eax, p2_table
     or eax, PAGEFLAG_PRESENT_WRITEABLE
@@ -142,7 +146,7 @@ configure_identity_paging:
     
     ; map a P2 entry to the P1 guard table
     ; Figure out which P2 entry contains our guard page
-    mov edi, kstack_guard_page
+    mov edi, kstack_guard_page_P
     shr edi, 21  ; 20_0000h -> 1
     mov eax, p1_table_withguard
     or eax, PAGEFLAG_PRESENT_WRITEABLE
@@ -163,8 +167,8 @@ configure_identity_paging:
     jne .map_p1
     
     ; overwrite guard page mapping with an absent mapping
-    mov esi, kstack_guard_page
-    sub esi, edi  ; kstack_guard_page - page_offset = memory offset inside the jurisdiction of P1
+    mov esi, kstack_guard_page_P
+    sub esi, edi  ; kstack_guard_page_P - page_offset = memory offset inside the jurisdiction of P1
     shr esi, 12   ; offset -> index (equivalent to dividing by 4096 (the jurisdiction of a P1 entry))
     mov eax, PAGE_SPECIAL_GUARDPAGE
     mov [p1_table_withguard + esi * 8], eax
@@ -262,7 +266,7 @@ global bstack_top
 p1_table_withguard:  ; allocate a p1 table for the stack & guard page
     resb 4096
 global p1_table_withguard
-extern kstack_guard_page
+extern kstack_guard_page_P
 ; bootstrap stack - for bootstrapping prior to entering long mode / kmain
 ; Note: setting up a guard page for the bootstrap stack is too much hassle considering it should NEVER come close to overflowing
 align 4096
@@ -271,4 +275,13 @@ bstack_bottom:
 bstack_top:
 ; We save multiboot_info_ptr somewhere so that
 ; the kernel can access it later
-extern multiboot_info_ptr
+extern multiboot_info_ptr_P
+
+section .text
+bits 64
+; this is a stub which handles correctly jumping to the longmode portion, which is located in the higher half
+; and thus cannot be correctly called from 32-bit code
+extern long_mode_start
+long_mode_bridge:
+    mov qword rax, long_mode_start
+    jmp rax

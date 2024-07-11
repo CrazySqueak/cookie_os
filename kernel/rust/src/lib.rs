@@ -34,10 +34,13 @@ pub extern "C" fn _kmain() -> ! {
     
     VGA_WRITER.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
     
-    for i in 1..11 {
-        let s = format!("\n\nBeep {}",i);
-        VGA_WRITER.write_string(&s);
-    }
+    let s = format!("\n\nKernel bounds: {:x?}", memory::physical::get_kernel_bounds());
+    VGA_WRITER.write_string(&s);
+    
+    //for i in 1..11 {
+    //    let s = format!("\n\nBeep {}",i);
+    //    VGA_WRITER.write_string(&s);
+    //}
     
     //VGA_WRITER.write_string(&format!("\n{:?}",*lowlevel::multiboot::MULTIBOOT_TAGS));
     let _ = write!(SERIAL1, "\nTags={:?}",*lowlevel::multiboot::MULTIBOOT_TAGS);

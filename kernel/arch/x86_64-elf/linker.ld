@@ -24,6 +24,8 @@ SECTIONS
 	   chosen as a safer option than the traditional 1M. */
 	. = 2M;
     
+    kernel_phys_start = .;
+    
     /* LOWER HALF (BOOTSTRAP) */
     /* Remember to give these sections different names than the higher half as otherwise you will get 100 confusing error messages that give no explanation. hours_wasted += 3. noise_complaints_from_neighbours += 1. */
 	/* First put the multiboot header, as it is required to be put very early
@@ -70,4 +72,6 @@ SECTIONS
 		*(COMMON)
 		*(.bss)
 	}
+    
+    kernel_phys_end = . - higher_half_offset;
 }

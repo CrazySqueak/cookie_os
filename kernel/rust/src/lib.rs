@@ -22,8 +22,12 @@ mod lowlevel;
 pub fn _kinit() {
     // Create initial heap
     memory::kernel_heap::init_kheap();
+    
     // Initialise low-level functions
     lowlevel::init();
+    
+    // Initialise physical memory
+    memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
 }
 
 #[no_mangle]

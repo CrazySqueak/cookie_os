@@ -57,20 +57,20 @@ SECTIONS
     . += higher_half_offset;
 	.text ALIGN(4K) : AT(ADDR (.text) - higher_half_offset)
 	{
-		*(.text)
+		*(.text*)
 	}
 	.rodata ALIGN(4K) : AT(ADDR (.rodata) - higher_half_offset)
 	{
-		*(.rodata)
+		*(.rodata*)
 	}
 	.data ALIGN(4K) : AT(ADDR (.data) - higher_half_offset)
 	{
-		*(.data)
+		*(.data*)
 	}
 	.bss ALIGN(4K) : AT(ADDR (.bss) - higher_half_offset)
 	{
 		*(COMMON)
-		*(.bss)
+		*(.bss*)
 	}
     
     kernel_phys_end = . - higher_half_offset;

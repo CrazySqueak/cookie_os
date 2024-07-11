@@ -1,36 +1,28 @@
 #![no_std]
 #![feature(abi_x86_interrupt)]
-extern crate alloc;
+#![feature(negative_impls)]
 
+extern crate alloc;
 use core::panic::PanicInfo;
 use alloc::format;
 
-use buddy_system_allocator::LockedHeap;
-
 mod util;
-use crate::util::{LockedNoInterrupts,LockedWrite};
+use crate::util::{LockedWrite};
 
 mod coredrivers;
 use coredrivers::serial_uart::SERIAL1;
 use coredrivers::display_vga; use display_vga::VGA_WRITER;
 
+mod memory;
+
 // arch-specific "lowlevel" module
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
 mod lowlevel;
 
-extern "C" {
-    // Provided by longmode.intel.asm (64-bit)
-    pub static kheap_initial_addr: usize;
-    pub static kheap_initial_size: usize;
-}
-
 pub fn _kinit() {
-    // Init heap
-    // TODO: page this and properly configure it
-    unsafe {
-        ALLOCATOR.lock().init(kheap_initial_addr as usize,kheap_initial_size as usize);
-    }
-    
+    // Create initial heap
+    memory::kernel_heap::init_kheap();
+    // Initialise low-level functions
     lowlevel::init();
 }
 
@@ -69,6 +61,3 @@ fn panic(_info: &PanicInfo) -> ! {
     
     lowlevel::halt();
 }
-
-#[global_allocator]
-static ALLOCATOR: LockedHeap<32> = LockedHeap::<32>::new();

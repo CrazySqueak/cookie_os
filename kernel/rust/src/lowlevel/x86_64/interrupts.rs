@@ -75,6 +75,7 @@ impl PICInterrupt {
 
 macro_rules! pic_interrupt_handler {
     ($vector:expr, $name:ident, $body:block) => {
+        #[allow(unused_variables)]  // shut the fuck up so i can actually see the important errors/warnings
         extern "x86-interrupt" fn $name (stack_frame: InterruptStackFrame) {
             $body
             

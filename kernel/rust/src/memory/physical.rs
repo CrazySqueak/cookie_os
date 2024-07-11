@@ -50,8 +50,19 @@ impl !Sync for PhysicalMemoryAllocation{}
 const FRAME_0_SIZE: usize = 4096;
 const FRAMES_PER_LEVEL: usize = 512;
 const PAGE_FRAME_SIZES: [usize; 4] = [FRAME_0_SIZE, FRAME_0_SIZE*FRAMES_PER_LEVEL, FRAME_0_SIZE*FRAMES_PER_LEVEL*FRAMES_PER_LEVEL, FRAME_0_SIZE*FRAMES_PER_LEVEL*FRAMES_PER_LEVEL*FRAMES_PER_LEVEL];
-pub type PhysicalMemoryAllocator = [Vec<usize>; PAGE_FRAME_SIZES.len()];
+
+// stored as an array of vecs of vecs
+// array  - each item is a different order
+// vec L1 - each item is a clique of buddies
+// vec L2 - each item is a buddy, a specific frame of memory
+pub type PhysicalMemoryAllocator = [Vec<Vec<usize>>; PAGE_FRAME_SIZES.len()];
 mutex_no_interrupts!(LockedPhysicalMemoryAllocator, PhysicalMemoryAllocator);
+fn find_buddies_idx(alloc: &PhysicalMemoryAllocator, order: usize, ptr: usize) -> Option<usize> {
+    let frame_size = PAGE_FRAME_SIZES[order];
+    let buddy_id: usize = ptr / frame_size;
+    
+    alloc[order].iter().position(|x| x[0]/frame_size == buddy_id)
+}
 
 lazy_static! {
     static ref PHYS_MEM_ALLOCATIONS: LockedPhysicalMemoryAllocator = LockedPhysicalMemoryAllocator::wraps(
@@ -59,15 +70,25 @@ lazy_static! {
 }
 
 /* Split a page frame into frames of the next order down.
-    Note: Once this is done, the ordering of the frames may change, due to the use of swap_remove.
-    Returns: The index of the first frame of the next order created as a result of the split.*/
-fn split_frame(alloc: &mut PhysicalMemoryAllocator, order: usize, index: usize) -> usize {
+    Note: Once this is done, the ordering of the frames may change, due to the use of swap_remove.*/
+fn split_frame(alloc: &mut PhysicalMemoryAllocator, order: usize, ptr: usize) {
     let to_order = order.checked_sub(1).expect("Cannot split a frame of order 0!");
     
     // Remove original frame
-    let old_ptr = alloc[order].swap_remove(index);
-    let mut new_vec = &mut alloc[to_order];
-    new_vec.reserve(FRAMES_PER_LEVEL);
+    let old_ptr_group_idx = find_buddies_idx(alloc, order, ptr).expect("Cannot split: Pointer is not free!");
+    let old_ptr_group = &mut alloc[order][old_ptr_group_idx];
+    let old_idx = old_ptr_group.iter().position(|x| *x==ptr).expect("Cannot split: Pointer is not free!");
+    let old_ptr = old_ptr_group.swap_remove(old_idx);
+    // And remove the group if it's now empty
+    let should_remove = old_ptr_group.is_empty();
+    if should_remove {alloc[order].swap_remove(old_ptr_group_idx);}
+    
+    // create new group for children
+    // children are guaranteed to require a new group 
+    // as a group consists of frames that belong to the same parent
+    alloc[to_order].push(Vec::<usize>::with_capacity(FRAMES_PER_LEVEL));
+    let new_group_idx = alloc[to_order].len()-1;
+    let new_vec = &mut alloc[to_order][new_group_idx];
     
     // Create split children
     let next_idx = new_vec.len();
@@ -75,9 +96,39 @@ fn split_frame(alloc: &mut PhysicalMemoryAllocator, order: usize, index: usize) 
     for i in 0..FRAMES_PER_LEVEL {
         new_vec.push(old_ptr + (frame_size * i));
     }
+}
+/* Attempt to merge frames starting with the one at the given index, into a frame of the next order up.
+Merging will only succeed if all 512 buddy frames of the current order are free. Otherwise, this function returns None.
+Returns: The pointer to the frame of the next order up, if successful. Otherwise, returns None.*/
+fn try_merge_frames(alloc: &mut PhysicalMemoryAllocator, order: usize, ptr: usize) -> Option<usize>{
+    let to_order = order + 1;
+    if to_order >= PAGE_FRAME_SIZES.len() { panic!("Cannot go higher than the maximum order!"); }
     
-    // Return
-    next_idx
+    // Find the old group
+    let old_ptr_group_idx = find_buddies_idx(alloc, order, ptr)?;
+    let old_ptr_group = &mut alloc[order][old_ptr_group_idx];
+    if old_ptr_group.len() < FRAMES_PER_LEVEL { return None; }
+    // We've got all 512, so drop the group
+    alloc[order].swap_remove(old_ptr_group_idx);
+    
+    // Get the pointer as the next order up
+    let new_ptr = ptr - (ptr%FRAMES_PER_LEVEL);
+    // Find the new group
+    let new_group_opt = find_buddies_idx(alloc, to_order, new_ptr).map(|x| &mut alloc[order][x]);
+    // (or create it)
+    let new_group = match new_group_opt {
+        Some(x) => x,
+        None => {
+            alloc[to_order].push(Vec::<usize>::with_capacity(FRAMES_PER_LEVEL));
+            let new_idx = alloc[to_order].len();
+            &mut alloc[to_order][new_idx]
+        }
+    };
+    
+    // Add the new pointer to the new group
+    new_group.push(new_ptr);
+    // And return
+    Some(new_ptr)
 }
 
 pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){

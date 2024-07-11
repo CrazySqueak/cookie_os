@@ -1,9 +1,12 @@
-use core::alloc::{Layout,GlobalAlloc};
+use core::alloc::{Layout};
 use alloc::vec::Vec;
 use core::ptr::addr_of;
 
+use lazy_static::lazy_static;
+
 use crate::lowlevel::without_interrupts;
 use crate::lowlevel::multiboot::MemoryMapEntry;
+use crate::util::mutex_no_interrupts;
 
 use core::fmt::write;
 use crate::util::LockedWrite;
@@ -23,11 +26,7 @@ pub fn get_kernel_bounds() -> (usize, usize) {
     }
 }
 
-// Allocations must be page-aligned
-const MIN_ALIGNMENT: usize = 4096;
-
-static PHYSMEM_ALLOCATOR: () = ();  // TODO
-
+// ALLOCATIONS
 pub struct PhysicalMemoryAllocation {
     ptr: core::ptr::NonNull<u8>,
     layout: Layout,
@@ -45,6 +44,41 @@ impl PhysicalMemoryAllocation {
 impl !Copy for PhysicalMemoryAllocation{}
 impl !Clone for PhysicalMemoryAllocation{}
 impl !Sync for PhysicalMemoryAllocation{}
+
+// ALLOCATOR
+// This allocator works akin to a buddy allocator or something
+const FRAME_0_SIZE: usize = 4096;
+const FRAMES_PER_LEVEL: usize = 512;
+const PAGE_FRAME_SIZES: [usize; 4] = [FRAME_0_SIZE, FRAME_0_SIZE*FRAMES_PER_LEVEL, FRAME_0_SIZE*FRAMES_PER_LEVEL*FRAMES_PER_LEVEL, FRAME_0_SIZE*FRAMES_PER_LEVEL*FRAMES_PER_LEVEL*FRAMES_PER_LEVEL];
+pub type PhysicalMemoryAllocator = [Vec<usize>; PAGE_FRAME_SIZES.len()];
+mutex_no_interrupts!(LockedPhysicalMemoryAllocator, PhysicalMemoryAllocator);
+
+lazy_static! {
+    static ref PHYS_MEM_ALLOCATIONS: LockedPhysicalMemoryAllocator = LockedPhysicalMemoryAllocator::wraps(
+            core::array::from_fn(|_| Vec::new()));
+}
+
+/* Split a page frame into frames of the next order down.
+    Note: Once this is done, the ordering of the frames may change, due to the use of swap_remove.
+    Returns: The index of the first frame of the next order created as a result of the split.*/
+fn split_frame(alloc: &mut PhysicalMemoryAllocator, order: usize, index: usize) -> usize {
+    let to_order = order.checked_sub(1).expect("Cannot split a frame of order 0!");
+    
+    // Remove original frame
+    let old_ptr = alloc[order].swap_remove(index);
+    let mut new_vec = &mut alloc[to_order];
+    new_vec.reserve(FRAMES_PER_LEVEL);
+    
+    // Create split children
+    let next_idx = new_vec.len();
+    let frame_size: usize = PAGE_FRAME_SIZES[to_order];
+    for i in 0..FRAMES_PER_LEVEL {
+        new_vec.push(old_ptr + (frame_size * i));
+    }
+    
+    // Return
+    next_idx
+}
 
 pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
     let (_, kend) = get_kernel_bounds();  // note: we ignore any memory before the kernel, its a tiny sliver (2MB tops) and isn't worth it
@@ -71,6 +105,12 @@ pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
     //        }
     //    }
     //})
+}
+
+use core::cmp::max;
+// Return the size block to allocate for the given layout, assuming that the given block is aligned by itself (which is the case for allocations).
+fn calc_alloc_size(layout: &Layout) -> usize {
+    layout.pad_to_align().size()
 }
 
 pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {

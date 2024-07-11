@@ -11,7 +11,7 @@ macro_rules! mutex_no_interrupts {
             inner: spin::Mutex<$wraps>
         }
         impl<$($lifes),*> $name<$($lifes),*>{
-            pub fn wraps(inner: $wraps) -> Self {
+            pub const fn wraps(inner: $wraps) -> Self {
                 Self {
                     inner: spin::Mutex::new(inner)
                 }

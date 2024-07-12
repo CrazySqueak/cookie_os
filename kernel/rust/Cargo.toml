@@ -18,6 +18,10 @@ x86_64 = "0.15.1"
 pic8259 = "0.10.1"
 pc-keyboard = "0.7.0"
 
+[features]
+# Logging features
+"logging.beep" = []  # log beep is for testing the logging system and should not be used
+
 [lib]
 crate-type = ["staticlib"]
 

@@ -6,6 +6,8 @@ extern crate alloc;
 use core::panic::PanicInfo;
 use alloc::format;
 
+mod logging;
+use logging::klog;
 mod util;
 use crate::util::{LockedWrite,dbwriteserial};
 
@@ -50,6 +52,10 @@ pub extern "C" fn _kmain() -> ! {
         let x = memory::physical::palloc(l);
         dbwriteserial!("Allocated {:?}, Got {:?}\n", l, x);
     }
+    
+    klog!(Debug, "logging.beep", "Test1235");
+    klog!(Debug, "logging.beep", "2+2={}", 5);
+    klog!(Warning, "logging.beep", "Wait no");
     
     // TODO
     loop{}//lowlevel::halt();

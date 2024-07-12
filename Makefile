@@ -24,6 +24,8 @@ export RS_TARGET_DIR := target-$(ARCH)/debug
 export BUILDNAME := $(BUILDNAME)-rsdev
 endif
 
+export CARGOFLAGS := $(CARGOFLAGS) --features "$(shell sed -e 's/^/logging./' kernel_logging_enabled.txt)"
+
 export BUILDROOT := build
 export BUILDDIR := $(BUILDROOT)/$(BUILDNAME)
 export SYSROOT := $(abspath $(BUILDDIR)/sysroot)

@@ -9,7 +9,7 @@ use alloc::format;
 mod logging;
 use logging::klog;
 mod util;
-use crate::util::{LockedWrite,dbwriteserial};
+use crate::util::{LockedWrite};
 
 mod coredrivers;
 use coredrivers::serial_uart::SERIAL1;
@@ -47,15 +47,15 @@ pub extern "C" fn _kmain() -> ! {
     VGA_WRITER.write_string(&s);
     
     // Test allocation
-    for i in 1..8 {
+    for i in 1..10 {
         let l = alloc::alloc::Layout::from_size_align(1024*i, 2048).unwrap();
         let x = memory::physical::palloc(l);
-        dbwriteserial!("Allocated {:?}, Got {:?}\n", l, x);
+        klog!(Debug, "logging.memory.physical", "Allocated {:?}, Got {:?}\n", l, x);
     }
     
-    klog!(Debug, "logging.beep", "Test1235");
-    klog!(Debug, "logging.beep", "2+2={}", 5);
-    klog!(Warning, "logging.beep", "Wait no");
+    //klog!(Debug, "logging.beep", "Test1235");
+    //klog!(Debug, "logging.beep", "2+2={}", 5);
+    //klog!(Warning, "logging.beep", "Wait no");
     
     // TODO
     loop{}//lowlevel::halt();

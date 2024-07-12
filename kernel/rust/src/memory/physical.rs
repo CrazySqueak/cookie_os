@@ -9,7 +9,8 @@ use crate::lowlevel::multiboot::MemoryMapEntry;
 use crate::util::mutex_no_interrupts;
 
 use core::fmt::write;
-use crate::util::{LockedWrite,dbwriteserial};
+use crate::util::{LockedWrite};
+use crate::logging::klog;
 //use crate::coredrivers::serial_uart::SERIAL1;
 
 // Memory occupied by the kernel (set by the linker script)
@@ -43,12 +44,10 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
     /* Get the memory addresses of the memory address provided and its buddy, as a tuple of (lower buddy addr, higher buddy addr).
     One of these will be the memory address provided (if it is a valid address of a block). The other will be its buddy.*/
     pub fn buddies(order: usize, addr: usize) -> (usize, usize) {
-        //dbwriteserial!("\t\tBuddies for {}:{:x} {:#32b}:\n", order, addr, addr);
         let parent_size = Self::block_size(order)<<1;  // we can't use order+1 because we might be at MAX_ORDER already
         let low_addr = (addr / parent_size) * parent_size;  // discard the middleness, as middleness isn't valid here
         let high_addr = low_addr + Self::block_size(order);
-        //dbwriteserial!("\t\t\tLO =  {:x} {:#32b}\n", low_addr, low_addr);
-        //dbwriteserial!("\t\t\tHI =  {:x} {:#32b}\n", high_addr, high_addr);
+        klog!(Debug, "logging.memory.physical.buddies", "Buddies for {}:{:x} {:#32b}:\nLO =  {:x} {:#32b}\nHI =  {:x} {:#32b}", order, addr, addr, low_addr, low_addr, high_addr, high_addr);
         (low_addr, high_addr)
     }
     
@@ -163,30 +162,30 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> core::fmt::Debug for BuddyAl
 
 pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
     let (_, kend) = get_kernel_bounds();  // note: we ignore any memory before the kernel, its a tiny sliver (2MB tops) and isn't worth it
-    dbwriteserial!("\tKernel ends @ {:x}\n", kend);
+    klog!(Info, "logging.memory.physical", "\tKernel ends @ {:x}\n", kend);
     PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
         for entry in mmap {
-            dbwriteserial!("Checking PMem entry {:?}\n", entry);
+            klog!(Debug, "logging.memory.physical.memmap", "Checking PMem entry {:?}\n", entry);
             unsafe {
                 if !entry.is_for_general_use() { continue; }
-                dbwriteserial!("\tEntry is for general use.\n");
+                klog!(Debug, "logging.memory.physical.memmap", "\tEntry is for general use.\n");
                 let start_addr: usize = entry.base_addr.try_into().unwrap();
                 let end_addr: usize = (entry.base_addr + entry.length).try_into().unwrap();
-                dbwriteserial!("\tRange: [{:x},{:x})\n", start_addr, end_addr);
+                klog!(Debug, "logging.memory.physical.memmap", "\tRange: [{:x},{:x})\n", start_addr, end_addr);
                 if start_addr >= kend {
                     // after the kernel
-                    dbwriteserial!("\tAfter the kernel\n");
-                    dbwriteserial!("\tadd_memory({:x},{:x})\n", start_addr, end_addr);
+                    klog!(Debug, "logging.memory.physical.memmap", "\tAfter the kernel\n");
+                    klog!(Debug, "logging.memory.physical.memmap", "\tadd_memory({:x},{:x})\n", start_addr, end_addr);
                     allocator.add_memory(start_addr as *const u8, end_addr as *const u8);
                 } else if end_addr > kend {
                     // intersecting the kernel
-                    dbwriteserial!("\tIntersects the kernel\n");
-                    dbwriteserial!("\tadd_memory({:x},{:x})\n", kend, end_addr);
+                    klog!(Debug, "logging.memory.physical.memmap", "\tIntersects the kernel\n");
+                    klog!(Debug, "logging.memory.physical.memmap", "\tadd_memory({:x},{:x})\n", kend, end_addr);
                     allocator.add_memory(kend as *const u8, end_addr as *const u8);
                 }
             }
         }
-        dbwriteserial!("\nResult:{:#x?}\n", allocator);
+        klog!(Debug, "logging.memory.physical.memmap", "\nResult:{:#x?}\n", allocator);
     })
 }
 
@@ -218,16 +217,16 @@ fn calc_alloc_size(layout: &Layout) -> usize {
 }
 
 pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
-    dbwriteserial!("Requested to allocate physical memory for {:?}\n", layout);
+    klog!(Debug, "logging.memory.physical", "Requested to allocate physical memory for {:?}", layout);
     let alloc_size = calc_alloc_size(&layout);
-    dbwriteserial!("\tAllocating {} bytes.\n", alloc_size);
+    klog!(Debug, "logging.memory.physical", "Allocating {} bytes.", alloc_size);
     let (addr, order, size) = PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
         // Find best-sized order
         // Smallest order that is larger than or equal to the minimum size
-        let order = match (0..PFrameAllocator::MAX_ORDER).position(|o| PFrameAllocator::block_size(o) >= alloc_size){ Some(x) => x, None => {dbwriteserial!("\tNo supported order is large enough to fulfill this request!\n"); None?}};
-        dbwriteserial!("\tSelected order {}.\n", order);
-        let addr = match req_block(&mut allocator, order){ Some(x) => x, None => {dbwriteserial!("\tNo free blocks of the requested order (or higher)!\n"); None?}};
-        dbwriteserial!("\tAllocating addr {:x}, size: {} bytes.\n", addr, PFrameAllocator::block_size(order));
+        let order = match (0..PFrameAllocator::MAX_ORDER).position(|o| PFrameAllocator::block_size(o) >= alloc_size){ Some(x) => x, None => {klog!(Info, "logging.memory.physical", "No supported order is large enough to fulfill this request for {} bytes!", alloc_size); None?}};
+        klog!(Debug, "logging.memory.physical", "Selected order {}.", order);
+        let addr = match req_block(&mut allocator, order){ Some(x) => x, None => {klog!(Warning, "logging.memory.physical", "Cannot allocate {} bytes. No free blocks of that order (or higher)!", alloc_size); None?}};
+        klog!(Info, "logging.memory.physical", "Allocating addr {:x}, size: {} bytes.", addr, PFrameAllocator::block_size(order));
         let bidx = allocator.free_blocks[order].iter().position(|x| *x==addr).expect("Got invalid block!");
         allocator.free_blocks[order].swap_remove(bidx);
         
@@ -248,7 +247,7 @@ fn req_block(allocator: &mut PFrameAllocator, order: usize) -> Option<usize> {
     else {
         // Split a block of the next level up
         let splitblock = req_block(allocator, order+1)?;
-        dbwriteserial!("\tSplitting {}:{:x} into two order {} blocks.\n", order+1, splitblock, order);
+        klog!(Debug, "logging.memory.physical", "\tSplitting {}:{:x} into two order {} blocks.\n", order+1, splitblock, order);
         let (lb, _) = allocator.split(order+1, splitblock);
         Some(lb)
     }
@@ -257,7 +256,7 @@ fn req_block(allocator: &mut PFrameAllocator, order: usize) -> Option<usize> {
 // PhysicalMemoryAllocations implement Drop, allowing them to be automatically freed once they are no longer referenced
 impl core::ops::Drop for PhysicalMemoryAllocation {
     fn drop(&mut self){
-        dbwriteserial!("Dropped {:?}.\n", self);
+        klog!(Info, "logging.memory.physical", "Dropped {:?}.\n", self);
         PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
             let (order, addr) = self.block;
             
@@ -266,7 +265,7 @@ impl core::ops::Drop for PhysicalMemoryAllocation {
             // And try to merge blocks until it's no longer possible
             let mut merge_addr = addr; let mut merge_order = order;
             while let Some(newaddr) = allocator.merge(merge_order, merge_addr){
-                dbwriteserial!("\tMerged {}:{:x} -> {}:{:x}\n", merge_order, merge_addr, merge_order+1, newaddr);
+                klog!(Debug, "logging.memory.physical", "\tMerged {}:{:x} -> {}:{:x}\n", merge_order, merge_addr, merge_order+1, newaddr);
                 merge_order+=1; merge_addr = newaddr;
             }
         });

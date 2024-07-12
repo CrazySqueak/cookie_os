@@ -45,15 +45,18 @@ macro_rules! klog {
     };
     
     (Debug, $feature:literal, $msg:expr) => {
-        #[cfg(debug_assertions)]
+        #[cfg(all(any(debug_assertions, feature = "logging.forceenabledebug"), feature = $feature))]
         crate::logging::klog!(_dbghandled, Debug, $feature, $msg);
+    };
+    (Info, $feature:literal, $msg:expr) => {
+        #[cfg(feature = $feature)]
+        crate::logging::klog!(_dbghandled, Info, $feature, $msg);
     };
     ($level: ident, $feature:literal, $msg: expr) => {
         crate::logging::klog!(_dbghandled, $level, $feature, $msg);
     };
     
     (_dbghandled, $level: ident, $feature:literal, $msg: expr) => {
-        #[cfg(feature = $feature)]
         {
             use crate::logging::LogLevel::*;
             crate::logging::_kernel_log($level, &format!("{}@{}:{}", $feature, file!(), line!()), $msg);

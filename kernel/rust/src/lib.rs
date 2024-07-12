@@ -7,7 +7,7 @@ use core::panic::PanicInfo;
 use alloc::format;
 
 mod util;
-use crate::util::{LockedWrite};
+use crate::util::{LockedWrite,dbwriteserial};
 
 mod coredrivers;
 use coredrivers::serial_uart::SERIAL1;
@@ -41,14 +41,12 @@ pub extern "C" fn _kmain() -> ! {
     let s = format!("\n\nKernel bounds: {:x?}", memory::physical::get_kernel_bounds());
     VGA_WRITER.write_string(&s);
     
-    //for i in 1..11 {
-    //    let s = format!("\n\nBeep {}",i);
-    //    VGA_WRITER.write_string(&s);
-    //}
-    
-    //VGA_WRITER.write_string(&format!("\n{:?}",*lowlevel::multiboot::MULTIBOOT_TAGS));
-    let _ = write!(SERIAL1, "\nTags={:?}",*lowlevel::multiboot::MULTIBOOT_TAGS);
-    let _ = write!(SERIAL1, "\nMemMap={:#?}",*lowlevel::multiboot::MULTIBOOT_MEMORY_MAP);
+    // Test allocation
+    for i in 1..8 {
+        let l = alloc::alloc::Layout::from_size_align(1024*i, 2048).unwrap();
+        let x = memory::physical::palloc(l);
+        dbwriteserial!("Allocated {:?}, Got {:?}\n", l, x);
+    }
     
     // TODO
     loop{}//lowlevel::halt();

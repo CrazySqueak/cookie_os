@@ -9,8 +9,8 @@ use crate::lowlevel::multiboot::MemoryMapEntry;
 use crate::util::mutex_no_interrupts;
 
 use core::fmt::write;
-use crate::util::LockedWrite;
-use crate::coredrivers::serial_uart::SERIAL1;
+use crate::util::{LockedWrite,dbwriteserial};
+//use crate::coredrivers::serial_uart::SERIAL1;
 
 // Memory occupied by the kernel (set by the linker script)
 extern "C" {
@@ -26,27 +26,6 @@ pub fn get_kernel_bounds() -> (usize, usize) {
     }
 }
 
-// ALLOCATIONS
-pub struct PhysicalMemoryAllocation {
-    ptr: core::ptr::NonNull<u8>,
-    layout: Layout,
-    size: usize,
-    
-    block: (usize, usize),  // (order, addr)
-}
-impl PhysicalMemoryAllocation {
-    pub fn get_ptr(&self) -> core::ptr::NonNull<u8> { self.ptr }
-    pub fn get_size(&self) -> usize { self.size }
-}
-// Memory allocations cannot be copied nor cloned,
-// as that would allow for use-after-free or double-free errors
-// Physical memory allocations are managed by Rust's ownership rules
-// (though it is still the responsibility of the kernel to ensure userspace processes
-//      cannot access physical memory that has been freed or re-used)
-impl !Copy for PhysicalMemoryAllocation{}
-impl !Clone for PhysicalMemoryAllocation{}
-impl !Sync for PhysicalMemoryAllocation{}
-
 // ALLOCATOR
 // This allocator works akin to a buddy allocator or something
 #[repr(transparent)]
@@ -54,6 +33,7 @@ pub struct BuddyAllocator<const MAX_ORDER: usize, const MIN_SIZE: usize> {
     free_blocks: [Vec<usize>; MAX_ORDER],
 }
 impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN_SIZE> {
+    pub const MAX_ORDER: usize = MAX_ORDER;
     /* The size of a block of the given order. */
     pub const fn block_size(order: usize) -> usize {
         assert!(order <= MAX_ORDER, "Order out of bounds!");
@@ -62,14 +42,17 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
     
     /* Get the memory addresses of the memory address provided and its buddy, as a tuple of (lower buddy addr, higher buddy addr).
     One of these will be the memory address provided (if it is a valid address of a block). The other will be its buddy.*/
-    pub const fn buddies(order: usize, addr: usize) -> (usize, usize) {
+    pub fn buddies(order: usize, addr: usize) -> (usize, usize) {
+        dbwriteserial!("\t\tBuddies for {}:{:x} {:#32b}:\n", order, addr, addr);
         let low_addr = addr &!(Self::block_size(order)<<1);  // we can't call block_size(order+1) as there's no guarantee that order is not MAX_ORDER
         let high_addr = low_addr + Self::block_size(order);
+        dbwriteserial!("\t\t\tLO =  {:x} {:#32b}\n", low_addr, low_addr);
+        dbwriteserial!("\t\t\tHI =  {:x} {:#32b}\n", high_addr, high_addr);
         (low_addr, high_addr)
     }
     
     /* Split a free block into two smaller blocks. */
-    pub fn split(&mut self, order: usize, addr: usize) -> (usize, usize) {
+    fn split(&mut self, order: usize, addr: usize) -> (usize, usize) {
         let to_order = order.checked_sub(1).expect("Can't split a block of order 0!");
         let to_addrs = Self::buddies(to_order, addr);
         
@@ -89,8 +72,9 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
         to_addrs
     }
     
-    /* Merge a free block and its buddy, if possible. Otherwise, returns None. */
-    pub fn merge(&mut self, order: usize, addr: usize) -> Option<usize> {
+    /* Merge a free block and its buddy, if possible. Otherwise, returns None.
+        If the merge was successful, returns the address of the resulting block. */
+    fn merge(&mut self, order: usize, addr: usize) -> Option<usize> {
         let to_order = order + 1;
         if to_order > MAX_ORDER { return None; }
         let (low_addr, high_addr) = Self::buddies(order, addr);
@@ -103,8 +87,8 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
             let high_idx = from_blocks.iter().position(|x| *x==high_addr)?;
             // And remove from the free blocks list
             // (we must do the highest index first, as if the highest index was at the end of the list then swap_remove-ing the lower index would break things)
-            from_blocks.swap_remove(core::cmp::max(low_addr, high_addr));
-            from_blocks.swap_remove(core::cmp::min(low_addr, high_addr));
+            from_blocks.swap_remove(core::cmp::max(low_idx, high_idx));
+            from_blocks.swap_remove(core::cmp::min(low_idx, high_idx));
         }
         
         // Add merged block to the free blocks list
@@ -117,7 +101,7 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
     }
     
     /* Add memory from [start,end) to this allocator's list of free blocks. */
-    pub unsafe fn add_memory(&mut self, start: *const u8, end: *const u8){
+    unsafe fn add_memory(&mut self, start: *const u8, end: *const u8){
         for order in (1..MAX_ORDER+1).rev() {  // MAX_ORDER -> 1 inc
             // Calculate the bounds of the block
             let split_order = order-1;
@@ -141,7 +125,8 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
         }
     }
 }
-mutex_no_interrupts!(LockedPFrameAllocator, BuddyAllocator<27,4096>);
+pub type PFrameAllocator = BuddyAllocator<27,4096>;
+mutex_no_interrupts!(LockedPFrameAllocator, PFrameAllocator);
 lazy_static! {
     static ref PHYSMEM_ALLOCATOR: LockedPFrameAllocator = LockedPFrameAllocator::wraps(BuddyAllocator {
         free_blocks: core::array::from_fn(|_| Vec::new())
@@ -170,32 +155,54 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> core::fmt::Debug for BuddyAl
 
 pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
     let (_, kend) = get_kernel_bounds();  // note: we ignore any memory before the kernel, its a tiny sliver (2MB tops) and isn't worth it
-    write!(SERIAL1, "\n\tKernel ends @ {:x}", kend);
+    dbwriteserial!("\tKernel ends @ {:x}\n", kend);
     PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
         for entry in mmap {
-            write!(SERIAL1, "\nChecking PMem entry {:?}", entry);
+            dbwriteserial!("Checking PMem entry {:?}\n", entry);
             unsafe {
                 if !entry.is_for_general_use() { continue; }
-                write!(SERIAL1, "\n\tEntry is for general use.");
+                dbwriteserial!("\tEntry is for general use.\n");
                 let start_addr: usize = entry.base_addr.try_into().unwrap();
                 let end_addr: usize = (entry.base_addr + entry.length).try_into().unwrap();
-                write!(SERIAL1, "\n\tRange: [{:x},{:x})", start_addr, end_addr);
+                dbwriteserial!("\tRange: [{:x},{:x})\n", start_addr, end_addr);
                 if start_addr >= kend {
                     // after the kernel
-                    write!(SERIAL1, "\n\tAfter the kernel");
-                    write!(SERIAL1, "\n\tadd_memory({:x},{:x})", start_addr, end_addr);
+                    dbwriteserial!("\tAfter the kernel\n");
+                    dbwriteserial!("\tadd_memory({:x},{:x})\n", start_addr, end_addr);
                     allocator.add_memory(start_addr as *const u8, end_addr as *const u8);
                 } else if end_addr > kend {
                     // intersecting the kernel
-                    write!(SERIAL1, "\n\tIntersects the kernel");
-                    write!(SERIAL1, "\n\tadd_memory({:x},{:x})", kend, end_addr);
+                    dbwriteserial!("\tIntersects the kernel\n");
+                    dbwriteserial!("\tadd_memory({:x},{:x})\n", kend, end_addr);
                     allocator.add_memory(kend as *const u8, end_addr as *const u8);
                 }
             }
         }
-        write!(SERIAL1, "\n\nResult:{:#x?}", allocator);
+        dbwriteserial!("\nResult:{:#x?}\n", allocator);
     })
 }
+
+// ALLOCATIONS
+#[derive(Debug)]
+pub struct PhysicalMemoryAllocation {
+    ptr: core::ptr::NonNull<u8>,
+    layout: Layout,
+    size: usize,
+    
+    block: (usize, usize),  // (order, addr)
+}
+impl PhysicalMemoryAllocation {
+    pub fn get_ptr(&self) -> core::ptr::NonNull<u8> { self.ptr }
+    pub fn get_size(&self) -> usize { self.size }
+}
+// Memory allocations cannot be copied nor cloned,
+// as that would allow for use-after-free or double-free errors
+// Physical memory allocations are managed by Rust's ownership rules
+// (though it is still the responsibility of the kernel to ensure userspace processes
+//      cannot access physical memory that has been freed or re-used)
+impl !Copy for PhysicalMemoryAllocation{}
+impl !Clone for PhysicalMemoryAllocation{}
+impl !Sync for PhysicalMemoryAllocation{}
 
 // Return the size block to allocate for the given layout, assuming that the given block is aligned by itself (which is the case for allocations).
 fn calc_alloc_size(layout: &Layout) -> usize {
@@ -203,22 +210,57 @@ fn calc_alloc_size(layout: &Layout) -> usize {
 }
 
 pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
-    //let (ptr,size) = without_interrupts(||{
-    //    let mut allocator = PHYSMEM_ALLOCATOR.lock();
-    //    let old_actual = allocator.stats_alloc_actual();
-    //    let ptr = allocator.alloc(layout).ok()?;
-    //    let size = allocator.stats_alloc_actual()-old_actual;
-    //    Some((ptr,size))
-    //})?;
-    //Some(PhysicalMemoryAllocation {
-    //    ptr: ptr,
-    //    layout: layout,
-    //    size: size,
-    //})
-    None
+    dbwriteserial!("Requested to allocate physical memory for {:?}\n", layout);
+    let alloc_size = {let x = calc_alloc_size(&layout); if x.is_power_of_two() { x } else { x.next_power_of_two() }};
+    dbwriteserial!("\tAllocating {} bytes.\n", alloc_size);
+    let (addr, order, size) = PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
+        // Find best-sized order
+        // Smallest order that is larger than or equal to the minimum size
+        let order = (0..PFrameAllocator::MAX_ORDER).position(|o| PFrameAllocator::block_size(o) >= alloc_size)?;
+        dbwriteserial!("\tSelected order {}.\n", order);
+        let addr = req_block(&mut allocator, order)?;
+        dbwriteserial!("\tAllocating addr {:x}.\n", addr);
+        let bidx = allocator.free_blocks[order].iter().position(|x| *x==addr).expect("Got invalid block!");
+        allocator.free_blocks[order].swap_remove(bidx);
+        
+        Some((addr, order, PFrameAllocator::block_size(order)))
+    })?;
+    Some(PhysicalMemoryAllocation { 
+        ptr: core::ptr::NonNull::new(addr as *mut u8).unwrap(),
+        layout: layout,
+        size: size,
+        block: (order, addr),
+    })
 }
-pub fn pfree(allocation: PhysicalMemoryAllocation){
-    //without_interrupts(||{
-    //    PHYSMEM_ALLOCATOR.lock().dealloc(allocation.ptr, allocation.layout)
-    //})
+// get a block for the requested order
+// (this does not remove it from the free list)
+fn req_block(allocator: &mut PFrameAllocator, order: usize) -> Option<usize> {
+    if order >= PFrameAllocator::MAX_ORDER { None }
+    else if !allocator.free_blocks[order].is_empty() { Some(allocator.free_blocks[order][0]) }
+    else {
+        // Split a block of the next level up
+        let splitblock = req_block(allocator, order+1)?;
+        dbwriteserial!("\tSplitting {}:{:x} into two order {} blocks.\n", order+1, splitblock, order);
+        let (lb, _) = allocator.split(order+1, splitblock);
+        Some(lb)
+    }
+}
+
+// PhysicalMemoryAllocations implement Drop, allowing them to be automatically freed once they are no longer referenced
+impl core::ops::Drop for PhysicalMemoryAllocation {
+    fn drop(&mut self){
+        dbwriteserial!("Dropped {:?}.\n", self);
+        PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
+            let (order, addr) = self.block;
+            
+            // Return the block to the collection of free blocks
+            allocator.free_blocks[order].push(addr);
+            // And try to merge blocks until it's no longer possible
+            let mut merge_addr = addr; let mut merge_order = order;
+            while let Some(newaddr) = allocator.merge(merge_order, merge_addr){
+                dbwriteserial!("\tMerged {}:{:x} -> {}:{:x}\n", merge_order, merge_addr, merge_order+1, newaddr);
+                merge_order+=1; merge_addr = newaddr;
+            }
+        });
+    }
 }

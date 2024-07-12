@@ -52,15 +52,18 @@ impl<T:LockedNoInterrupts> LockedWrite for T
     }
 }
 
-//use core::fmt::Write;
-//impl LockedSerialPort {  // this would be an impl of core::fmt::Write, but we cannot take an &mut reference to ourselves (as it goes against the whole point of this)
-//    fn write_str(&self, s: &str) -> Result{
-//        self.with_lock(|mut w|w.write_str(s))
-//    }
-//    fn write_char(&self, c: char) -> Result<(), core::fmt::Error>{
-//        self.with_lock(|mut w|w.write_char(c))
-//    }
-//    fn write_fmt(&self, args: core::fmt::Arguments<'_>) -> Result<(), core::fmt::Error>{
-//        self.with_lock(|mut w|w.write_fmt(args))
-//    }
-//}
+macro_rules! dbwriteserial {
+    ($fmt: expr, $($x:expr),*) => {
+        {
+            use core::write; use crate::coredrivers::serial_uart::SERIAL1;
+            let _ = write!(SERIAL1, $fmt, $($x),*);
+        }
+    };
+    ($msg:expr) => {
+        {
+            use crate::coredrivers::serial_uart::SERIAL1;
+            let _ = SERIAL1.write_str($msg);
+        }
+    }
+}
+pub(crate) use dbwriteserial;

@@ -55,13 +55,13 @@ impl<T:LockedNoInterrupts> LockedWrite for T
 macro_rules! dbwriteserial {
     ($fmt: expr, $($x:expr),*) => {
         {
-            use core::write; use crate::coredrivers::serial_uart::SERIAL1;
+            use core::write; use crate::coredrivers::serial_uart::SERIAL1; use crate::util::LockedWrite;
             let _ = write!(SERIAL1, $fmt, $($x),*);
         }
     };
     ($msg:expr) => {
         {
-            use crate::coredrivers::serial_uart::SERIAL1;
+            use crate::coredrivers::serial_uart::SERIAL1; use crate::util::LockedWrite;
             let _ = SERIAL1.write_str($msg);
         }
     }

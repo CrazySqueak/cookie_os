@@ -224,9 +224,9 @@ pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
     let (addr, order, size) = PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
         // Find best-sized order
         // Smallest order that is larger than or equal to the minimum size
-        let order = (0..PFrameAllocator::MAX_ORDER).position(|o| PFrameAllocator::block_size(o) >= alloc_size)?;
+        let order = match (0..PFrameAllocator::MAX_ORDER).position(|o| PFrameAllocator::block_size(o) >= alloc_size){ Some(x) => x, None => {dbwriteserial!("No supported order is big enough to fit this request!\n"); None?}};
         dbwriteserial!("\tSelected order {}.\n", order);
-        let addr = req_block(&mut allocator, order)?;
+        let addr = match req_block(&mut allocator, order){ Some(x) => x, None => {dbwriteserial!("\tNo available blocks of the requested order (or higher)!\n"); None?}};
         dbwriteserial!("\tAllocating addr {:x}.\n", addr);
         let bidx = allocator.free_blocks[order].iter().position(|x| *x==addr).expect("Got invalid block!");
         allocator.free_blocks[order].swap_remove(bidx);

@@ -43,11 +43,12 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
     /* Get the memory addresses of the memory address provided and its buddy, as a tuple of (lower buddy addr, higher buddy addr).
     One of these will be the memory address provided (if it is a valid address of a block). The other will be its buddy.*/
     pub fn buddies(order: usize, addr: usize) -> (usize, usize) {
-        dbwriteserial!("\t\tBuddies for {}:{:x} {:#32b}:\n", order, addr, addr);
-        let low_addr = addr &!(Self::block_size(order)<<1);  // we can't call block_size(order+1) as there's no guarantee that order is not MAX_ORDER
+        //dbwriteserial!("\t\tBuddies for {}:{:x} {:#32b}:\n", order, addr, addr);
+        let parent_size = Self::block_size(order)<<1;  // we can't use order+1 because we might be at MAX_ORDER already
+        let low_addr = (addr / parent_size) * parent_size;  // discard the middleness, as middleness isn't valid here
         let high_addr = low_addr + Self::block_size(order);
-        dbwriteserial!("\t\t\tLO =  {:x} {:#32b}\n", low_addr, low_addr);
-        dbwriteserial!("\t\t\tHI =  {:x} {:#32b}\n", high_addr, high_addr);
+        //dbwriteserial!("\t\t\tLO =  {:x} {:#32b}\n", low_addr, low_addr);
+        //dbwriteserial!("\t\t\tHI =  {:x} {:#32b}\n", high_addr, high_addr);
         (low_addr, high_addr)
     }
     
@@ -101,22 +102,29 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
     }
     
     /* Add memory from [start,end) to this allocator's list of free blocks. */
-    unsafe fn add_memory(&mut self, start: *const u8, end: *const u8){
+    unsafe fn add_memory(&mut self, s: *const u8, e: *const u8){
+        let mut start_u = s as usize;
+        let mut end_u = e as usize;
         for order in (1..MAX_ORDER+1).rev() {  // MAX_ORDER -> 1 inc
             // Calculate the bounds of the block
             let split_order = order-1;
-            let (block_start_addr, block_mid_addr) = Self::buddies(split_order, start as usize);
+            let (block_start_addr, block_mid_addr) = Self::buddies(split_order, start_u);
             let block_end_excl = block_mid_addr + Self::block_size(split_order);
-            if block_start_addr < (start as usize) || block_end_excl > (end as usize) { continue; }  // block is too big / overlaps the bounds
             
-            if (start as usize) < block_start_addr {
+            // Chop to fit (if we're too big)
+            if start_u < block_start_addr {
                 // We need to add the extra area at the start (that the block doesn't cover)
-                self.add_memory(start, block_start_addr as *const u8);
+                self.add_memory(start_u as *const u8, block_start_addr as *const u8);
+                start_u = block_start_addr;
             }
-            if (end as usize) > block_end_excl {
+            if end_u > block_end_excl {
                 // We need to add the extra area at the end
-                self.add_memory(block_end_excl as *const u8, end);
+                self.add_memory(block_end_excl as *const u8, end_u as *const u8);
+                end_u = block_end_excl;
             }
+            
+            // What if the block is too big?
+            if block_start_addr < start_u || block_end_excl > end_u { continue; }  // block is too big / overlaps the bounds
             
             // Add the block
             // (the low buddy is guaranteed to also count as a valid block for the order above)

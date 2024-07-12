@@ -30,14 +30,7 @@ pub fn _kinit() {
     memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
     
     // Grow kernel heap by 48MiB
-    memory::kernel_heap::grow_kheap(16*1024*1024);
-    memory::kernel_heap::grow_kheap(16*1024*1024);
-    memory::kernel_heap::grow_kheap(16*1024*1024);
-    memory::kernel_heap::grow_kheap(16*1024*1024);
-    memory::kernel_heap::grow_kheap(16*1024*1024);
-    memory::kernel_heap::grow_kheap(16*1024*1024);
-    memory::kernel_heap::grow_kheap(16*1024*1024);
-    memory::kernel_heap::grow_kheap(16*1024*1024);
+    memory::kernel_heap::grow_kheap(48*1024*1024);
 }
 
 #[no_mangle]

@@ -219,15 +219,15 @@ fn calc_alloc_size(layout: &Layout) -> usize {
 
 pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
     dbwriteserial!("Requested to allocate physical memory for {:?}\n", layout);
-    let alloc_size = {let x = calc_alloc_size(&layout); if x.is_power_of_two() { x } else { x.next_power_of_two() }};
+    let alloc_size = calc_alloc_size(&layout);
     dbwriteserial!("\tAllocating {} bytes.\n", alloc_size);
     let (addr, order, size) = PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
         // Find best-sized order
         // Smallest order that is larger than or equal to the minimum size
-        let order = match (0..PFrameAllocator::MAX_ORDER).position(|o| PFrameAllocator::block_size(o) >= alloc_size){ Some(x) => x, None => {dbwriteserial!("No supported order is big enough to fit this request!\n"); None?}};
+        let order = match (0..PFrameAllocator::MAX_ORDER).position(|o| PFrameAllocator::block_size(o) >= alloc_size){ Some(x) => x, None => {dbwriteserial!("\tNo supported order is large enough to fulfill this request!\n"); None?}};
         dbwriteserial!("\tSelected order {}.\n", order);
-        let addr = match req_block(&mut allocator, order){ Some(x) => x, None => {dbwriteserial!("\tNo available blocks of the requested order (or higher)!\n"); None?}};
-        dbwriteserial!("\tAllocating addr {:x}.\n", addr);
+        let addr = match req_block(&mut allocator, order){ Some(x) => x, None => {dbwriteserial!("\tNo free blocks of the requested order (or higher)!\n"); None?}};
+        dbwriteserial!("\tAllocating addr {:x}, size: {} bytes.\n", addr, PFrameAllocator::block_size(order));
         let bidx = allocator.free_blocks[order].iter().position(|x| *x==addr).expect("Got invalid block!");
         allocator.free_blocks[order].swap_remove(bidx);
         

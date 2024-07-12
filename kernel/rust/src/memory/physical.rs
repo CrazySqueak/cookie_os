@@ -49,7 +49,6 @@ impl !Sync for PhysicalMemoryAllocation{}
 
 // ALLOCATOR
 // This allocator works akin to a buddy allocator or something
-#[derive(Debug)]
 #[repr(transparent)]
 pub struct BuddyAllocator<const MAX_ORDER: usize, const MIN_SIZE: usize> {
     free_blocks: [Vec<usize>; MAX_ORDER],
@@ -149,6 +148,26 @@ lazy_static! {
     });
 }
 
+use alloc::format;
+impl<const MAX_ORDER: usize, const MIN_SIZE: usize> core::fmt::Debug for BuddyAllocator<MAX_ORDER,MIN_SIZE> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result{
+        let mut fmt = f.debug_struct("BuddyAllocator - Free Blocks");
+        for order in (0..MAX_ORDER).rev(){
+            let bs = Self::block_size(order);
+            
+            let bs_str =      if bs > 0x100_0000_0000 { format!("{}TiB",bs>>40) }
+                         else if bs > 0x____4000_0000 { format!("{}GiB",bs>>30) }
+                         else if bs > 0x______10_0000 { format!("{}MiB",bs>>20) }
+                         else if bs > 0x__________400 { format!("{}KiB",bs>>10) }
+                         else { format!("{}B",bs) };
+            
+            fmt.field(&format!("Order {} ({} per block)", order, bs_str),
+                      &self.free_blocks[order]);
+        }
+        fmt.finish()
+    }
+}
+
 pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
     let (_, kend) = get_kernel_bounds();  // note: we ignore any memory before the kernel, its a tiny sliver (2MB tops) and isn't worth it
     write!(SERIAL1, "\n\tKernel ends @ {:x}", kend);
@@ -174,7 +193,7 @@ pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
                 }
             }
         }
-        write!(SERIAL1, "\n\nResult:{:x?}", allocator);
+        write!(SERIAL1, "\n\nResult:{:#x?}", allocator);
     })
 }
 

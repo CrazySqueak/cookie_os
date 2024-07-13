@@ -171,12 +171,15 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> core::fmt::Debug for BuddyAl
 pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
     let (_, kend) = get_kernel_bounds();  // note: we ignore any memory before the kernel, its a tiny sliver (2MB tops) and isn't worth it
     klog!(Info, "memory.physical", "\tKernel ends @ {:x}", kend);
+    let mut total_general_use: u64 = 0;
     PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
+        let prev_free: usize = allocator.amount_free;
         for entry in mmap {
             klog!(Debug, "memory.physical.memmap", "Checking PMem entry {:?}", entry);
             unsafe {
                 if !entry.is_for_general_use() { continue; }
                 klog!(Debug, "memory.physical.memmap", "\tEntry is for general use.");
+                total_general_use += entry.length;
                 let start_addr: usize = entry.base_addr.try_into().unwrap();
                 let end_addr: usize = (entry.base_addr + entry.length).try_into().unwrap();
                 klog!(Debug, "memory.physical.memmap", "\tRange: [{:x},{:x})", start_addr, end_addr);
@@ -194,6 +197,9 @@ pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
             }
         }
         klog!(Debug, "memory.physical.memmap", "\nResult:{:#x?}", allocator);
+        
+        let total_added: usize = allocator.amount_free - prev_free;
+        klog!(Info, "memory.physical", "Total General-use Memory: {}MiB, Available Memory: {}MiB", total_general_use/(1024*1024), total_added/(1024*1024));
     })
 }
 

@@ -29,9 +29,12 @@ pub fn get_kernel_bounds() -> (usize, usize) {
 
 // ALLOCATOR
 // This allocator works akin to a buddy allocator or something
-#[repr(transparent)]
 pub struct BuddyAllocator<const MAX_ORDER: usize, const MIN_SIZE: usize> {
     free_blocks: [Vec<usize>; MAX_ORDER],
+    
+    // Statistics
+    amount_free: usize,
+    amount_allocated: usize,
 }
 impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN_SIZE> {
     pub const MAX_ORDER: usize = MAX_ORDER;
@@ -128,6 +131,8 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
             // Add the block
             // (the low buddy is guaranteed to also count as a valid block for the order above)
             self.free_blocks[order].push(block_start_addr);
+            // Add to statistics
+            self.amount_free += Self::block_size(order);
             return; // and return
         }
     }
@@ -136,7 +141,10 @@ pub type PFrameAllocator = BuddyAllocator<27,4096>;
 mutex_no_interrupts!(LockedPFrameAllocator, PFrameAllocator);
 lazy_static! {
     static ref PHYSMEM_ALLOCATOR: LockedPFrameAllocator = LockedPFrameAllocator::wraps(BuddyAllocator {
-        free_blocks: core::array::from_fn(|_| Vec::new())
+        free_blocks: core::array::from_fn(|_| Vec::new()),
+        
+        amount_allocated: 0,
+        amount_free: 0,
     });
 }
 
@@ -162,30 +170,30 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> core::fmt::Debug for BuddyAl
 
 pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
     let (_, kend) = get_kernel_bounds();  // note: we ignore any memory before the kernel, its a tiny sliver (2MB tops) and isn't worth it
-    klog!(Info, "memory.physical", "\tKernel ends @ {:x}\n", kend);
+    klog!(Info, "memory.physical", "\tKernel ends @ {:x}", kend);
     PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
         for entry in mmap {
-            klog!(Debug, "memory.physical.memmap", "Checking PMem entry {:?}\n", entry);
+            klog!(Debug, "memory.physical.memmap", "Checking PMem entry {:?}", entry);
             unsafe {
                 if !entry.is_for_general_use() { continue; }
-                klog!(Debug, "memory.physical.memmap", "\tEntry is for general use.\n");
+                klog!(Debug, "memory.physical.memmap", "\tEntry is for general use.");
                 let start_addr: usize = entry.base_addr.try_into().unwrap();
                 let end_addr: usize = (entry.base_addr + entry.length).try_into().unwrap();
-                klog!(Debug, "memory.physical.memmap", "\tRange: [{:x},{:x})\n", start_addr, end_addr);
+                klog!(Debug, "memory.physical.memmap", "\tRange: [{:x},{:x})", start_addr, end_addr);
                 if start_addr >= kend {
                     // after the kernel
-                    klog!(Debug, "memory.physical.memmap", "\tAfter the kernel\n");
-                    klog!(Debug, "memory.physical.memmap", "\tadd_memory({:x},{:x})\n", start_addr, end_addr);
+                    klog!(Debug, "memory.physical.memmap", "\tAfter the kernel");
+                    klog!(Debug, "memory.physical.memmap", "\tadd_memory({:x},{:x})", start_addr, end_addr);
                     allocator.add_memory(start_addr as *const u8, end_addr as *const u8);
                 } else if end_addr > kend {
                     // intersecting the kernel
-                    klog!(Debug, "memory.physical.memmap", "\tIntersects the kernel\n");
-                    klog!(Debug, "memory.physical.memmap", "\tadd_memory({:x},{:x})\n", kend, end_addr);
+                    klog!(Debug, "memory.physical.memmap", "\tIntersects the kernel");
+                    klog!(Debug, "memory.physical.memmap", "\tadd_memory({:x},{:x})", kend, end_addr);
                     allocator.add_memory(kend as *const u8, end_addr as *const u8);
                 }
             }
         }
-        klog!(Debug, "memory.physical.memmap", "\nResult:{:#x?}\n", allocator);
+        klog!(Debug, "memory.physical.memmap", "\nResult:{:#x?}", allocator);
     })
 }
 
@@ -226,7 +234,11 @@ pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
         let order = match (0..PFrameAllocator::MAX_ORDER).position(|o| PFrameAllocator::block_size(o) >= alloc_size){ Some(x) => x, None => {klog!(Info, "memory.physical", "No supported order is large enough to fulfill this request for {} bytes!", alloc_size); None?}};
         klog!(Debug, "memory.physical", "Selected order {}.", order);
         let addr = match req_block(&mut allocator, order){ Some(x) => x, None => {klog!(Warning, "memory.physical", "Cannot allocate {} bytes. No free blocks of that order (or higher)!", alloc_size); None?}};
-        klog!(Info, "memory.physical", "Allocating addr {:x}, size: {} bytes.", addr, PFrameAllocator::block_size(order));
+        
+        allocator.amount_free -= PFrameAllocator::block_size(order);
+        allocator.amount_allocated += PFrameAllocator::block_size(order);
+        
+        klog!(Info, "memory.physical", "Allocated addr {:x}, size: {} bytes. ({})", addr, PFrameAllocator::block_size(order), allocator_free_str(&allocator));
         let bidx = allocator.free_blocks[order].iter().position(|x| *x==addr).expect("Got invalid block!");
         allocator.free_blocks[order].swap_remove(bidx);
         
@@ -247,7 +259,7 @@ fn req_block(allocator: &mut PFrameAllocator, order: usize) -> Option<usize> {
     else {
         // Split a block of the next level up
         let splitblock = req_block(allocator, order+1)?;
-        klog!(Debug, "memory.physical", "\tSplitting {}:{:x} into two order {} blocks.\n", order+1, splitblock, order);
+        klog!(Debug, "memory.physical", "\tSplitting {}:{:x} into two order {} blocks.", order+1, splitblock, order);
         let (lb, _) = allocator.split(order+1, splitblock);
         Some(lb)
     }
@@ -256,7 +268,7 @@ fn req_block(allocator: &mut PFrameAllocator, order: usize) -> Option<usize> {
 // PhysicalMemoryAllocations implement Drop, allowing them to be automatically freed once they are no longer referenced
 impl core::ops::Drop for PhysicalMemoryAllocation {
     fn drop(&mut self){
-        klog!(Info, "memory.physical", "Dropped {:?}.\n", self);
+        klog!(Debug, "memory.physical", "Dropping allocation {}:{:x}...", self.block.0, self.block.1);
         PHYSMEM_ALLOCATOR.with_lock(|mut allocator|{
             let (order, addr) = self.block;
             
@@ -265,9 +277,26 @@ impl core::ops::Drop for PhysicalMemoryAllocation {
             // And try to merge blocks until it's no longer possible
             let mut merge_addr = addr; let mut merge_order = order;
             while let Some(newaddr) = allocator.merge(merge_order, merge_addr){
-                klog!(Debug, "memory.physical", "\tMerged {}:{:x} -> {}:{:x}\n", merge_order, merge_addr, merge_order+1, newaddr);
+                klog!(Debug, "memory.physical", "\tMerged {}:{:x} -> {}:{:x}", merge_order, merge_addr, merge_order+1, newaddr);
                 merge_order+=1; merge_addr = newaddr;
             }
+            
+            allocator.amount_allocated -= PFrameAllocator::block_size(order);
+            allocator.amount_free += PFrameAllocator::block_size(order);
+            klog!(Info, "memory.physical", "Dropped {}:{:x}. ({})", self.block.0, self.block.1, allocator_free_str(&allocator));
         });
     }
+}
+
+pub fn amount_free() -> usize {
+    PHYSMEM_ALLOCATOR.with_lock(|allocator| allocator.amount_free)
+}
+pub fn amount_allocated() -> usize {
+    PHYSMEM_ALLOCATOR.with_lock(|allocator| allocator.amount_allocated)
+}
+pub fn amount_total() -> usize {
+    PHYSMEM_ALLOCATOR.with_lock(|allocator| allocator.amount_free + allocator.amount_allocated)
+}
+fn allocator_free_str(allocator: &PFrameAllocator) -> alloc::string::String {
+    format!("{}/{}MiB free", allocator.amount_free/(1024*1024), (allocator.amount_free+allocator.amount_allocated)/(1024*1024))
 }

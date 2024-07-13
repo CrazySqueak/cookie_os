@@ -48,8 +48,8 @@ pub extern "C" fn _kmain() -> ! {
     VGA_WRITER.write_string(&s);
     
     // Test allocation
-    for i in 1..10 {
-        let l = alloc::alloc::Layout::from_size_align(1024*i, 2048).unwrap();
+    for i in 1..32 {
+        let l = alloc::alloc::Layout::from_size_align(1024*1024*i, 2048*1024).unwrap();
         let x = memory::physical::palloc(l);
         klog!(Debug, "memory.physical", "Allocated {:?}, Got {:?}\n", l, x);
     }

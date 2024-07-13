@@ -54,7 +54,6 @@ pub extern "C" fn _kmain() -> ! {
         let x = memory::physical::palloc(l);
         klog!(Debug, "memory.physical", "Allocated {:?}, Got {:?}\n", l, x);
     }
-    panic!("hello");
     
     klog!(Debug, "beep", "Test1235");
     klog!(Debug, "beep", "2+2={}", 5);

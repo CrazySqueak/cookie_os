@@ -6,7 +6,6 @@ use pic8259::ChainedPics;
 use spin::Mutex;
 
 use crate::util::LockedWrite;
-use crate::coredrivers::serial_uart::SERIAL1;
 use crate::coredrivers::keyboard_ps2 as keyboard;
 use crate::coredrivers::display_vga::VGA_WRITER;
 
@@ -16,8 +15,7 @@ lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
         
-        idt.breakpoint.set_handler_fn(breakpoint_handler);
-        idt.page_fault.set_handler_fn(fuck_you_too);
+        idt.page_fault.set_handler_fn(page_fault_handler);
         
         unsafe {
             idt.double_fault.set_handler_fn(double_fault_handler).set_stack_index(super::gdt::DOUBLE_FAULT_IST_INDEX);
@@ -42,12 +40,7 @@ pub fn init(){
     x86_64::instructions::interrupts::enable();
 }
 
-extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame){
-    let _ = write!(SERIAL1,"Breakpoint! Frame={:?}", stack_frame);
-    // TODO
-}
-
-extern "x86-interrupt" fn fuck_you_too(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode){
+extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode){
     use x86_64::registers::control::Cr2;
     let accessed_addr = Cr2::read();
     
@@ -87,7 +80,6 @@ macro_rules! pic_interrupt_handler {
     }
 }
 pic_interrupt_handler!(PICInterrupt::Timer.as_u8(), timer_handler, {
-    let _ = write!(SERIAL1,"Beep");
     // TODO
 });
 
@@ -98,8 +90,6 @@ pic_interrupt_handler!(PICInterrupt::Keyboard.as_u8(), ps2keyboard_handler, {
     unsafe { keyboard::KEYBOARD.recv_next_byte(); };
 });
 fn print_key(key: pc_keyboard::DecodedKey){
-    let _ = write!(SERIAL1,"{:?}", key);
-    
     // Echo on-screen
     match key {
         pc_keyboard::DecodedKey::Unicode(chr) => VGA_WRITER.write_string(&format!("{}",chr)),

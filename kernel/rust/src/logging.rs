@@ -41,14 +41,14 @@ pub fn _kernel_log(level: LogLevel, component: &str, msg: &str){
 
 macro_rules! klog {
     ($level: ident, $component: literal, $template:expr, $($x:expr),*) => {
-        crate::logging::klog!($level, $component, &format!($template, $($x),*));
+        crate::logging::klog!($level, $component, &alloc::format!($template, $($x),*));
     };
     
     ($level: ident, $component:literal, $msg: expr) => {
         {
             use crate::logging::LogLevel::*;
             if $level >= crate::logging::configured_log_level($component.as_bytes()) {
-                crate::logging::_kernel_log($level, &format!("{}@{}:{}", $component, file!(), line!()), $msg);
+                crate::logging::_kernel_log($level, &alloc::format!("{}@{}:{}", $component, file!(), line!()), $msg);
             }
         }
     };
@@ -66,6 +66,8 @@ pub const fn configured_log_level(component: &[u8]) -> LogLevel {
         //b"memory.physical" => Info,
         b"memory.physical.buddies" => Warning,
         b"memory.physical.memmap" => Warning,
+        
+        b"memory.kheap" => Debug,
         
         b"default" => Info,
         _ => {

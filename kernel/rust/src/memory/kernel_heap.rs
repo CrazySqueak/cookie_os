@@ -1,7 +1,7 @@
 
 use buddy_system_allocator::LockedHeap;
 
-use crate::util::dbwriteserial;
+use crate::logging::klog;
 
 extern "C" {
     // Provided by longmode.intel.asm (64-bit)
@@ -30,11 +30,14 @@ pub fn grow_kheap(amount: usize) -> Result<usize,()>{
     use core::alloc::Layout;
     
     let l = Layout::from_size_align(amount, 4096).unwrap();
-    dbwriteserial!("Expanding kernel heap by {} bytes.\n", amount);
-    let allocation = palloc(l).ok_or(())?;
-    dbwriteserial!("Allocation OK. Adding to heap.\n");
+    klog!(Debug, "memory.kheap", "Expanding kernel heap by {} bytes...", amount);
+    let allocation = palloc(l).ok_or_else(||{
+        klog!(Severe, "memory.kheap", "Unable to expand kernel heap! Requested {} bytes but allocation failed.", amount);
+    })?;
     
     let bytes_added = allocation.get_size();
+    klog!(Info, "memory.kheap", "Expanded kernel heap by {} bytes.", bytes_added);
+    
     crate::lowlevel::without_interrupts(||{ unsafe {
         // Add allocation to heap
         KHEAP_ALLOCATOR.lock().init((allocation.get_ptr().as_ptr() as usize) + crate::lowlevel::HIGHER_HALF_OFFSET, bytes_added);

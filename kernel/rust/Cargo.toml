@@ -18,20 +18,6 @@ x86_64 = "0.15.1"
 pic8259 = "0.10.1"
 pc-keyboard = "0.7.0"
 
-[features]
-# Logging features
-# These only affect Debug/Info log levels
-# Log levels WARN and up are always displayed
-"logging.beep" = []  # log beep is for testing the logging system and should not be used
-"logging.memory" = ["logging.memory.physical", "logging.memory.kheap"]
- "logging.memory.physical" = []
-  "logging.memory.physical.memmap" = []  # mem map is not enabled by default for memory.physical as it's very verbose
-  "logging.memory.physical.buddies" = []  # buddies is not enabled by default for memory.physical as it's very verbose
- "logging.memory.kheap" = []
-
-# Force enable debug logging, even on release builds
-"logging.forceenabledebug" = []
-
 [lib]
 crate-type = ["staticlib"]
 

@@ -33,34 +33,50 @@ impl LogLevel {
 
 use crate::coredrivers::serial_uart::SERIAL1;
 use crate::util::LockedWrite;
-pub fn _kernel_log(level: LogLevel, feature: &str, msg: &str){
-    let msg = format!("{}: [{}] {} - {}\n", 0, level.name(), feature, msg);
+pub fn _kernel_log(level: LogLevel, component: &str, msg: &str){
+    let msg = format!("{}: [{}] {} - {}\n", 0, level.name(), component, msg);
     
     let _ = SERIAL1.write_str(&msg);
 }
 
 macro_rules! klog {
-    ($level: ident, $feature: literal, $template:expr, $($x:expr),*) => {
-        crate::logging::klog!($level, $feature, &format!($template, $($x),*));
+    ($level: ident, $component: literal, $template:expr, $($x:expr),*) => {
+        crate::logging::klog!($level, $component, &format!($template, $($x),*));
     };
     
-    (Debug, $feature:literal, $msg:expr) => {
-        #[cfg(all(any(debug_assertions, feature = "logging.forceenabledebug"), feature = $feature))]
-        crate::logging::klog!(_dbghandled, Debug, $feature, $msg);
-    };
-    (Info, $feature:literal, $msg:expr) => {
-        #[cfg(feature = $feature)]
-        crate::logging::klog!(_dbghandled, Info, $feature, $msg);
-    };
-    ($level: ident, $feature:literal, $msg: expr) => {
-        crate::logging::klog!(_dbghandled, $level, $feature, $msg);
-    };
-    
-    (_dbghandled, $level: ident, $feature:literal, $msg: expr) => {
+    ($level: ident, $component:literal, $msg: expr) => {
         {
             use crate::logging::LogLevel::*;
-            crate::logging::_kernel_log($level, &format!("{}@{}:{}", $feature, file!(), line!()), $msg);
+            if $level >= crate::logging::configured_log_level($component.as_bytes()) {
+                crate::logging::_kernel_log($level, &format!("{}@{}:{}", $component, file!(), line!()), $msg);
+            }
         }
     };
 }
 pub(in crate) use klog;
+
+// Logging config
+// Returns the minimum log level for the chosen component
+// log messages below that are ignored
+// Note: more specific configs (e.g. x.y.z) override less specific ones (e.g. x.y)
+pub const fn configured_log_level(component: &[u8]) -> LogLevel {
+    use LogLevel::*;
+    match component {
+        
+        //b"memory.physical" => Info,
+        b"memory.physical.buddies" => Warning,
+        b"memory.physical.memmap" => Warning,
+        
+        b"default" => Info,
+        _ => {
+            // Split string by "." if possible
+            let mut dot_pos: Option<usize> = None;
+            let mut i = component.len()-1; while i > 0 { if component[i] == b'.' { dot_pos = Some(i); break; }; i -= 1; }
+            if let Some(dot_pos) = dot_pos {
+                let (prefix, _) = component.split_at(dot_pos);
+                configured_log_level(prefix)
+            }
+            else { configured_log_level(b"default") }
+        }
+    }
+}

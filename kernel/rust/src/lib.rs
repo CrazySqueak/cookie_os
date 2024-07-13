@@ -1,6 +1,7 @@
 #![no_std]
 #![feature(abi_x86_interrupt)]
 #![feature(negative_impls)]
+#![feature(const_for)]
 
 extern crate alloc;
 use core::panic::PanicInfo;
@@ -50,12 +51,12 @@ pub extern "C" fn _kmain() -> ! {
     for i in 1..10 {
         let l = alloc::alloc::Layout::from_size_align(1024*i, 2048).unwrap();
         let x = memory::physical::palloc(l);
-        klog!(Debug, "logging.memory.physical", "Allocated {:?}, Got {:?}\n", l, x);
+        klog!(Debug, "memory.physical", "Allocated {:?}, Got {:?}\n", l, x);
     }
     
-    //klog!(Debug, "logging.beep", "Test1235");
-    //klog!(Debug, "logging.beep", "2+2={}", 5);
-    //klog!(Warning, "logging.beep", "Wait no");
+    klog!(Debug, "beep", "Test1235");
+    klog!(Debug, "beep", "2+2={}", 5);
+    klog!(Warning, "beep", "Wait no");
     
     // TODO
     loop{}//lowlevel::halt();

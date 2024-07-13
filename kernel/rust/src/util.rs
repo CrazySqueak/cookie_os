@@ -51,19 +51,3 @@ impl<T:LockedNoInterrupts> LockedWrite for T
         self.with_lock(|mut w|w.write_fmt(args))
     }
 }
-
-macro_rules! dbwriteserial {
-    ($fmt: expr, $($x:expr),*) => {
-        {
-            use core::write; use crate::coredrivers::serial_uart::SERIAL1; use crate::util::LockedWrite;
-            let _ = write!(SERIAL1, $fmt, $($x),*);
-        }
-    };
-    ($msg:expr) => {
-        {
-            use crate::coredrivers::serial_uart::SERIAL1; use crate::util::LockedWrite;
-            let _ = SERIAL1.write_str($msg);
-        }
-    }
-}
-pub(crate) use dbwriteserial;

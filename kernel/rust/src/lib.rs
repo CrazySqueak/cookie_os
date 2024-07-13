@@ -33,8 +33,8 @@ pub fn _kinit() {
     memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
     
     // Grow kernel heap by 16+32MiB
-    let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
-    let _ = memory::kernel_heap::grow_kheap(32*1024*1024);
+    //let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
+    //let _ = memory::kernel_heap::grow_kheap(32*1024*1024);
 }
 
 #[no_mangle]
@@ -54,6 +54,7 @@ pub extern "C" fn _kmain() -> ! {
         let x = memory::physical::palloc(l);
         klog!(Debug, "memory.physical", "Allocated {:?}, Got {:?}\n", l, x);
     }
+    panic!("hello");
     
     klog!(Debug, "beep", "Test1235");
     klog!(Debug, "beep", "2+2={}", 5);
@@ -66,14 +67,14 @@ pub extern "C" fn _kmain() -> ! {
 /// This function is called on panic.
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
+    klog!(Fatal, "panic", "KERNEL PANIC: {}", _info);
+    
     // Forcefully acquire a reference to the current writer, bypassing the lock (which may have been locked at the time of the panic and will not unlock as we don't have stack unwinding)
     let mut writer = unsafe{let wm=core::mem::transmute::<&display_vga::LockedVGAConsoleWriter,&spin::Mutex<display_vga::VGAConsoleWriter>>(&*VGA_WRITER);wm.force_unlock();wm.lock()};
     writer.set_colour(display_vga::VGAColour::new(display_vga::BaseColour::LightGray,display_vga::BaseColour::Red,true,false));
     
     // Write message and location
     let _ = writer.write_string(&format!("\n\n\n\n\nKERNEL PANICKED: {}", _info));
-    // Write to serial as well
-    let _ = write!(SERIAL1, "\n\n\n\n\nKernel Rust-Panic!: {}", _info);
     
     lowlevel::halt();
 }

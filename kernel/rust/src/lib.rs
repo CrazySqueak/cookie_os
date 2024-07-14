@@ -1,7 +1,6 @@
 #![no_std]
 #![feature(abi_x86_interrupt)]
 #![feature(negative_impls)]
-#![feature(const_for)]
 
 extern crate alloc;
 use core::panic::PanicInfo;

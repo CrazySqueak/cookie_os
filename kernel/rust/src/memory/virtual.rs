@@ -9,9 +9,9 @@ trait PageFrameAllocator {
     const PAGE_SIZE: usize;
     
     /* Attempt to allocate the requested amount of memory. */
-    fn create_allocation(&mut self, size: usize) -> ();
+    fn allocate(&mut self, size: usize) -> Option<()>;
     /* Allocate the requested amount of memory at the given virtual memory address (relative to the start of this table's jurisdiction). */
-    fn create_allocation_at(&mut self, addr: usize, size: usize) -> ();
+    fn allocate_at(&mut self, addr: usize, size: usize) -> Option<()>;
 }
 
 struct X64PageAllocator<ST, const SUBTABLES: bool, const HUGEPAGES: bool> {
@@ -21,12 +21,47 @@ struct X64PageAllocator<ST, const SUBTABLES: bool, const HUGEPAGES: bool> {
     // Each addr is 2 bits: 00 = empty, 01 = occupied by table, 10 = occupied by table (half full), 11 = full / occupied by page
     availability_bitmap: [u8; 128],
 }
+enum _AllocAt {
+    Start,
+    End,
+    None,
+}
 impl<ST, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrameAllocator for X64PageAllocator<ST,SUBTABLES,HUGEPAGES>
     where ST: PageFrameAllocator {
     const NPAGES: usize = 512;
     const PAGE_SIZE: usize = if SUBTABLES { ST::PAGE_SIZE * ST::NPAGES } else { 4096 };
     
-    // TODO
+    fn allocate(&mut self, size: usize) -> Option<()> {
+        // We only support a non-page-sized remainder if we support sub-tables (as page frames cannot be divided)
+        let pages = if SUBTABLES { size / Self::NPAGES } else { size.div_ceil(Self::NPAGES) };
+        let remainder = if SUBTABLES { size % Self::NPAGES } else { 0 };
+        
+        // TODO: Replace with something that's not effectively O(n^2)
+        for offset in 0..(Self::NPAGES-pages) {
+            'check: {
+                let start = offset; let end = offset+pages;
+                
+                // Test contiguous middle section
+                for i in start..end { if self.availability_bitmap[i] != 0b000u8 { break 'check; } };
+                
+                // Test remainder (if applicable)
+                if remainder != 0 && SUBTABLES {
+                    let required_availability: u8 = if remainder >= Self::NPAGES/2 { 0b001u8 } else { 0b010u8 };  // Only test half-full ones if our remainder is small enough
+                    if start > 0 && self.availability_bitmap[start-1] <= required_availability {
+                        // ???
+                    } else if end < Self::NPAGES && self.availability_bitmap[end] <= required_availability {
+                        // ???
+                    } else {
+                        // cannot allocate remainder
+                        break 'check
+                    }
+                }
+                
+                // All tests were successful. IDK what to do here
+            }
+        }
+        todo!();
+    }
 }
 
 type X64_LEVEL_1 = X64PageAllocator<    ()     , false, true >;  // Page Table

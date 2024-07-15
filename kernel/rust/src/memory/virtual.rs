@@ -2,9 +2,12 @@
 use crate::logging::klog;
 
 #[cfg_attr(target_arch = "x86_64", path = "paging_x64.rs")]
-mod implementation;
+mod arch;
 
-trait PageFrameAllocator {
+#[path = "paging_firstfit.rs"]
+mod impl_firstfit;
+
+pub trait PageFrameAllocator {
     const NPAGES: usize;
     const PAGE_SIZE: usize;
     
@@ -19,4 +22,13 @@ trait PageFrameAllocator {
     fn allocate_at(&mut self, addr: usize, size: usize) -> Option<()>;
 }
 
-
+pub trait IPageTable {
+    const NPAGES: usize;
+    
+    /* Creates a new, empty page table. */ 
+    fn new() -> Self;
+    /* Returns true if the specified page is unused (e.g. zeroed out on x64), false otherwise. */
+    fn is_unused(&self, idx: usize) -> bool;
+    /* Get the number of pages currenty used */
+    fn get_num_pages_used(&self) -> usize;
+}

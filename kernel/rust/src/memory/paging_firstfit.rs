@@ -22,7 +22,10 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
             // Create new allocator
             let new_st = self.suballocators[idx].insert(Box::new(ST::new()));
             // TODO: Add to page table
-            todo!();
+            unsafe {
+                self.page_table.alloc_subtable_from_allocator(idx, &**new_st);
+                todo!();
+            };
             // And return
             new_st
         }
@@ -65,11 +68,17 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
             assert!(self.get_availability(idx) == 0b00u8);
             if HUGEPAGES {
                 // Huge pages
-                todo!();
+                unsafe {
+                    // Allocate huge page
+                    self.page_table.alloc_huge(idx);
+                    todo!();
+                }
+                // Add allocation to list somewhere
             } else if SUBTABLES {
                 // Sub-tables
                 let subtable = self.get_subtable_always(idx);
                 if let Some(allocation) = subtable.allocate(Self::PAGE_SIZE) {
+                    // Add allocation to list somewhere
                     todo!();
                 } else {
                     panic!("This should never happen! allocation failed but did not match availability_bitmap!");
@@ -111,6 +120,9 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
     fn get_num_pages_used(&self) -> usize {
         self.page_table.get_num_pages_used()
     }
+    fn get_page_table_ptr(&self) -> *const u8 {
+        core::ptr::addr_of!(self.page_table) as *const u8
+    }
     
     fn allocate(&mut self, size: usize) -> Option<()> {
         // We only support a non-page-sized remainder if we support sub-tables (as page frames cannot be divided)
@@ -129,10 +141,12 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
                 'allocrem: {
                   if remainder != 0 && SUBTABLES {
                     if let Some(alloc) = self._alloc_rem(start.wrapping_sub(1), Self::PAGE_SIZE-remainder, remainder){
+                        // Add allocation to list somewhere
                         todo!();
                         break 'allocrem;
                     }
                     if let Some(alloc) = self._alloc_rem(end, 0, remainder){
+                        // Add allocation to list somewhere
                         todo!();
                         break 'allocrem;
                     }
@@ -144,6 +158,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
                 
                 // Allocate middle
                 self._alloc_contiguous(start, end);
+                // Add allocation to list somewhere
             };
         }
         todo!();
@@ -164,6 +179,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         // Check that the remainder is clear (if applicable)
         'allocrem: { if remainder != 0 && SUBTABLES {
                 if let Some(alloc) = self._alloc_rem(end, 0, remainder){
+                    // Add allocation to list somewhere
                     todo!();
                     break 'allocrem;
                 }

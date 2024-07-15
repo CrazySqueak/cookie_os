@@ -16,6 +16,10 @@ pub trait PageFrameAllocator {
     /* Get the number of pages which are occupied. */
     fn get_num_pages_used(&self) -> usize;
     
+    /* Get a pointer to this allocator's page table.
+       (used for pointing higher-level page tables to their children) */
+    fn get_page_table_ptr(&self) -> *const u8;
+    
     /* Attempt to allocate the requested amount of memory. */
     fn allocate(&mut self, size: usize) -> Option<()>;
     /* Allocate the requested amount of memory at the given virtual memory address (relative to the start of this table's jurisdiction). */
@@ -31,4 +35,14 @@ pub trait IPageTable {
     fn is_unused(&self, idx: usize) -> bool;
     /* Get the number of pages currenty used */
     fn get_num_pages_used(&self) -> usize;
+    
+    // SAFETY: Modifying page tables is prone to cause UB if done incorrectly
+    /* Allocate a full page, and ????? */
+    unsafe fn alloc_huge(&mut self, idx: usize);
+    /* Allocate a sub-page-table, and return ????? */
+    unsafe fn alloc_subtable(&mut self, idx: usize, ptr: *const u8);
+    
+    unsafe fn alloc_subtable_from_allocator<PFA: PageFrameAllocator>(&mut self, idx: usize, allocator: &PFA){
+        self.alloc_subtable(idx, allocator.get_page_table_ptr())
+    }
 }

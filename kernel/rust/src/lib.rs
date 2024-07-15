@@ -2,6 +2,11 @@
 #![feature(abi_x86_interrupt)]
 #![feature(negative_impls)]
 
+// i'm  exhausted by these warnings jeez
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(dead_code)]
+
 extern crate alloc;
 use core::panic::PanicInfo;
 use alloc::format;

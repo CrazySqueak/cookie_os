@@ -10,6 +10,8 @@ trait PageFrameAllocator {
     
     /* Create a new, empty page frame allocator. */
     fn new() -> Self;
+    /* Get the number of pages which are occupied. */
+    fn get_num_pages_used(&self) -> usize;
     
     /* Attempt to allocate the requested amount of memory. */
     fn allocate(&mut self, size: usize) -> Option<()>;

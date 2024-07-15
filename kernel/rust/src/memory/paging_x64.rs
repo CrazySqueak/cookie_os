@@ -2,10 +2,12 @@
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 
+use x86_64::structures::paging::page_table::{PageTable,PageTableEntry};
+
 use super::*;
 
 struct X64PageAllocator<ST, const SUBTABLES: bool, const HUGEPAGES: bool> {
-    page_table: (), // TODO
+    page_table: PageTable,
     
     suballocators: [Option<Box<ST>>; 512],
     // Each addr is 2 bits: 00 = empty, 01 = occupied by table, 10 = occupied by table (half full), 11 = full / occupied by page
@@ -29,17 +31,39 @@ impl<ST, const SUBTABLES: bool, const HUGEPAGES: bool> X64PageAllocator<ST,SUBTA
     
     fn get_availability(&self, i: usize) -> u8 {
         // 1122_3344 5566_7788
-        (self.availability_bitmap[i/4] >> (6-(2*(i%4)))) & 0b011u8
+        (self.availability_bitmap[i/4] >> (6-(2*(i%4)))) & 0b11u8
     }
     fn refresh_availability(&mut self, idx: usize){
-        todo!();
+        let availability = 
+            if let Some(alloc) = &self.suballocators[idx] {  // sub-table
+                assert!(SUBTABLES);  // let statements in this position are unstable so fuck me i guess
+                let npages_used = alloc.get_num_pages_used();
+                if npages_used >= ST::NPAGES {
+                    0b11u8  // full
+                } else if npages_used >= ST::NPAGES/2 {
+                    0b10u8  // half full +
+                } else {
+                    // less than half full
+                    0b01u8
+                }
+            } else {  // page or empty
+                if self.page_table[idx].is_unused() {
+                    0b00u8  // empty
+                } else {
+                    0b11u8  // occupied by huge page
+                }
+            }
+        ;
+        let lsh = 6-(2*(idx%4));
+        self.availability_bitmap[idx/4] ^= 0b11u8 << lsh; // clear
+        self.availability_bitmap[idx/4] |= availability << lsh;  // set
     }
     
     // allocates indexes [start, end)
     fn _alloc_contiguous(&mut self, start: usize, end: usize) -> () { // TODO: return type
         for idx in start..end {
             // Allocate huge pages or subtables depending on if it's necessary
-            assert!(self.get_availability(idx) == 0b000u8);
+            assert!(self.get_availability(idx) == 0b00u8);
             if HUGEPAGES {
                 // Huge pages
                 todo!();
@@ -59,7 +83,7 @@ impl<ST, const SUBTABLES: bool, const HUGEPAGES: bool> X64PageAllocator<ST,SUBTA
         ()
     }
     fn _alloc_rem(&mut self, idx: usize, inner_offset: usize, size: usize) -> Option<()> {  // TODO: Return type
-        let required_availability: u8 = if size >= Self::NPAGES/2 { 0b001u8 } else { 0b010u8 };  // Only test half-full ones if our remainder is small enough
+        let required_availability: u8 = if size >= Self::NPAGES/2 { 0b01u8 } else { 0b10u8 };  // Only test half-full ones if our remainder is small enough
         if idx < self.availability_bitmap.len()*4 && self.get_availability(idx) <= required_availability {
             // allocate remainder
             if let Some(allocation) = self.get_subtable_always(idx).allocate_at(inner_offset, size) {
@@ -78,11 +102,15 @@ impl<ST, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrameAllocator for X6
     
     fn new() -> Self {
         Self {
-            page_table: (),  // TODO
+            page_table: PageTable::new(),
             
             suballocators: [const{None}; 512],
             availability_bitmap: [0; 128],
         }
+    }
+    
+    fn get_num_pages_used(&self) -> usize {
+        self.page_table.iter().filter(|e| e.is_unused()).count()
     }
     
     fn allocate(&mut self, size: usize) -> Option<()> {
@@ -96,7 +124,7 @@ impl<ST, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrameAllocator for X6
                 let start = offset; let end = offset+pages;
                 
                 // Test contiguous middle section
-                for i in start..end { if self.get_availability(i) != 0b000u8 { break 'check; } };
+                for i in start..end { if self.get_availability(i) != 0b00u8 { break 'check; } };
                 
                 // Test remainder (and if successful, we've got it!)
                 'allocrem: {
@@ -132,7 +160,7 @@ impl<ST, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrameAllocator for X6
         
         // Check that the main area is clear
         for i in start_idx..end {
-            if self.get_availability(i) != 0b000u8 { return None; }
+            if self.get_availability(i) != 0b00u8 { return None; }
         }
         // Check that the remainder is clear (if applicable)
         'allocrem: { if remainder != 0 && SUBTABLES {

@@ -5,6 +5,7 @@ use x86_64::addr::PhysAddr;
 use super::*;
 use super::impl_firstfit::MLFFAllocator;
 
+#[repr(transparent)]
 pub struct X64PageTable<const LEVEL: usize>(PageTable);
 impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
     const NPAGES: usize = 512;
@@ -23,7 +24,7 @@ impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
     
     unsafe fn alloc_huge(&mut self, idx: usize){
         let flags = match LEVEL {
-            1 => PageTableFlags::empty(),  // (huge pages are replaced with PAT on level 1 page tables)
+            1 => PageTableFlags::empty(),  // (huge page flag is used for PAT on level 1 page tables)
             _ => PageTableFlags::HUGE_PAGE,
         };
         

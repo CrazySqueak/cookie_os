@@ -10,6 +10,7 @@ mod impl_firstfit;
 pub trait PageFrameAllocator {
     const NPAGES: usize;
     const PAGE_SIZE: usize;
+    type PageTableType: IPageTable;
     
     /* Create a new, empty page frame allocator. */
     fn new() -> Self;
@@ -18,7 +19,10 @@ pub trait PageFrameAllocator {
     
     /* Get a pointer to this allocator's page table.
        (used for pointing higher-level page tables to their children) */
-    fn get_page_table_ptr(&self) -> *const u8;
+    fn get_page_table_ptr(&self) -> *const Self::PageTableType;
+    /* Get a mutable reference to this allocator's page table.
+        (used for modifying the table post-allocation in a manner that is compatible with Rust's mutability rules) */
+    fn get_page_table_mut(&mut self) -> &mut Self::PageTableType;
     
     /* Attempt to allocate the requested amount of memory. */
     fn allocate(&mut self, size: usize) -> Option<()>;
@@ -43,6 +47,10 @@ pub trait IPageTable {
     unsafe fn alloc_subtable(&mut self, idx: usize, ptr: *const u8);
     
     unsafe fn alloc_subtable_from_allocator<PFA: PageFrameAllocator>(&mut self, idx: usize, allocator: &PFA){
-        self.alloc_subtable(idx, allocator.get_page_table_ptr())
+        self.alloc_subtable(idx, allocator.get_page_table_ptr() as *const u8)
     }
+}
+
+pub trait PageAllocation {
+    // TODO
 }

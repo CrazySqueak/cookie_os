@@ -8,7 +8,7 @@ use super::*;
 pub struct MLFFAllocator<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> {
     page_table: PT,
     
-    suballocators: [Option<Box<ST>>; 512],  // TODO
+    suballocators: [Option<Box<ST>>; 512],
     // Each addr is 2 bits: 00 = empty, 01 = occupied by table, 10 = occupied by table (half full), 11 = full / occupied by page
     availability_bitmap: [u8; 128],
 }
@@ -107,6 +107,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
   where ST: PageFrameAllocator {
     const NPAGES: usize = PT::NPAGES;
     const PAGE_SIZE: usize = if SUBTABLES { ST::PAGE_SIZE * ST::NPAGES } else { 4096 };
+    type PageTableType = PT;
     
     fn new() -> Self {
         Self {
@@ -120,8 +121,11 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
     fn get_num_pages_used(&self) -> usize {
         self.page_table.get_num_pages_used()
     }
-    fn get_page_table_ptr(&self) -> *const u8 {
-        core::ptr::addr_of!(self.page_table) as *const u8
+    fn get_page_table_ptr(&self) -> *const Self::PageTableType {
+        core::ptr::addr_of!(self.page_table)
+    }
+    fn get_page_table_mut(&mut self) -> &mut Self::PageTableType {
+        &mut self.page_table
     }
     
     fn allocate(&mut self, size: usize) -> Option<()> {

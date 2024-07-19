@@ -1,4 +1,6 @@
 
+use alloc::vec::Vec;
+
 use crate::logging::klog;
 
 #[cfg_attr(target_arch = "x86_64", path = "paging_x64.rs")]
@@ -25,9 +27,9 @@ pub trait PageFrameAllocator {
     fn get_page_table_mut(&mut self) -> &mut Self::PageTableType;
     
     /* Attempt to allocate the requested amount of memory. */
-    fn allocate(&mut self, size: usize) -> Option<()>;
+    fn allocate(&mut self, size: usize) -> Option<PageAllocation>;
     /* Allocate the requested amount of memory at the given virtual memory address (relative to the start of this table's jurisdiction). */
-    fn allocate_at(&mut self, addr: usize, size: usize) -> Option<()>;
+    fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PageAllocation>;
 }
 
 pub trait IPageTable {
@@ -51,6 +53,18 @@ pub trait IPageTable {
     }
 }
 
-pub trait PageAllocation {
-    // TODO
+pub struct PAllocEntry{index: usize, offset: usize}
+pub struct PAllocSubAlloc{index: usize, offset: usize, alloc: PageAllocation}
+pub struct PageAllocation {
+    pagetableaddr: *const u8,
+    entries: Vec<PAllocEntry>,  
+    suballocs: Vec<PAllocSubAlloc>,  
+    // (offset is the offset for the start of the frame/subpage in physmem, measured from the base physmem address)
+}
+impl PageAllocation {
+    fn new(pagetableaddr: *const u8, entries: Vec<PAllocEntry>, suballocs: Vec<PAllocSubAlloc>) -> Self {
+        Self {
+            pagetableaddr, entries, suballocs,
+        }
+    }
 }

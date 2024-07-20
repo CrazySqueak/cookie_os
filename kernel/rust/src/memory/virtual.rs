@@ -5,13 +5,17 @@ use crate::logging::klog;
 
 #[cfg_attr(target_arch = "x86_64", path = "paging_x64.rs")]
 mod arch;
-pub use arch::{TopLevelPageTable,crop_addr,ptaddr_virt_to_phys};
+
+pub use arch::{crop_addr,ptaddr_virt_to_phys};
 
 #[path = "paging_firstfit.rs"]
 mod impl_firstfit;
 #[path = "paging_nodeeper.rs"]
 mod impl_nodeeper;
 use impl_nodeeper::NoDeeper;
+#[path = "paging_api.rs"]
+mod api;
+pub use api::*;
 
 pub trait PageFrameAllocator {
     const NPAGES: usize;
@@ -61,22 +65,12 @@ pub trait IPageTable {
     
     /* Set the address for the given item (huge pages only, not subtables). */
     unsafe fn set_addr(&mut self, idx: usize, physaddr: usize);
-    
-    /* Activate this page table. Once active, this page table will be used to map virtual addresses to physical ones.
-        DANGER: You MUST follow the proper rules unless you want your program to CRASH UNEXPECTEDLY! This is serious shit!
-         * The kernel stack should be at the same virtual memory address in both the old and new tables. It cannot simply be moved to a different one.
-         * All heap objects and objects pointed to by pointers should be at the same virtual memory address in both the old and new tables. Any pointers or objects that are not at the same VMem address will cause Undefined Behaviour if accessed (unless the old page table is restored).
-         * All kernel code you plan to call must be at the same addresses in both the old and new tables. Most important are INTERRUPT HANDLERS and the PANIC HANDLER (as well as common utilities such as klog). This also includes the activate() function and the function you called it from.
-         The easiest way to achieve the above three points is to map the kernel to the same position in every page table. This is why the kernel lives in the higher half - it should never be necessary to change its location in virtual memory.
-         * Modifying the page table when it is active is a dangerous, but necessary art. Accidentally un-mapping or remapping addresses you planned on using later is easily done, and hard to debug.
-         */
-    unsafe fn activate(&self);
 }
 
 #[derive(Debug)]
-pub struct PAllocEntry{index: usize, offset: usize}
+struct PAllocEntry{index: usize, offset: usize}
 #[derive(Debug)]
-pub struct PAllocSubAlloc{index: usize, offset: usize, alloc: PageAllocation}
+struct PAllocSubAlloc{index: usize, offset: usize, alloc: PageAllocation}
 /* NOTE: PageAllocation is equivalent to an index into an array. If you drop it without deallocating it, you will leak VMem (as well as actual memory keeping the page tables in RAM).*/
 #[derive(Debug)]
 pub struct PageAllocation {

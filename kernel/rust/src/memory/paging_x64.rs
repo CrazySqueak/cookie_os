@@ -2,10 +2,9 @@
 use x86_64::structures::paging::page_table::{PageTable,PageTableEntry,PageTableFlags};
 use x86_64::addr::PhysAddr;
 
-use crate::logging::klog;
-
 use super::*;
 use super::impl_firstfit::MLFFAllocator;
+use crate::logging::klog;
 
 #[repr(transparent)]
 pub struct X64PageTable<const LEVEL: usize>(PageTable);
@@ -46,20 +45,6 @@ impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
         klog!(Debug, "memory.paging.map", "Mapping entry {:x}[{}] to {:x}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, physaddr);
         self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);
     }
-    
-    // cr3
-    unsafe fn activate(&self){
-        assert_eq!(LEVEL, 4, "Cannot activate a page table of this level!");
-        use core::ptr::addr_of;
-        use x86_64::addr::PhysAddr;
-        use x86_64::structures::paging::frame::PhysFrame;
-        use x86_64::registers::control::Cr3;
-        
-        let phys_addr = ptaddr_virt_to_phys(addr_of!(self.0) as usize);
-        let (_, cr3flags) = Cr3::read();
-        klog!(Info, "memory.paging", "Activating page addr=0x{:x} cr3flags={:?}", phys_addr, cr3flags);
-        Cr3::write(PhysFrame::from_start_address(PhysAddr::new(phys_addr.try_into().unwrap())).expect("Page Table Address Not Aligned!"), cr3flags)
-    }
 }
 
 type X64Level1 = MLFFAllocator<NoDeeper , X64PageTable<1>, false, true >;  // Page Table
@@ -72,7 +57,8 @@ type X64Level3 = MLFFAllocator<X64Level2, X64PageTable<3>, true , true>;  // Pag
 
 type X64Level4 = MLFFAllocator<X64Level3, X64PageTable<4>, true , false>;  // Page Map Level 4
 
-pub type TopLevelPageTable = X64Level4;
+pub(in super) type TopLevelPageAllocator = X64Level4;
+
 /* Discard the upper 16 bits of an address (for 48-bit vmem) */
 pub fn crop_addr(addr: usize) -> usize {
     addr & 0x0000_ffff_ffff_ffff
@@ -80,4 +66,14 @@ pub fn crop_addr(addr: usize) -> usize {
 /* Convert a virtual address to a physical address, for use with pointing the CPU to page tables. */
 pub fn ptaddr_virt_to_phys(vaddr: usize) -> usize {
     vaddr-crate::lowlevel::HIGHER_HALF_OFFSET // note: this will break if the area where the page table lives is not offset-mapped (or if the address has been cropped to hold all 0s for non-canonical bits)
+}
+
+pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
+    use x86_64::addr::PhysAddr;
+    use x86_64::structures::paging::frame::PhysFrame;
+    use x86_64::registers::control::Cr3;
+    
+    let (oldaddr, cr3flags) = Cr3::read();
+    klog!(Info, "memory.paging", "Switching active page table from 0x{:x} to 0x{:x}. (cr3flags={:?})", oldaddr.start_address(), phys_addr, cr3flags);
+    Cr3::write(PhysFrame::from_start_address(PhysAddr::new(phys_addr.try_into().unwrap())).expect("Page Table Address Not Aligned!"), cr3flags)
 }

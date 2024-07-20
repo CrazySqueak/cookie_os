@@ -39,21 +39,19 @@ pub fn _kinit() {
     // Testing: setup kernel heap
     unsafe {
         use alloc::boxed::Box;
-        use memory::paging::{PageFrameAllocator,TopLevelPageTable,IPageTable};
-        let mut pagetable = Box::new(TopLevelPageTable::new());
-        let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
+        use memory::paging::{TopLevelPageAllocator,PageFrameAllocator};
+        let pagetable = TopLevelPageAllocator::new();
         
-        let allocation = pagetable.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
-        let mut allocation_mut = allocation.modify(&mut *pagetable);
-        allocation_mut.set_base_addr(0);  // 0+HHOFF -> 0
+        {
+            let mut allocator = pagetable.write();
+            let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
+            let allocation = allocator.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
+            let mut allocation_mut = allocation.modify(&mut *allocator);  // TODO: use Weak or for loops instead of this jank
+            allocation_mut.set_base_addr(0);  // 0+HHOFF -> 0
+        }
         
-        // Note: this currently causes a triple-fault because some fucking idiot forgot to configure the page flags
-        
-        // Load into CR3
-        pagetable.get_page_table_mut().activate();
-        // Mem::forget the box so it doesn't get dropped while it's the active page!!!!!
-        // activate() is unsafe for a reason!!!!!!!!!! I WASTED AN ENTIRE AFTERNOON
-        core::mem::forget(pagetable);
+        // Activate
+        pagetable.activate();
     }
     
     // Grow kernel heap by 16+32MiB

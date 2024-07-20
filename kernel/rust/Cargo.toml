@@ -18,6 +18,10 @@ x86_64 = "0.15.1"
 pic8259 = "0.10.1"
 pc-keyboard = "0.7.0"
 
+[features]
+# Enables 1GiB Huge Pages on x86_64 systems. This is a relatively new feature and is not supported by all CPUs.
+1G_huge_pages = []
+
 [lib]
 crate-type = ["staticlib"]
 

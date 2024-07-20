@@ -28,7 +28,7 @@ $(ARCHBUILDDIR)/%.o: $(ARCHDIR)/%.intel.asm
 
 # Rust
 $(RUST_ARCHIVE): FORCE
-	cd $(RUST_DIR) && cargo build --target=target-$(ARCH).json $(CARGOFLAGS)
+	cd $(RUST_DIR) && cargo build --features $(KBUILDFEATURES) --target=target-$(ARCH).json $(CARGOFLAGS)
 
 .PHONY: clean
 clean:

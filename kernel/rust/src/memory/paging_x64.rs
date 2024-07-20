@@ -44,7 +44,12 @@ impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
 
 type X64Level1 = MLFFAllocator<NoDeeper , X64PageTable<1>, false, true >;  // Page Table
 type X64Level2 = MLFFAllocator<X64Level1, X64PageTable<2>, true , true >;  // Page Directory
+
+#[cfg(not(feature="1G_huge_pages"))]
 type X64Level3 = MLFFAllocator<X64Level2, X64PageTable<3>, true , false>;  // Page Directory Pointer Table
+#[cfg(feature="1G_huge_pages")]
+type X64Level3 = MLFFAllocator<X64Level2, X64PageTable<3>, true , true>;  // Page Directory Pointer Table
+
 type X64Level4 = MLFFAllocator<X64Level3, X64PageTable<4>, true , false>;  // Page Map Level 4
 
 pub type TopLevelPageTable = X64Level4;

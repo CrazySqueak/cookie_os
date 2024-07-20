@@ -53,8 +53,12 @@ pub trait IPageTable {
     }
 }
 
+#[derive(Debug)]
 pub struct PAllocEntry{index: usize, offset: usize}
+#[derive(Debug)]
 pub struct PAllocSubAlloc{index: usize, offset: usize, alloc: PageAllocation}
+/* NOTE: PageAllocation is equivalent to an index into an array. If you drop it without deallocating it, you will leak VMem (as well as actual memory keeping the page tables in RAM).*/
+#[derive(Debug)]
 pub struct PageAllocation {
     pagetableaddr: *const u8,
     entries: Vec<PAllocEntry>,  
@@ -67,4 +71,21 @@ impl PageAllocation {
             pagetableaddr, entries, suballocs,
         }
     }
+    
+    /* For some reason, PageAllocators are not stored in a multi-owner type such as Arc<>, so instead we have this jank to ensure
+        you have a mutable reference to the page table before you can edit the allocation's flags. */
+    pub fn modify<'a,'b,PFA,PT>(&'b self, allocator: &'a mut PFA) -> PageAllocationMut<'a,'b,PT>
+        where PFA: PageFrameAllocator<PageTableType=PT>, PT: IPageTable {
+        assert_eq!(self.pagetableaddr, allocator.get_page_table_ptr() as *const u8);
+        PageAllocationMut {
+            pagetable: allocator.get_page_table_mut(),
+            allocation: self,
+        }
+    }
+}
+// TODO: Implement Drop for PageAllocation if possible, scream if not
+#[derive(Debug)]
+pub struct PageAllocationMut<'a,'b, PT: IPageTable> {
+    pagetable: &'a mut PT,
+    allocation: &'b PageAllocation,
 }

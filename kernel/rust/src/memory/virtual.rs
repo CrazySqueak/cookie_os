@@ -13,6 +13,7 @@ pub trait PageFrameAllocator {
     const NPAGES: usize;
     const PAGE_SIZE: usize;
     type PageTableType: IPageTable;
+    type SubAllocType: PageFrameAllocator;
     
     /* Create a new, empty page frame allocator. */
     fn new() -> Self;
@@ -25,6 +26,8 @@ pub trait PageFrameAllocator {
     /* Get a mutable reference to this allocator's page table.
         (used for modifying the table post-allocation in a manner that is compatible with Rust's mutability rules) */
     fn get_page_table_mut(&mut self) -> &mut Self::PageTableType;
+    /* Get a mutable reference to the given sub-allocator, or None if unsupported/not present. */
+    fn get_suballocator_mut(&mut self, index: usize) -> Option<&mut Self::SubAllocType>;
     
     /* Attempt to allocate the requested amount of memory. */
     fn allocate(&mut self, size: usize) -> Option<PageAllocation>;
@@ -51,6 +54,9 @@ pub trait IPageTable {
     unsafe fn alloc_subtable_from_allocator<PFA: PageFrameAllocator>(&mut self, idx: usize, allocator: &PFA){
         self.alloc_subtable(idx, allocator.get_page_table_ptr() as *const u8)
     }
+    
+    /* Set the address for the given item (huge pages only, not subtables). */
+    unsafe fn set_addr(&mut self, idx: usize, physaddr: usize);
 }
 
 #[derive(Debug)]
@@ -74,18 +80,33 @@ impl PageAllocation {
     
     /* For some reason, PageAllocators are not stored in a multi-owner type such as Arc<>, so instead we have this jank to ensure
         you have a mutable reference to the page table before you can edit the allocation's flags. */
-    pub fn modify<'a,'b,PFA,PT>(&'b self, allocator: &'a mut PFA) -> PageAllocationMut<'a,'b,PT>
-        where PFA: PageFrameAllocator<PageTableType=PT>, PT: IPageTable {
+    pub fn modify<'a,'b,PFA>(&'b self, allocator: &'a mut PFA) -> PageAllocationMut<'a,'b,PFA>
+        where PFA: PageFrameAllocator {
         assert_eq!(self.pagetableaddr, allocator.get_page_table_ptr() as *const u8);
         PageAllocationMut {
-            pagetable: allocator.get_page_table_mut(),
+            allocator: allocator,
             allocation: self,
         }
     }
 }
-// TODO: Implement Drop for PageAllocation if possible, scream if not
 #[derive(Debug)]
-pub struct PageAllocationMut<'a,'b, PT: IPageTable> {
-    pagetable: &'a mut PT,
+pub struct PageAllocationMut<'a,'b, PFA: PageFrameAllocator> {
+    allocator: &'a mut PFA,
     allocation: &'b PageAllocation,
+}
+impl<PFA:PageFrameAllocator> PageAllocationMut<'_,'_,PFA> {
+    /* Set the base physical address for this allocation.
+        (this will then page to [baseaddr,baseaddr+size) */
+    pub unsafe fn set_base_addr(&mut self, baseaddr: usize){
+        let pagetable = self.allocator.get_page_table_mut();
+        for PAllocEntry{index, offset} in &self.allocation.entries {
+            pagetable.set_addr(*index, baseaddr+offset);
+        }
+        
+        for PAllocSubAlloc{index, offset, alloc} in &self.allocation.suballocs {
+            let allocator = self.allocator.get_suballocator_mut(*index).expect("Allocated allocator not found!");
+            let mut alloc_mut = alloc.modify(allocator);
+            alloc_mut.set_base_addr(baseaddr+offset);
+        }
+    }
 }

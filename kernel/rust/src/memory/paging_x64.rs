@@ -35,6 +35,11 @@ impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
         self.0[idx].set_addr(PhysAddr::new((ptr as usize) as u64), flags);
         // TODO
     }
+    
+    unsafe fn set_addr(&mut self, idx: usize, physaddr: usize){
+        let flags = self.0[idx].flags();
+        self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);
+    }
 }
 
 type X64_LEVEL_1 = MLFFAllocator<    ()     , X64PageTable<1>, false, true >;  // Page Table

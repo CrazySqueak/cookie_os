@@ -30,9 +30,9 @@ impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
         
         self.0[idx].set_addr(PhysAddr::new(0), flags); 
     }
-    unsafe fn alloc_subtable(&mut self, idx: usize, ptr: *const u8){
-        let flags = PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;  // set these two by default in case the page gets subdivided - these must be overridden if they should not be allowed
-        self.0[idx].set_addr(PhysAddr::new((ptr as usize) as u64), flags);
+    unsafe fn alloc_subtable(&mut self, idx: usize, phys_addr: usize){
+        let flags = PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;  // set these two by default in case the page gets subdivided
+        self.0[idx].set_addr(PhysAddr::new(phys_addr as u64), flags);
         // TODO
     }
     
@@ -42,7 +42,9 @@ impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
     }
 }
 
-type X64_LEVEL_1 = MLFFAllocator<    ()     , X64PageTable<1>, false, true >;  // Page Table
-type X64_LEVEL_2 = MLFFAllocator<X64_LEVEL_1, X64PageTable<2>, true , true >;  // Page Directory
-type X64_LEVEL_3 = MLFFAllocator<X64_LEVEL_2, X64PageTable<3>, true , false>;  // Page Directory Pointer Table
-type X64_LEVEL_4 = MLFFAllocator<X64_LEVEL_3, X64PageTable<4>, true , false>;  // Page Map Level 4
+type X64Level1 = MLFFAllocator<NoDeeper , X64PageTable<1>, false, true >;  // Page Table
+type X64Level2 = MLFFAllocator<X64Level1, X64PageTable<2>, true , true >;  // Page Directory
+type X64Level3 = MLFFAllocator<X64Level2, X64PageTable<3>, true , false>;  // Page Directory Pointer Table
+type X64Level4 = MLFFAllocator<X64Level3, X64PageTable<4>, true , false>;  // Page Map Level 4
+
+pub type TopLevelPageTable = X64Level4;

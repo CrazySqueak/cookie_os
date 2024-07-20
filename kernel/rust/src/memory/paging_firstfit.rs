@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 use super::*;
 
 // Multi-Level First-Fit
-pub struct MLFFAllocator<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> {
+pub struct MLFFAllocator<ST: PageFrameAllocator, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> {
     page_table: PT,
     
     suballocators: [Option<Box<ST>>; 512],  // TODO: NPAGES
@@ -21,10 +21,9 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
         } else {
             // Create new allocator
             let new_st = self.suballocators[idx].insert(Box::new(ST::new()));
-            // TODO: Add to page table
+            // Add to page table
             unsafe {
                 self.page_table.alloc_subtable_from_allocator(idx, &**new_st);
-                todo!();
             };
             // And return
             new_st

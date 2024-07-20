@@ -5,9 +5,13 @@ use crate::logging::klog;
 
 #[cfg_attr(target_arch = "x86_64", path = "paging_x64.rs")]
 mod arch;
+pub use arch::TopLevelPageTable;
 
 #[path = "paging_firstfit.rs"]
 mod impl_firstfit;
+#[path = "paging_nodeeper.rs"]
+mod impl_nodeeper;
+use impl_nodeeper::NoDeeper;
 
 pub trait PageFrameAllocator {
     const NPAGES: usize;
@@ -49,10 +53,10 @@ pub trait IPageTable {
     /* Allocate a full page, and ????? */
     unsafe fn alloc_huge(&mut self, idx: usize);
     /* Allocate a sub-page-table, and return ????? */
-    unsafe fn alloc_subtable(&mut self, idx: usize, ptr: *const u8);
+    unsafe fn alloc_subtable(&mut self, idx: usize, phys_addr: usize);
     
     unsafe fn alloc_subtable_from_allocator<PFA: PageFrameAllocator>(&mut self, idx: usize, allocator: &PFA){
-        self.alloc_subtable(idx, allocator.get_page_table_ptr() as *const u8)
+        self.alloc_subtable(idx, (allocator.get_page_table_ptr() as usize)-crate::lowlevel::HIGHER_HALF_OFFSET)  // note: this will break if the area where the page table lives is not offset-mapped
     }
     
     /* Set the address for the given item (huge pages only, not subtables). */

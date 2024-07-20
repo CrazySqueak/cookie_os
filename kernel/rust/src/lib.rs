@@ -36,6 +36,17 @@ pub fn _kinit() {
     // Initialise physical memory
     memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
     
+    // Testing: setup kernel heap
+    unsafe {
+        use memory::paging::{PageFrameAllocator,TopLevelPageTable};
+        let mut pagetable = TopLevelPageTable::new();
+        // TODO: Store somewhere
+        let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
+        let allocation = pagetable.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
+        allocation.modify(&mut pagetable).set_base_addr(0);  // 0+HHOFF -> 0
+        // TODO: Load into CR3
+    }
+    
     // Grow kernel heap by 16+32MiB
     //let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
     //let _ = memory::kernel_heap::grow_kheap(32*1024*1024);

@@ -62,11 +62,7 @@ pub(in crate) use klog;
 pub const fn configured_log_level(component: &[u8]) -> LogLevel {
     use LogLevel::*;
     match component {
-        
-        //b"memory.physical" => Info,
-        b"memory.physical.buddies" => Warning,
-        b"memory.physical.memmap" => Warning,
-        
+        b"memory.paging" => Debug,
         b"memory.kheap" => Debug,
         
         b"default" => Info,

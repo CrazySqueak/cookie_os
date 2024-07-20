@@ -5,7 +5,7 @@ use crate::logging::klog;
 
 #[cfg_attr(target_arch = "x86_64", path = "paging_x64.rs")]
 mod arch;
-pub use arch::TopLevelPageTable;
+pub use arch::{TopLevelPageTable,crop_addr};
 
 #[path = "paging_firstfit.rs"]
 mod impl_firstfit;

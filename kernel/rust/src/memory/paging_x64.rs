@@ -48,3 +48,7 @@ type X64Level3 = MLFFAllocator<X64Level2, X64PageTable<3>, true , false>;  // Pa
 type X64Level4 = MLFFAllocator<X64Level3, X64PageTable<4>, true , false>;  // Page Map Level 4
 
 pub type TopLevelPageTable = X64Level4;
+/* Discard the upper 16 bits of an address (for 48-bit vmem) */
+pub fn crop_addr(addr: usize) -> usize {
+    addr & 0x0000_ffff_ffff_ffff
+}

@@ -45,7 +45,7 @@ kstack_guard_page:  ; The guard page is an extra page which is never present, an
              ; thus ensuring that a stack overflow won't silently corrupt memory
     resb 4096  ; align on a P1 page boundrary
 kstack_bottom:
-    resb 65536
+    resb 0x10_0000 ; 1MiB - TODO: wait for someone at rust to actually implement the ability to initialise huge structures on the heap instead of the stack ;65536
 kstack_top:
 
 ; initial kernel heap

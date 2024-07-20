@@ -51,6 +51,9 @@ pub fn _kinit() {
         
         // Load into CR3
         pagetable.get_page_table_mut().activate();
+        // Mem::forget the box so it doesn't get dropped while it's the active page!!!!!
+        // activate() is unsafe for a reason!!!!!!!!!! I WASTED AN ENTIRE AFTERNOON
+        core::mem::forget(pagetable);
     }
     
     // Grow kernel heap by 16+32MiB

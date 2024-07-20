@@ -24,10 +24,10 @@ long_mode_start:
     add rax, rcx
     mov [rdx], rax
     
-    ; un-map lower half of virtual memory (testing)
-    extern p4_table
-    mov rdx, p4_table
-    mov qword [rdx], 0
+    ;; un-map lower half of virtual memory (testing)
+    ;extern p4_table
+    ;mov rdx, p4_table
+    ;mov qword [rdx], 0
     
     ; Hand control over to rust
     extern _kmain

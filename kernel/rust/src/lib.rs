@@ -38,13 +38,19 @@ pub fn _kinit() {
     
     // Testing: setup kernel heap
     unsafe {
-        use memory::paging::{PageFrameAllocator,TopLevelPageTable};
-        let mut pagetable = TopLevelPageTable::new();
-        // TODO: Store somewhere
+        use alloc::boxed::Box;
+        use memory::paging::{PageFrameAllocator,TopLevelPageTable,IPageTable};
+        let mut pagetable = Box::new(TopLevelPageTable::new());
         let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
+        
         let allocation = pagetable.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
-        allocation.modify(&mut pagetable).set_base_addr(0);  // 0+HHOFF -> 0
-        // TODO: Load into CR3
+        let mut allocation_mut = allocation.modify(&mut *pagetable);
+        allocation_mut.set_base_addr(0);  // 0+HHOFF -> 0
+        
+        // Note: this currently causes a triple-fault because some fucking idiot forgot to configure the page flags
+        
+        // Load into CR3
+        pagetable.get_page_table_mut().activate();
     }
     
     // Grow kernel heap by 16+32MiB

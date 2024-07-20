@@ -3,7 +3,7 @@ export LD := x86_64-elf-ld
 export NASM := nasm -f elf64
 export QEMU := qemu-system-x86_64
 
-export KBUILDFEATURES := 1G_huge_pages
+export KBUILDFEATURES := 
 
 export BUILDNAME := $(ARCH)
 

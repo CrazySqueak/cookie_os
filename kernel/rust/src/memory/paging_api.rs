@@ -77,7 +77,49 @@ impl TopLevelPageAllocator {
 }
 
 pub struct TLPageAllocatorWriteGuard<'a>(RwLockWriteGuard<'a, BaseTLPageAllocator>);
-// TODO
+
+macro_rules! ppa_define_foreach {
+    // Note: body takes four variables from the outside: allocator, ptable, index, and offset (as well as any other args they specify).
+    ($($fkw:ident)*: $fnname: ident, $pfaname:ident:&mut PFA, $allocname:ident:&PPA, $ptname:ident:&mut IPT, $idxname:ident:usize, $offname:ident:usize, $($argname:ident:$argtype:ty),*, $body:block) => {
+        $($fkw)* fn $fnname($pfaname: &mut impl PageFrameAllocator, $allocname: &PartialPageAllocation, $($argname:$argtype),*){
+            // entries
+            let $ptname = $pfaname.get_page_table_mut();
+            for &PAllocEntry{index:$idxname, offset:$offname} in &$allocname.entries {
+                $body;
+            }
+            // sub-allocators
+            for PAllocSubAlloc{index, offset, alloc: suballocation} in &$allocname.suballocs {
+                let suballocator = $pfaname.get_suballocator_mut(*index).expect("Allocation expected sub-allocator but none was found!");
+                Self::$fnname(suballocator,suballocation, $($argname),*);  // TODO: offset?
+            }
+        }
+    }
+}
+impl TLPageAllocatorWriteGuard<'_> {
+    //fn _set_addr_inner<PFA: PageFrameAllocator>(allocator: &mut PFA, allocation: &PartialPageAllocation, base_addr: usize){
+    //    // entries
+    //    let ptable = allocator.get_page_table_mut();
+    //    for PAllocEntry{index, offset} in &allocation.entries {
+    //        ptable.set_addr(index, base_addr+offset);
+    //    }
+    //    // sub-allocators
+    //    for PAllocSubAlloc{index, offset, alloc} in &allocation.suballocs {
+    //    }
+    //}
+    ppa_define_foreach!(unsafe: _set_addr_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, base_addr: usize, {
+        ptable.set_addr(index, base_addr+offset);
+    });
+    
+    // TODO: move this to a proper place somewhere or something?
+    // it doesn't really belong here...
+    pub fn set_allocation_addr(&mut self, allocation: &PartialPageAllocation, base_addr: usize){
+        // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
+        // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.
+        unsafe {
+            Self::_set_addr_inner(&mut*self.0, allocation, base_addr);
+        }
+    }
+}
 
 // the currently active page table
 static _ACTIVE_PAGE_TABLE: Mutex<Option<TopLevelPageAllocator>> = Mutex::new(None);

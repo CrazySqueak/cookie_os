@@ -41,9 +41,9 @@ impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
     
     // modification
     unsafe fn set_addr(&mut self, idx: usize, physaddr: usize){
-        let flags = self.0[idx].flags() | PageTableFlags::PRESENT | PageTableFlags::WRITABLE;  // set PRESENT flag by default (i mean, where else is the page gonna be if you're setting it to physical memory?) TODO: also add a way to configure flags or something. the whole "allocation.set_x" system is very messy currently
+        let flags = self.0[idx].flags() | PageTableFlags::PRESENT;  // Set present flag
         klog!(Debug, "memory.paging.map", "Mapping entry {:x}[{}] to {:x}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, physaddr);
-        self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);
+        self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);  // set addr
     }
 }
 

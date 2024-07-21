@@ -39,16 +39,15 @@ pub fn _kinit() {
     // Testing: setup kernel heap
     unsafe {
         use alloc::boxed::Box;
-        use memory::paging::{TopLevelPageAllocator,PageFrameAllocator};
+        use memory::paging::{TopLevelPageAllocator};
         let pagetable = TopLevelPageAllocator::new();
         
         {
-            let mut allocator = pagetable.write();
-            let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
-            let allocation = allocator.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
-            let mut allocation_mut = allocation.modify(&mut *allocator);  // TODO: use Weak or for loops instead of this jank
-            allocation_mut.set_base_addr(0);  // 0+HHOFF -> 0
-            pagetable.try_write().expect("Cannot write!");
+            //let mut allocator = pagetable.write();
+            //let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
+            //let allocation = allocator.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
+            //let mut allocation_mut = allocation.modify(&mut *allocator);  // TODO: use Weak or for loops instead of this jank
+            //allocation_mut.set_base_addr(0);  // 0+HHOFF -> 0
         }
         
         // Activate

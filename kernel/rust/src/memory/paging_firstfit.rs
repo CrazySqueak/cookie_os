@@ -6,7 +6,7 @@ use crate::logging::klog;
 use super::*;
 
 // Multi-Level First-Fit
-pub struct MLFFAllocator<ST: PageFrameAllocator, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> {
+pub(in super) struct MLFFAllocator<ST: PageFrameAllocator, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> {
     page_table: PT,
     
     suballocators: [Option<Box<ST>>; 512],  // TODO: NPAGES
@@ -92,7 +92,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
         };
         (huge_alloc, subtable_alloc)
     }
-    fn _alloc_rem(&mut self, idx: usize, inner_offset: usize, size: usize) -> Option<PageAllocation> {
+    fn _alloc_rem(&mut self, idx: usize, inner_offset: usize, size: usize) -> Option<PartialPageAllocation> {
         assert!(SUBTABLES);
         let required_availability: u8 = if size >= Self::NPAGES/2 { 0b01u8 } else { 0b10u8 };  // Only test half-full ones if our remainder is small enough
         if idx < Self::NPAGES && self.get_availability(idx) <= required_availability {
@@ -105,7 +105,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
         None
     }
     
-    fn _build_allocation(&self, contig_result: (Vec<PAllocEntry>, Vec<PAllocSubAlloc>), rem_result: Option<(PAllocSubAlloc,usize)>) -> PageAllocation {
+    fn _build_allocation(&self, contig_result: (Vec<PAllocEntry>, Vec<PAllocSubAlloc>), rem_result: Option<(PAllocSubAlloc,usize)>) -> PartialPageAllocation {
         let (mut huge_allocs, mut sub_allocs) = contig_result;
         
         // Offset if needed (and add remainder to sub allocs)
@@ -122,7 +122,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
             sub_allocs.push(rem_alloc);
         }
         
-        PageAllocation::new(self.get_page_table_ptr() as *const u8, huge_allocs, sub_allocs)
+        PartialPageAllocation::new(huge_allocs, sub_allocs)
     }
 }
 impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrameAllocator for MLFFAllocator<ST,PT,SUBTABLES,HUGEPAGES>
@@ -155,7 +155,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         self.suballocators[index].as_deref_mut()
     }
     
-    fn allocate(&mut self, size: usize) -> Option<PageAllocation> {
+    fn allocate(&mut self, size: usize) -> Option<PartialPageAllocation> {
         // We only support a non-page-sized remainder if we support sub-tables (as page frames cannot be divided)
         let pages = if SUBTABLES { size / Self::PAGE_SIZE } else { size.div_ceil(Self::PAGE_SIZE) };
         let remainder = if SUBTABLES { size % Self::PAGE_SIZE } else { 0 };
@@ -199,7 +199,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         None
     }
     
-    fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PageAllocation> {
+    fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PartialPageAllocation> {
         let addr = crop_addr(addr);  // discard upper bits so that index is correct
         // We can't have remainders less than PAGE_SIZE if we don't support subtables, so we round down and add to the size to make up the difference.
         let start_idx = addr / Self::PAGE_SIZE;

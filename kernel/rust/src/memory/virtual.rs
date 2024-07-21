@@ -17,7 +17,7 @@ use impl_nodeeper::NoDeeper;
 mod api;
 pub use api::*;
 
-pub trait PageFrameAllocator {
+pub(in self) trait PageFrameAllocator {
     const NPAGES: usize;
     const PAGE_SIZE: usize;
     type PageTableType: IPageTable;
@@ -38,12 +38,12 @@ pub trait PageFrameAllocator {
     fn get_suballocator_mut(&mut self, index: usize) -> Option<&mut Self::SubAllocType>;
     
     /* Attempt to allocate the requested amount of memory. */
-    fn allocate(&mut self, size: usize) -> Option<PageAllocation>;
+    fn allocate(&mut self, size: usize) -> Option<PartialPageAllocation>;
     /* Allocate the requested amount of memory at the given virtual memory address (relative to the start of this table's jurisdiction). */
-    fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PageAllocation>;
+    fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PartialPageAllocation>;
 }
 
-pub trait IPageTable {
+pub(in self) trait IPageTable {
     const NPAGES: usize;
     
     /* Creates a new, empty page table. */ 
@@ -67,54 +67,18 @@ pub trait IPageTable {
     unsafe fn set_addr(&mut self, idx: usize, physaddr: usize);
 }
 
-#[derive(Debug)]
 struct PAllocEntry{index: usize, offset: usize}
-#[derive(Debug)]
-struct PAllocSubAlloc{index: usize, offset: usize, alloc: PageAllocation}
-/* NOTE: PageAllocation is equivalent to an index into an array. If you drop it without deallocating it, you will leak VMem (as well as actual memory keeping the page tables in RAM).*/
-#[derive(Debug)]
-pub struct PageAllocation {
-    pagetableaddr: *const u8,
+struct PAllocSubAlloc{index: usize, offset: usize, alloc: PartialPageAllocation}
+// PartialPageAllocation stores the indicies and offsets of page allocations internally while allocation is being done
+struct PartialPageAllocation {
     entries: Vec<PAllocEntry>,  
     suballocs: Vec<PAllocSubAlloc>,  
     // (offset is the offset for the start of the frame/subpage in physmem, measured from the base physmem address)
 }
-impl PageAllocation {
-    fn new(pagetableaddr: *const u8, entries: Vec<PAllocEntry>, suballocs: Vec<PAllocSubAlloc>) -> Self {
+impl PartialPageAllocation {
+    fn new(entries: Vec<PAllocEntry>, suballocs: Vec<PAllocSubAlloc>) -> Self {
         Self {
-            pagetableaddr, entries, suballocs,
-        }
-    }
-    
-    /* For some reason, PageAllocators are not stored in a multi-owner type such as Arc<>, so instead we have this jank to ensure
-        you have a mutable reference to the page table before you can edit the allocation's flags. */
-    pub fn modify<'a,'b,PFA>(&'b self, allocator: &'a mut PFA) -> PageAllocationMut<'a,'b,PFA>
-        where PFA: PageFrameAllocator {
-        assert_eq!(self.pagetableaddr, allocator.get_page_table_ptr() as *const u8);
-        PageAllocationMut {
-            allocator: allocator,
-            allocation: self,
-        }
-    }
-}
-#[derive(Debug)]
-pub struct PageAllocationMut<'a,'b, PFA: PageFrameAllocator> {
-    allocator: &'a mut PFA,
-    allocation: &'b PageAllocation,
-}
-impl<PFA:PageFrameAllocator> PageAllocationMut<'_,'_,PFA> {
-    /* Set the base physical address for this allocation.
-        (this will then page to [baseaddr,baseaddr+size) */
-    pub unsafe fn set_base_addr(&mut self, baseaddr: usize){
-        let pagetable = self.allocator.get_page_table_mut();
-        for PAllocEntry{index, offset} in &self.allocation.entries {
-            pagetable.set_addr(*index, baseaddr+offset);
-        }
-        
-        for PAllocSubAlloc{index, offset, alloc} in &self.allocation.suballocs {
-            let allocator = self.allocator.get_suballocator_mut(*index).expect("Allocated allocator not found!");
-            let mut alloc_mut = alloc.modify(allocator);
-            alloc_mut.set_base_addr(baseaddr+offset);
+            entries, suballocs,
         }
     }
 }

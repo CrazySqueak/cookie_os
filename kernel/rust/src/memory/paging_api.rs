@@ -1,6 +1,6 @@
 
 use alloc::sync::Arc;
-use spin::rwlock::{RwLock,RwLockReadGuard};
+use spin::rwlock::{RwLock,RwLockReadGuard,RwLockWriteGuard};
 use spin::Mutex;
 
 use super::*;
@@ -11,7 +11,7 @@ use arch::set_active_page_table;
 // Note: Flags follow a "union" pattern
 // in other words: the combination of all flags should be the most permissive/compatible option
 bitflags::bitflags! {
-    pub struct PageFlags: usize {
+    pub struct PageFlags: u16 {
         // User can access this page
         const USER_ALLOWED = 1<<0;
         // User can write to this page (requires USER_ALLOWED)
@@ -35,8 +35,19 @@ impl TopLevelPageAllocator {
         Self(Arc::clone(&x.0))
     }
     
+    pub fn write(&self) -> TLPageAllocatorWriteGuard {
+        TLPageAllocatorWriteGuard(self.0.write())
+    }
+    pub fn try_write(&self) -> Option<TLPageAllocatorWriteGuard> {
+        match self.0.try_write() {
+            Some(guard) => Some(TLPageAllocatorWriteGuard(guard)),
+            None => None,
+        }
+    }
+    
     /* Activate this page table. Once active, this page table will be used to map virtual addresses to physical ones.
         Use of Arc ensures that the page table will not be dropped if it is still active.
+        DEADLOCK: If you have a write guard active in the current thread, this *WILL* deadlock.
         DANGER: You MUST follow the proper rules unless you want your program to CRASH UNEXPECTEDLY! This is serious shit!
          * The kernel stack should be at the same virtual memory address in both the old and new tables. It cannot simply be moved to a different one.
          * All heap objects and objects pointed to by pointers should be at the same virtual memory address in both the old and new tables. Any pointers or objects that are not at the same VMem address will cause Undefined Behaviour if accessed (unless the old page table is restored).
@@ -64,13 +75,9 @@ impl TopLevelPageAllocator {
         }}
     }
 }
-impl core::ops::Deref for TopLevelPageAllocator {
-    type Target = ArcBaseAllocator;
-    
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
+
+pub struct TLPageAllocatorWriteGuard<'a>(RwLockWriteGuard<'a, BaseTLPageAllocator>);
+// TODO
 
 // the currently active page table
 static _ACTIVE_PAGE_TABLE: Mutex<Option<TopLevelPageAllocator>> = Mutex::new(None);

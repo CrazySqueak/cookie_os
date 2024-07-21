@@ -44,13 +44,24 @@ impl TopLevelPageAllocator {
          The easiest way to achieve the above three points is to map the kernel to the same position in every page table. This is why the kernel lives in the higher half - it should never be necessary to change its location in virtual memory.
          */
     pub unsafe fn activate(&self){
+        // Leak read guard (as the TLB will cache the page table as needed, thus meaning it should not be modified without careful consideration)
+        let allocator = RwLockReadGuard::leak(self.0.read());
+        
         // activate table
-        let allocator = self.0.read();
         let table_addr = ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize);
         set_active_page_table(table_addr);
         
         // store reference
-        let _ = _ACTIVE_PAGE_TABLE.lock().insert(Self::clone_ref(&self));
+        let oldpt = _ACTIVE_PAGE_TABLE.lock().replace(Self::clone_ref(&self));
+        
+        // Decrement reader count on old page table (if applicable)
+        // Safety: Since the previous page table was activated using this function,
+        //         which leaks a read guard, we can be sure that decrementing the
+        //         counter here will be defined, working as if the guard had been dropped.
+        // (N.B. we can't simply store the guard due to borrow checker limitations + programmer laziness)
+        if let Some(old_table) = oldpt { unsafe {
+            old_table.0.force_read_decrement();
+        }}
     }
 }
 impl core::ops::Deref for TopLevelPageAllocator {

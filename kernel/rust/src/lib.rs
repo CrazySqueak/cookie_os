@@ -48,6 +48,7 @@ pub fn _kinit() {
             let allocation = allocator.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
             let mut allocation_mut = allocation.modify(&mut *allocator);  // TODO: use Weak or for loops instead of this jank
             allocation_mut.set_base_addr(0);  // 0+HHOFF -> 0
+            pagetable.try_write().expect("Cannot write!");
         }
         
         // Activate

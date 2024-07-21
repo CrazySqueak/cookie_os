@@ -8,6 +8,21 @@ use super::*;
 type BaseTLPageAllocator = arch::TopLevelPageAllocator;
 use arch::set_active_page_table;
 
+// Note: Flags follow a "union" pattern
+// in other words: the combination of all flags should be the most permissive/compatible option
+bitflags::bitflags! {
+    pub struct PageFlags: usize {
+        // User can access this page
+        const USER_ALLOWED = 1<<0;
+        // User can write to this page (requires USER_ALLOWED)
+        const WRITEABLE = 1<<1;
+        // Execution is allowed
+        const EXECUTABLE = 1<<2;
+        // This page is not present in all page tables, and so should be invalidated when CR3 is updated
+        const TLB_NON_GLOBAL = 1<<3;
+    }
+}
+
 type LockedBaseAllocator = RwLock<BaseTLPageAllocator>;
 type ArcBaseAllocator = Arc<LockedBaseAllocator>;
 pub struct TopLevelPageAllocator(ArcBaseAllocator);

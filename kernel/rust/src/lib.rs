@@ -48,7 +48,7 @@ pub fn _kinit() {
             
             // Null guard
             let nullguard = allocator.allocate_at(0, 1).expect("VMem Allocation Failed!");
-            allocator.set_absent(&nullguard, 0x4E554C);  // "NUL"
+            allocator.set_absent(&nullguard, 0x4E554C_505452);  // "NULPTR"
             
             // From start -> stack guard
             let alloc1 = allocator.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");

@@ -46,9 +46,9 @@ impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
         self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);  // set addr
     }
     unsafe fn set_absent(&mut self, idx: usize, data: usize){
-        let flags = self.0[idx].flags() &!PageTableFlags::PRESENT;  // Clear present flag
+        let data = data.checked_shl(1).expect("Data value is out-of-bounds!") &!1;  // clear the "present" flag
         klog!(Debug, "memory.paging.map", "Mapping entry {:x}[{}] to NULL", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx);
-        self.0[idx].set_addr(PhysAddr::new((data as u64)<<12), flags);  // set addr
+        *((&mut self.0[idx] as *mut PageTableEntry) as *mut u64) = data as u64;  // Update entry manually
     }
 }
 

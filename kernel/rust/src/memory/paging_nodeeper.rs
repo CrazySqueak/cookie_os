@@ -30,4 +30,5 @@ impl IPageTable for NoDeeper {
     unsafe fn alloc_huge(&mut self, idx: usize) { nope!(); }
     unsafe fn alloc_subtable(&mut self, idx: usize, phys_addr: usize) { nope!(); }
     unsafe fn set_addr(&mut self, idx: usize, physaddr: usize) { nope!(); }
+    unsafe fn set_absent(&mut self, idx: usize, data: usize) { nope!(); }
 }

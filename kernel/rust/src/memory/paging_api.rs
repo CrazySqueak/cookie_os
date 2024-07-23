@@ -136,6 +136,19 @@ impl TLPageAllocatorWriteGuard<'_> {
             Self::_set_addr_inner(self.get_page_table(), allocation.into(), base_addr);
         }
     }
+    
+    ppa_define_foreach!(unsafe: _set_missing_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, data: usize, {
+        ptable.set_absent(index, data);
+    });
+    /* Set the given allocation as absent (not in physical memory). */
+    pub fn set_absent(&mut self, allocation: &PageAllocation, data: usize){
+        // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
+        // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.
+        allocation.assert_pt_tag(self);
+        unsafe {
+            Self::_set_missing_inner(self.get_page_table(), allocation.into(), data);
+        }
+    }
 }
 
 // the currently active page table

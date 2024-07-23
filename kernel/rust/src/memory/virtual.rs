@@ -65,6 +65,8 @@ pub(in self) trait IPageTable {
     
     /* Set the address for the given item (huge pages only, not subtables). */
     unsafe fn set_addr(&mut self, idx: usize, physaddr: usize);
+    /* Set the given item as absent, and clear its present flag. */
+    unsafe fn set_absent(&mut self, idx: usize, data: usize);
 }
 
 struct PAllocEntry{index: usize, offset: usize}

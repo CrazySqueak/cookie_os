@@ -45,6 +45,11 @@ impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
         klog!(Debug, "memory.paging.map", "Mapping entry {:x}[{}] to {:x}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, physaddr);
         self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);  // set addr
     }
+    unsafe fn set_absent(&mut self, idx: usize, data: usize){
+        let flags = self.0[idx].flags() &!PageTableFlags::PRESENT;  // Clear present flag
+        klog!(Debug, "memory.paging.map", "Mapping entry {:x}[{}] to NULL", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx);
+        self.0[idx].set_addr(PhysAddr::new((data as u64)<<12), flags);  // set addr
+    }
 }
 
 type X64Level1 = MLFFAllocator<NoDeeper , X64PageTable<1>, false, true >;  // Page Table

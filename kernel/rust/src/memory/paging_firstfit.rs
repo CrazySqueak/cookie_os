@@ -159,7 +159,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         // We only support a non-page-sized remainder if we support sub-tables (as page frames cannot be divided)
         let pages = if SUBTABLES { size / Self::PAGE_SIZE } else { size.div_ceil(Self::PAGE_SIZE) };
         let remainder = if SUBTABLES { size % Self::PAGE_SIZE } else { 0 };
-        klog!(Debug, "memory.paging.allocator.mlff", "addr=ANY pages={} rem={} search=[0,{})", pages, remainder, Self::NPAGES-pages+1);
+        klog!(Debug, "memory.paging.allocator.mlff", "allocate: addr=ANY pages={} rem={} search=[0,{})", pages, remainder, Self::NPAGES-pages+1);
         
         // TODO: Replace with something that's not effectively O(n^2)
         for offset in 0..(Self::NPAGES-pages+1) {
@@ -208,7 +208,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         let remainder = if SUBTABLES { size % Self::PAGE_SIZE } else { 0 };
         let end = start_idx+pages;
         
-        klog!(Debug, "memory.paging.allocator.mlff", "addr=0x{:x} page_size=0x{:x} start={} pages={} rem={}", addr, Self::PAGE_SIZE, start_idx, pages, remainder);
+        klog!(Debug, "memory.paging.allocator.mlff", "allocate_at: offset=0x{:x} page_size=0x{:x} start={} pages={} rem={}", addr, Self::PAGE_SIZE, start_idx, pages, remainder);
         
         // Check that the main area is clear
         for i in start_idx..end {

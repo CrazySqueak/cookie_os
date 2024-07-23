@@ -106,20 +106,64 @@ impl TLPageAllocatorWriteGuard<'_> {
     //    for PAllocSubAlloc{index, offset, alloc} in &allocation.suballocs {
     //    }
     //}
+    fn get_page_table(&mut self) -> &mut BaseTLPageAllocator {
+        &mut*self.0
+    }
+    
+    // Allocating
+    pub fn allocate(&mut self, size: usize) -> Option<PageAllocation> {
+        let allocator = self.get_page_table();
+        let allocation = allocator.allocate(size)?;
+        Some(PageAllocation::new(self, allocation))
+    }
+    pub fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PageAllocation> {
+        let allocator = self.get_page_table();
+        let allocation = allocator.allocate_at(addr, size)?;
+        Some(PageAllocation::new(self, allocation))
+    }
+    
+    // Managing allocations
     ppa_define_foreach!(unsafe: _set_addr_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, base_addr: usize, {
         ptable.set_addr(index, base_addr+offset);
     });
     
-    // TODO: move this to a proper place somewhere or something?
-    // it doesn't really belong here...
-    pub fn set_allocation_addr(&mut self, allocation: &PartialPageAllocation, base_addr: usize){
+    /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */
+    pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize){
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
         // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.
+        allocation.assert_pt_tag(self);
         unsafe {
-            Self::_set_addr_inner(&mut*self.0, allocation, base_addr);
+            Self::_set_addr_inner(self.get_page_table(), allocation.into(), base_addr);
         }
     }
 }
 
 // the currently active page table
 static _ACTIVE_PAGE_TABLE: Mutex<Option<TopLevelPageAllocator>> = Mutex::new(None);
+
+// = ALLOCATIONS =
+// Note: Allocations must be allocated/deallocated manually
+// and do not hold a reference to the allocator
+// they are more akin to indices
+pub struct PageAllocation {
+    // Pagetable tag is used to check that the correct page table is used or something?
+    pagetable_tag: *const u8,
+    allocation: PartialPageAllocation,
+}
+impl PageAllocation {
+    pub(super) fn new(allocator: &mut TLPageAllocatorWriteGuard<'_>, allocation: PartialPageAllocation) -> Self {
+        Self {
+            pagetable_tag: allocator.get_page_table().get_page_table_ptr() as *const u8,
+            allocation: allocation,
+        }
+    }
+    
+    fn assert_pt_tag(&self, allocator: &mut TLPageAllocatorWriteGuard<'_>){
+        assert!(allocator.get_page_table().get_page_table_ptr() as *const u8 == self.pagetable_tag, "Allocation used with incorrect allocator!");
+    }
+}
+impl<'a> From<&'a PageAllocation> for &'a PartialPageAllocation {
+    fn from(value: &'a PageAllocation) -> Self {
+        &value.allocation
+    }
+}

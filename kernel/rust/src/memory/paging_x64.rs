@@ -33,7 +33,7 @@ impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
         self.0[idx].set_addr(PhysAddr::new(0), flags); 
     }
     unsafe fn alloc_subtable(&mut self, idx: usize, phys_addr: usize){
-        let flags = PageTableFlags::WRITABLE | PageTableFlags::PRESENT;  // set these two by default in case the page gets subdivided, and also set PRESENT because the page table is literally right fucking there
+        let flags = PageTableFlags::PRESENT;
         klog!(Debug, "memory.paging.map", "Mapping sub-table {:x}[{}] -> {:x}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, phys_addr);
         self.0[idx].set_addr(PhysAddr::new(phys_addr as u64), flags);
         // TODO

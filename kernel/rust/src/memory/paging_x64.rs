@@ -7,8 +7,8 @@ use super::impl_firstfit::MLFFAllocator;
 use crate::logging::klog;
 
 #[repr(transparent)]
-pub(in super) struct X64PageTable<const LEVEL: usize>(PageTable);
-impl<const LEVEL: usize> IPageTable for X64PageTable<LEVEL> {
+pub struct X64PageTable<const LEVEL: usize>(PageTable);
+impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
     const NPAGES: usize = 512;
     
     fn new() -> Self {

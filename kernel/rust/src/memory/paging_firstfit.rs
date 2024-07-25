@@ -6,7 +6,7 @@ use crate::logging::klog;
 use super::*;
 
 // Multi-Level First-Fit
-pub(in super) struct MLFFAllocator<ST: PageFrameAllocator, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> {
+pub struct MLFFAllocator<ST: PageFrameAllocator, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> {
     page_table: PT,
     
     suballocators: [Option<Box<ST>>; 512],  // TODO: NPAGES
@@ -125,7 +125,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
         PartialPageAllocation::new(huge_allocs, sub_allocs)
     }
 }
-impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrameAllocator for MLFFAllocator<ST,PT,SUBTABLES,HUGEPAGES>
+impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrameAllocatorImpl for MLFFAllocator<ST,PT,SUBTABLES,HUGEPAGES>
   where ST: PageFrameAllocator {
     const NPAGES: usize = PT::NPAGES;
     const PAGE_SIZE: usize = if SUBTABLES { ST::PAGE_SIZE * ST::NPAGES } else { 4096 };

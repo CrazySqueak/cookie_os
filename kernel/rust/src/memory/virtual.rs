@@ -17,7 +17,7 @@ use impl_nodeeper::NoDeeper;
 mod api;
 pub use api::*;
 
-pub(in self) trait PageFrameAllocator {
+pub(in self) trait PageFrameAllocatorImpl {
     const NPAGES: usize;
     const PAGE_SIZE: usize;
     type PageTableType: IPageTable;
@@ -42,8 +42,12 @@ pub(in self) trait PageFrameAllocator {
     /* Allocate the requested amount of memory at the given virtual memory address (relative to the start of this table's jurisdiction). */
     fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PartialPageAllocation>;
 }
+#[allow(private_bounds)]
+pub trait PageFrameAllocator: PageFrameAllocatorImpl {}
+#[allow(private_bounds)]
+impl<T: PageFrameAllocatorImpl> PageFrameAllocator for T {}
 
-pub(in self) trait IPageTable {
+pub(in self) trait IPageTableImpl {
     const NPAGES: usize;
     
     /* Creates a new, empty page table. */ 
@@ -68,6 +72,10 @@ pub(in self) trait IPageTable {
     /* Set the given item as absent, and clear its present flag. */
     unsafe fn set_absent(&mut self, idx: usize, data: usize);
 }
+#[allow(private_bounds)]
+pub trait IPageTable: IPageTableImpl {}
+#[allow(private_bounds)]
+impl<T: IPageTableImpl> IPageTable for T {}
 
 struct PAllocEntry{index: usize, offset: usize}
 struct PAllocSubAlloc{index: usize, offset: usize, alloc: PartialPageAllocation}

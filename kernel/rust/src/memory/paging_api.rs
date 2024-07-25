@@ -23,28 +23,28 @@ bitflags::bitflags! {
     }
 }
 
-type LockedBaseAllocator = RwLock<BaseTLPageAllocator>;
-type ArcBaseAllocator = Arc<LockedBaseAllocator>;
-pub struct TopLevelPageAllocator(ArcBaseAllocator);
-impl TopLevelPageAllocator {
+pub struct LockedPageAllocator<PFA: PageFrameAllocator>(Arc<RwLock<PFA>>);
+pub type TopLevelPageAllocator = LockedPageAllocator<BaseTLPageAllocator>;
+impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     pub fn new() -> Self {
-        Self(Arc::new(RwLock::new(BaseTLPageAllocator::new())))
+        Self(Arc::new(RwLock::new(PFA::new())))
     }
     /* Create another reference to this top-level page table. */
     pub fn clone_ref(x: &Self) -> Self {
         Self(Arc::clone(&x.0))
     }
     
-    pub fn write(&self) -> TLPageAllocatorWriteGuard {
-        TLPageAllocatorWriteGuard(self.0.write())
+    pub fn write(&self) -> LockedPageAllocatorWriteGuard<PFA> {
+        LockedPageAllocatorWriteGuard(self.0.write())
     }
-    pub fn try_write(&self) -> Option<TLPageAllocatorWriteGuard> {
+    pub fn try_write(&self) -> Option<LockedPageAllocatorWriteGuard<PFA>> {
         match self.0.try_write() {
-            Some(guard) => Some(TLPageAllocatorWriteGuard(guard)),
+            Some(guard) => Some(LockedPageAllocatorWriteGuard(guard)),
             None => None,
         }
     }
-    
+}
+impl LockedPageAllocator<BaseTLPageAllocator> {
     /* Activate this page table. Once active, this page table will be used to map virtual addresses to physical ones.
         Use of Arc ensures that the page table will not be dropped if it is still active.
         DEADLOCK: If you have a write guard active in the current thread, this *WILL* deadlock.
@@ -76,7 +76,8 @@ impl TopLevelPageAllocator {
     }
 }
 
-pub struct TLPageAllocatorWriteGuard<'a>(RwLockWriteGuard<'a, BaseTLPageAllocator>);
+pub struct LockedPageAllocatorWriteGuard<'a, PFA: PageFrameAllocator>(RwLockWriteGuard<'a, PFA>);
+pub type TLPageAllocatorWriteGuard<'a> = LockedPageAllocatorWriteGuard<'a, BaseTLPageAllocator>;
 
 macro_rules! ppa_define_foreach {
     // Note: body takes four variables from the outside: allocator, ptable, index, and offset (as well as any other args they specify).
@@ -95,18 +96,8 @@ macro_rules! ppa_define_foreach {
         }
     }
 }
-impl TLPageAllocatorWriteGuard<'_> {
-    //fn _set_addr_inner<PFA: PageFrameAllocator>(allocator: &mut PFA, allocation: &PartialPageAllocation, base_addr: usize){
-    //    // entries
-    //    let ptable = allocator.get_page_table_mut();
-    //    for PAllocEntry{index, offset} in &allocation.entries {
-    //        ptable.set_addr(index, base_addr+offset);
-    //    }
-    //    // sub-allocators
-    //    for PAllocSubAlloc{index, offset, alloc} in &allocation.suballocs {
-    //    }
-    //}
-    fn get_page_table(&mut self) -> &mut BaseTLPageAllocator {
+impl<PFA: PageFrameAllocator> LockedPageAllocatorWriteGuard<'_, PFA> {
+    fn get_page_table(&mut self) -> &mut PFA {
         &mut*self.0
     }
     
@@ -164,14 +155,14 @@ pub struct PageAllocation {
     allocation: PartialPageAllocation,
 }
 impl PageAllocation {
-    pub(super) fn new(allocator: &mut TLPageAllocatorWriteGuard<'_>, allocation: PartialPageAllocation) -> Self {
+    pub(super) fn new(allocator: &mut LockedPageAllocatorWriteGuard<'_,impl PageFrameAllocator>, allocation: PartialPageAllocation) -> Self {
         Self {
             pagetable_tag: allocator.get_page_table().get_page_table_ptr() as *const u8,
             allocation: allocation,
         }
     }
     
-    fn assert_pt_tag(&self, allocator: &mut TLPageAllocatorWriteGuard<'_>){
+    fn assert_pt_tag(&self, allocator: &mut LockedPageAllocatorWriteGuard<'_,impl PageFrameAllocator>){
         assert!(allocator.get_page_table().get_page_table_ptr() as *const u8 == self.pagetable_tag, "Allocation used with incorrect allocator!");
     }
 }

@@ -23,8 +23,9 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
             // Create new allocator
             let new_st = self.suballocators[idx].insert(Box::new(ST::new()));
             // Add to page table
+            // SAFETY: The suballocator we take a reference to is owned by us. Therefore, it will not be freed unless we are freed, in which case the page table is also being freed.
             unsafe {
-                self.page_table.alloc_subtable_from_allocator(idx, &**new_st);
+                self.page_table.set_subtable_addr_from_allocator(idx, &**new_st);
             };
             // And return
             new_st
@@ -69,12 +70,9 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
             // Allocate huge pages or subtables depending on if it's necessary
             assert!(self.get_availability(idx) == 0b00u8);
             if HUGEPAGES {
-                // Huge pages
-                unsafe {
-                    // Allocate huge page
-                    self.page_table.alloc_huge(idx);
-                }
-                // Add allocation to list
+                // Reserve place
+                self.page_table.reserve(idx);
+                // Add huge page allocation to list
                 huge_alloc.push(PAllocEntry { index: idx, offset: (idx-start)*Self::PAGE_SIZE });
             } else if SUBTABLES {
                 // Sub-tables

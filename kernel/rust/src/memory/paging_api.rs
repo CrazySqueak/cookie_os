@@ -115,7 +115,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocatorWriteGuard<'_, PFA> {
     
     // Managing allocations
     ppa_define_foreach!(unsafe: _set_addr_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, base_addr: usize, {
-        ptable.set_addr(index, base_addr+offset);
+        ptable.set_huge_addr(index, base_addr+offset);
     });
     
     /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */

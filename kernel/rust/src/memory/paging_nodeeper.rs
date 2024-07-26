@@ -27,8 +27,7 @@ impl IPageTableImpl for NoDeeper {
     fn new() -> Self { nope!(); }
     fn is_unused(&self, idx: usize) -> bool { nope!(); }
     fn get_num_pages_used(&self) -> usize { nope!(); }
-    unsafe fn alloc_huge(&mut self, idx: usize) { nope!(); }
-    unsafe fn alloc_subtable(&mut self, idx: usize, phys_addr: usize) { nope!(); }
-    unsafe fn set_addr(&mut self, idx: usize, physaddr: usize) { nope!(); }
-    unsafe fn set_absent(&mut self, idx: usize, data: usize) { nope!(); }
+    unsafe fn set_subtable_addr(&mut self, idx: usize, phys_addr: usize) { nope!(); }
+    fn set_huge_addr(&mut self, idx: usize, physaddr: usize) { nope!(); }
+    fn set_absent(&mut self, idx: usize, data: usize) { nope!(); }
 }

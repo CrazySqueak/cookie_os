@@ -23,32 +23,25 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
         self.0.iter().filter(|e| e.is_unused()).count()
     }
     
-    // alloc
-    unsafe fn alloc_huge(&mut self, idx: usize){
-        let flags = match LEVEL {
-            1 => PageTableFlags::empty(),  // (huge page flag is used for PAT on level 1 page tables)
-            _ => PageTableFlags::HUGE_PAGE,
-        };
-        
-        self.0[idx].set_addr(PhysAddr::new(0), flags); 
-    }
-    unsafe fn alloc_subtable(&mut self, idx: usize, phys_addr: usize){
+    // modification
+    // TODO: Handle flags properly somehow???
+    unsafe fn set_subtable_addr(&mut self, idx: usize, phys_addr: usize){
         let flags = PageTableFlags::PRESENT;
         klog!(Debug, "memory.paging.map", "Mapping sub-table {:x}[{}] -> {:x}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, phys_addr);
         self.0[idx].set_addr(PhysAddr::new(phys_addr as u64), flags);
-        // TODO
     }
-    
-    // modification
-    unsafe fn set_addr(&mut self, idx: usize, physaddr: usize){
-        let flags = self.0[idx].flags() | PageTableFlags::PRESENT;  // Set present flag
+    fn set_huge_addr(&mut self, idx: usize, physaddr: usize){
+        let flags = self.0[idx].flags() | match LEVEL {
+            1 => PageTableFlags::PRESENT,  // (huge page flag is used for PAT on level 1 page tables)
+            _ => PageTableFlags::PRESENT | PageTableFlags::HUGE_PAGE,
+        };  // Set present + huge flag
         klog!(Debug, "memory.paging.map", "Mapping entry {:x}[{}] to {:x}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, physaddr);
         self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);  // set addr
     }
-    unsafe fn set_absent(&mut self, idx: usize, data: usize){
+    fn set_absent(&mut self, idx: usize, data: usize){
         let data = data.checked_shl(1).expect("Data value is out-of-bounds!") &!1;  // clear the "present" flag
         klog!(Debug, "memory.paging.map", "Mapping entry {:x}[{}] to NULL", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx);
-        *((&mut self.0[idx] as *mut PageTableEntry) as *mut u64) = data as u64;  // Update entry manually
+        unsafe { *((&mut self.0[idx] as *mut PageTableEntry) as *mut u64) = data as u64; }  // Update entry manually
     }
 }
 

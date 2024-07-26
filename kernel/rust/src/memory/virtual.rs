@@ -57,20 +57,24 @@ pub(in self) trait IPageTableImpl {
     /* Get the number of pages currenty used */
     fn get_num_pages_used(&self) -> usize;
     
-    // SAFETY: Modifying page tables is prone to cause UB if done incorrectly
-    /* Allocate a full page, and ????? */
-    unsafe fn alloc_huge(&mut self, idx: usize);
-    /* Allocate a sub-page-table, and return ????? */
-    unsafe fn alloc_subtable(&mut self, idx: usize, phys_addr: usize);
-    
-    unsafe fn alloc_subtable_from_allocator<PFA: PageFrameAllocator>(&mut self, idx: usize, allocator: &PFA){
-        self.alloc_subtable(idx, ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize))
+    /* Reserve a page (which will later be filled with a proper allocation.) */
+    fn reserve(&mut self, idx: usize){
+        // (at some point i need to document these silly page codes)
+        self.set_absent(idx, 0xFFFF_FFFE_0000)
     }
     
+    /* Initialise a sub-table at the given index.
+        SAFETY: phys_addr must be the physical address of a page table. The given page table must not be freed while its entry still exists in this page table. */
+    unsafe fn set_subtable_addr(&mut self, idx: usize, phys_addr: usize);
+    /* Initialise a subtable, converting the given allocator to its table's address and using that.
+        SAFETY: The allocator MUST outlive its entry in this page table. */
+    unsafe fn set_subtable_addr_from_allocator<PFA: PageFrameAllocator>(&mut self, idx: usize, allocator: &PFA){
+        self.set_subtable_addr(idx, ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize))
+    }
     /* Set the address for the given item (huge pages only, not subtables). */
-    unsafe fn set_addr(&mut self, idx: usize, physaddr: usize);
+    fn set_huge_addr(&mut self, idx: usize, physaddr: usize);
     /* Set the given item as absent, and clear its present flag. */
-    unsafe fn set_absent(&mut self, idx: usize, data: usize);
+    fn set_absent(&mut self, idx: usize, data: usize);
 }
 #[allow(private_bounds)]
 pub trait IPageTable: IPageTableImpl {}

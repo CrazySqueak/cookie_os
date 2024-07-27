@@ -7,8 +7,8 @@ use super::arch;
 type GlobalPTType = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::SubAllocType;
 pub struct GlobalPageTable(LockedPageAllocator<GlobalPTType>);
 impl GlobalPageTable {
-    pub fn new() -> Self {
-        Self(LockedPageAllocator::new(GlobalPTType::new()))
+    pub fn new(vmemaddr: usize) -> Self {
+        Self(LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: vmemaddr }))
     }
     
     fn read(&self) -> RwLockReadGuard<GlobalPTType> {
@@ -24,7 +24,7 @@ pub const KERNEL_PTABLE_VADDR: usize = KERNEL_PTABLE_IDX*GlobalPTType::PAGE_SIZE
 
 lazy_static! {
     
-    pub static ref KERNEL_PTABLE: GlobalPageTable = GlobalPageTable::new();
+    pub static ref KERNEL_PTABLE: GlobalPageTable = GlobalPageTable::new(KERNEL_PTABLE_VADDR);
     
     // SAFETY: all tables in this array must have the 'static lifetime
     //         also TODO: ensure they don't get moved within physmem

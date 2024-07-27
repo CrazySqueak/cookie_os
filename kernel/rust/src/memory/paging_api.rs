@@ -23,10 +23,39 @@ bitflags::bitflags! {
     }
 }
 
-pub struct LockedPageAllocator<PFA: PageFrameAllocator>(Arc<RwLock<PFA>>);
+#[derive(Debug,Clone,Copy)]
+pub struct LPAMetadata {
+    // Offset in VMEM for the start of the page table's jurisdiction. For top-level tables this is 0. For tables nested inside of other tables, this might not be 0
+    pub offset: usize,
+}
+struct LPAInternal<PFA: PageFrameAllocator> {
+    // The locked allocator
+    lock: RwLock<PFA>,
+    // Other metadata
+    meta: LPAMetadata,
+}
+impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
+    fn new(alloc: PFA, meta: LPAMetadata) -> Self {
+        Self {
+            lock: RwLock::new(alloc),
+            meta: meta,
+        }
+    }
+    pub fn metadata(&self) -> LPAMetadata {
+        self.meta
+    }
+}
+impl<PFA: PageFrameAllocator> core::ops::Deref for LPAInternal<PFA>{
+    type Target = RwLock<PFA>;
+    fn deref(&self) -> &Self::Target {
+        &self.lock
+    }
+}
+
+pub struct LockedPageAllocator<PFA: PageFrameAllocator>(Arc<LPAInternal<PFA>>);
 impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
-    pub fn new(alloc: PFA) -> Self {
-        Self(Arc::new(RwLock::new(alloc)))
+    pub fn new(alloc: PFA, meta: LPAMetadata) -> Self {
+        Self(Arc::new(LPAInternal::new(alloc, meta)))
     }
     
     pub fn clone_ref(x: &Self) -> Self {
@@ -38,11 +67,11 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     }
     
     pub fn write(&self) -> LockedPageAllocatorWriteGuard<PFA> {
-        LockedPageAllocatorWriteGuard(self.0.write())
+        LockedPageAllocatorWriteGuard{guard: self.0.write(), meta: self.0.metadata()}
     }
     pub fn try_write(&self) -> Option<LockedPageAllocatorWriteGuard<PFA>> {
         match self.0.try_write() {
-            Some(guard) => Some(LockedPageAllocatorWriteGuard(guard)),
+            Some(guard) => Some(LockedPageAllocatorWriteGuard{guard, meta: self.0.metadata()}),
             None => None,
         }
     }
@@ -59,7 +88,7 @@ impl PagingContext {
             unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i,*addr); }
         }
         // Return
-        Self(LockedPageAllocator::new(allocator))
+        Self(LockedPageAllocator::new(allocator, LPAMetadata { offset: 0 }))
     }
     pub fn clone_ref(x: &Self) -> Self {
         Self(LockedPageAllocator::clone_ref(&x.0))
@@ -103,7 +132,7 @@ impl core::ops::Deref for PagingContext {
     }
 }
 
-pub struct LockedPageAllocatorWriteGuard<'a, PFA: PageFrameAllocator>(RwLockWriteGuard<'a, PFA>);
+pub struct LockedPageAllocatorWriteGuard<'a, PFA: PageFrameAllocator>{ guard: RwLockWriteGuard<'a, PFA>, meta: LPAMetadata }
 pub type TLPageAllocatorWriteGuard<'a> = LockedPageAllocatorWriteGuard<'a, BaseTLPageAllocator>;
 
 macro_rules! ppa_define_foreach {
@@ -125,7 +154,7 @@ macro_rules! ppa_define_foreach {
 }
 impl<PFA: PageFrameAllocator> LockedPageAllocatorWriteGuard<'_, PFA> {
     fn get_page_table(&mut self) -> &mut PFA {
-        &mut*self.0
+        &mut*self.guard
     }
     
     // Allocating
@@ -147,11 +176,13 @@ impl<PFA: PageFrameAllocator> LockedPageAllocatorWriteGuard<'_, PFA> {
     
     /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */
     pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize){
+        allocation.assert_pt_tag(self);
+        // N.B. If offset is non-zero, we must convert from an absolute vmem address to an address relative to the start of the table
+        let vmem_rel_addr = base_addr - self.meta.offset;
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
         // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.
-        allocation.assert_pt_tag(self);
         unsafe {
-            Self::_set_addr_inner(self.get_page_table(), allocation.into(), base_addr);
+            Self::_set_addr_inner(self.get_page_table(), allocation.into(), vmem_rel_addr);
         }
     }
     

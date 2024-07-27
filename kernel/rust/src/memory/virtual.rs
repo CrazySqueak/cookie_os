@@ -44,6 +44,13 @@ pub(in self) trait PageFrameAllocatorImpl {
     fn allocate(&mut self, size: usize) -> Option<PartialPageAllocation>;
     /* Allocate the requested amount of memory at the given virtual memory address (relative to the start of this table's jurisdiction). */
     fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PartialPageAllocation>;
+    
+    /* Add a reference to a global table. Panics if the index is already in use. Once the global table is added, it must not be overwritten or re-allocated.
+        get_suballocator_mut must still return None for this index, as getting a mutable reference to a global table would violate Rust's aliasing rules.
+        SAFETY: The given address must be the physical address of the table. Global page tables are expected to belong to the 'static lifetime.
+                Global page tables must be present for a given vmem addr in all paging contexts, as it is not cleared from the TLB when switching.
+                And many more. Here be dragons. */
+    unsafe fn put_global_table(&mut self, index: usize, phys_addr: usize);
 }
 #[allow(private_bounds)]
 pub trait PageFrameAllocator: PageFrameAllocatorImpl {}

@@ -23,12 +23,16 @@ bitflags::bitflags! {
     }
 }
 
-pub struct LockedPageAllocator<PFA: PageFrameAllocator>(Arc<RwLock<PFA>>);
-pub type TopLevelPageAllocator = LockedPageAllocator<BaseTLPageAllocator>;
-impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
+pub struct LockedPageAllocator<PFA: PageFrameAllocator, const INCLUDE_GLOBAL_PAGES: bool>(Arc<RwLock<PFA>>);
+pub type TopLevelPageAllocator = LockedPageAllocator<BaseTLPageAllocator,true>;
+impl<PFA: PageFrameAllocator, const INCLUDE_GLOBAL_PAGES: bool> LockedPageAllocator<PFA,INCLUDE_GLOBAL_PAGES> {
     pub fn new() -> Self {
         let mut allocator = PFA::new();
-        // TODO: Init global tables
+        // Add global pages (if top-level)
+        if INCLUDE_GLOBAL_PAGES { for (i,addr) in global_pages::GLOBAL_TABLE_PHYSADDRS.iter().enumerate(){
+                // SAFETY: See documentation for put_global_table and GLOBAL_TABLE_PHYSADDRS
+                unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i,*addr); }
+        }}
         // Return
         Self(Arc::new(RwLock::new(allocator)))
     }
@@ -51,7 +55,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         }
     }
 }
-impl LockedPageAllocator<BaseTLPageAllocator> {
+impl TopLevelPageAllocator {
     /* Activate this page table. Once active, this page table will be used to map virtual addresses to physical ones.
         Use of Arc ensures that the page table will not be dropped if it is still active.
         DEADLOCK: If you have a write guard active in the current thread, this *WILL* deadlock.

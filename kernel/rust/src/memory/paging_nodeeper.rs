@@ -20,6 +20,7 @@ impl PageFrameAllocatorImpl for NoDeeper {
     fn get_suballocator_mut(&mut self, index: usize) -> Option<&mut Self::SubAllocType> { nope!(); }
     fn allocate(&mut self, size: usize) -> Option<PartialPageAllocation> { nope!(); }
     fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PartialPageAllocation> { nope!(); }
+    unsafe fn put_global_table(&mut self, index: usize, phys_addr: usize) { nope!(); }
 }
 impl IPageTableImpl for NoDeeper {
     const NPAGES: usize = 0;

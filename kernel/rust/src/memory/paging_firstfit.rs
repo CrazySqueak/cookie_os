@@ -36,6 +36,11 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
         // 1122_3344 5566_7788
         (self.availability_bitmap[i/4] >> (6-(2*(i%4)))) & 0b11u8
     }
+    fn set_availability(&mut self, idx: usize, value: u8){
+        let lsh = 6-(2*(idx%4));
+        self.availability_bitmap[idx/4] &= !(0b11u8 << lsh); // clear
+        self.availability_bitmap[idx/4] |= value << lsh;  // set
+    }
     fn refresh_availability(&mut self, idx: usize){
         let availability = 
             if let Some(alloc) = &self.suballocators[idx] {  // sub-table
@@ -57,9 +62,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
                 }
             }
         ;
-        let lsh = 6-(2*(idx%4));
-        self.availability_bitmap[idx/4] ^= 0b11u8 << lsh; // clear
-        self.availability_bitmap[idx/4] |= availability << lsh;  // set
+        self.set_availability(idx, availability)
     }
     
     // allocates indexes [start, end)
@@ -231,5 +234,16 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         // And return
         klog!(Debug, "memory.paging.allocator.mlff", "Allocated {} pages (page_size=0x{:x}) + {} bytes.", pages, Self::PAGE_SIZE, remainder);
         Some(self._build_allocation(contig_result,remainder_allocated))
+    }
+
+    unsafe fn put_global_table(&mut self, index: usize, phys_addr: usize){
+        assert!(SUBTABLES);
+        assert!(self.get_availability(index) == 0b00u8);
+        
+        klog!(Debug, "memory.paging.allocator.mlff", "Adding global page @{} -> {:x}", index, phys_addr);
+        
+        self.page_table.set_subtable_addr(index, phys_addr);  // TODO: Flags
+        // Set spot in availability bitmap, to ensure that it isn't overwritten
+        self.set_availability(index, 0b11u8);
     }
 }

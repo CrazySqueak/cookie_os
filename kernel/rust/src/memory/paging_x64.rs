@@ -72,6 +72,6 @@ pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
     use x86_64::registers::control::Cr3;
     
     let (oldaddr, cr3flags) = Cr3::read();
-    klog!(Info, "memory.paging", "Switching active page table from 0x{:x} to 0x{:x}. (cr3flags={:?})", oldaddr.start_address(), phys_addr, cr3flags);
+    klog!(Debug, "memory.paging", "Switching active page table from 0x{:x} to 0x{:x}. (cr3flags={:?})", oldaddr.start_address(), phys_addr, cr3flags);
     Cr3::write(PhysFrame::from_start_address(PhysAddr::new(phys_addr.try_into().unwrap())).expect("Page Table Address Not Aligned!"), cr3flags)
 }

@@ -39,8 +39,8 @@ pub fn _kinit() {
     // Testing: setup kernel heap
     unsafe {
         use alloc::boxed::Box;
-        use memory::paging::{TopLevelPageAllocator};
-        let pagetable = TopLevelPageAllocator::new();
+        use memory::paging::{PagingContext};
+        let pagetable = PagingContext::new();
         
         {
             let mut allocator = pagetable.write();

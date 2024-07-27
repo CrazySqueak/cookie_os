@@ -23,20 +23,12 @@ bitflags::bitflags! {
     }
 }
 
-pub struct LockedPageAllocator<PFA: PageFrameAllocator, const INCLUDE_GLOBAL_PAGES: bool>(Arc<RwLock<PFA>>);
-pub type TopLevelPageAllocator = LockedPageAllocator<BaseTLPageAllocator,true>;
-impl<PFA: PageFrameAllocator, const INCLUDE_GLOBAL_PAGES: bool> LockedPageAllocator<PFA,INCLUDE_GLOBAL_PAGES> {
-    pub fn new() -> Self {
-        let mut allocator = PFA::new();
-        // Add global pages (if top-level)
-        if INCLUDE_GLOBAL_PAGES { for (i,addr) in global_pages::GLOBAL_TABLE_PHYSADDRS.iter().enumerate(){
-                // SAFETY: See documentation for put_global_table and GLOBAL_TABLE_PHYSADDRS
-                unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i,*addr); }
-        }}
-        // Return
-        Self(Arc::new(RwLock::new(allocator)))
+pub struct LockedPageAllocator<PFA: PageFrameAllocator>(Arc<RwLock<PFA>>);
+impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
+    pub fn new(alloc: PFA) -> Self {
+        Self(Arc::new(RwLock::new(alloc)))
     }
-    /* Create another reference to this top-level page table. */
+    
     pub fn clone_ref(x: &Self) -> Self {
         Self(Arc::clone(&x.0))
     }
@@ -55,7 +47,24 @@ impl<PFA: PageFrameAllocator, const INCLUDE_GLOBAL_PAGES: bool> LockedPageAlloca
         }
     }
 }
-impl TopLevelPageAllocator {
+
+pub struct PagingContext(LockedPageAllocator<BaseTLPageAllocator>);
+impl PagingContext {
+    pub fn new() -> Self {
+        klog!(Debug, "memory.paging.context", "Creating new paging context.");
+        let mut allocator = BaseTLPageAllocator::new();
+        // Add global pages
+        for (i,addr) in global_pages::GLOBAL_TABLE_PHYSADDRS.iter().enumerate(){
+            // SAFETY: See documentation for put_global_table and GLOBAL_TABLE_PHYSADDRS
+            unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i,*addr); }
+        }
+        // Return
+        Self(LockedPageAllocator::new(allocator))
+    }
+    pub fn clone_ref(x: &Self) -> Self {
+        Self(LockedPageAllocator::clone_ref(&x.0))
+    }
+    
     /* Activate this page table. Once active, this page table will be used to map virtual addresses to physical ones.
         Use of Arc ensures that the page table will not be dropped if it is still active.
         DEADLOCK: If you have a write guard active in the current thread, this *WILL* deadlock.
@@ -71,6 +80,7 @@ impl TopLevelPageAllocator {
         
         // activate table
         let table_addr = ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize);
+        klog!(Info, "memory.paging.context", "Switching active context to 0x{:x}", table_addr);
         set_active_page_table(table_addr);
         
         // store reference
@@ -82,8 +92,14 @@ impl TopLevelPageAllocator {
         //         counter here will be defined, working as if the guard had been dropped.
         // (N.B. we can't simply store the guard due to borrow checker limitations + programmer laziness)
         if let Some(old_table) = oldpt { unsafe {
-            old_table.0.force_read_decrement();
+            old_table.0.0.force_read_decrement();
         }}
+    }
+}
+impl core::ops::Deref for PagingContext {
+    type Target = LockedPageAllocator<BaseTLPageAllocator>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -154,7 +170,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocatorWriteGuard<'_, PFA> {
 }
 
 // the currently active page table
-static _ACTIVE_PAGE_TABLE: Mutex<Option<TopLevelPageAllocator>> = Mutex::new(None);
+static _ACTIVE_PAGE_TABLE: Mutex<Option<PagingContext>> = Mutex::new(None);
 
 // = ALLOCATIONS =
 // Note: Allocations must be allocated/deallocated manually

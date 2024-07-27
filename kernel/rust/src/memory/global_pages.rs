@@ -5,10 +5,10 @@ use super::*;
 use super::arch;
 
 type GlobalPTType = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::SubAllocType;
-pub struct GlobalPageTable(LockedPageAllocator<GlobalPTType,false>);
+pub struct GlobalPageTable(LockedPageAllocator<GlobalPTType>);
 impl GlobalPageTable {
     pub fn new() -> Self {
-        Self(LockedPageAllocator::new())
+        Self(LockedPageAllocator::new(GlobalPTType::new()))
     }
     
     fn read(&self) -> RwLockReadGuard<GlobalPTType> {

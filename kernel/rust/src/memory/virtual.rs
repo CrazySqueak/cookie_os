@@ -13,9 +13,12 @@ mod impl_firstfit;
 #[path = "paging_nodeeper.rs"]
 mod impl_nodeeper;
 use impl_nodeeper::NoDeeper;
+
 #[path = "paging_api.rs"]
 mod api;
 pub use api::*;
+#[path = "global_pages.rs"]
+mod global_pages;
 
 pub(in self) trait PageFrameAllocatorImpl {
     const NPAGES: usize;

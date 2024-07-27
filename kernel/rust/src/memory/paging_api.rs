@@ -27,11 +27,18 @@ pub struct LockedPageAllocator<PFA: PageFrameAllocator>(Arc<RwLock<PFA>>);
 pub type TopLevelPageAllocator = LockedPageAllocator<BaseTLPageAllocator>;
 impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     pub fn new() -> Self {
-        Self(Arc::new(RwLock::new(PFA::new())))
+        let mut allocator = PFA::new();
+        // TODO: Init global tables
+        // Return
+        Self(Arc::new(RwLock::new(allocator)))
     }
     /* Create another reference to this top-level page table. */
     pub fn clone_ref(x: &Self) -> Self {
         Self(Arc::clone(&x.0))
+    }
+    
+    pub fn read(&self) -> RwLockReadGuard<PFA> {
+        self.0.read()
     }
     
     pub fn write(&self) -> LockedPageAllocatorWriteGuard<PFA> {

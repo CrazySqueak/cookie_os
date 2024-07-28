@@ -62,6 +62,15 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         Self(Arc::clone(&x.0))
     }
     
+    /* Lock the allocator for reading until _end_active is called.
+    This is intended to be used when the page table is possibly being read/cached by the CPU, as when locked by _begin_active, writes via write_when_active are still possible (as they flush the TLB). */
+    pub(super) fn _begin_active(&self) -> &PFA {
+        RwLockReadGuard::leak(self.0.read())
+    }
+    pub(super) unsafe fn _end_active(&self){
+        self.0.force_read_decrement()
+    }
+    
     pub fn read(&self) -> RwLockReadGuard<PFA> {
         self.0.read()
     }
@@ -105,7 +114,7 @@ impl PagingContext {
          */
     pub unsafe fn activate(&self){
         // Leak read guard (as the TLB will cache the page table as needed, thus meaning it should not be modified without careful consideration)
-        let allocator = RwLockReadGuard::leak(self.0.read());
+        let allocator = self.0._begin_active();
         
         // activate table
         let table_addr = ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize);
@@ -121,7 +130,7 @@ impl PagingContext {
         //         counter here will be defined, working as if the guard had been dropped.
         // (N.B. we can't simply store the guard due to borrow checker limitations + programmer laziness)
         if let Some(old_table) = oldpt { unsafe {
-            old_table.0.0.force_read_decrement();
+            old_table.0._end_active();
         }}
     }
 }

@@ -8,11 +8,19 @@ type GlobalPTType = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::Sub
 pub struct GlobalPageTable(LockedPageAllocator<GlobalPTType>);
 impl GlobalPageTable {
     pub fn new(vmemaddr: usize) -> Self {
-        Self(LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: vmemaddr }))
+        let allocator = LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: vmemaddr });
+        // Lock the allocator, as global pages are always active
+        allocator._begin_active();
+        
+        Self(allocator)
     }
     
-    fn read(&self) -> RwLockReadGuard<GlobalPTType> {
+    pub fn read(&self) -> RwLockReadGuard<GlobalPTType> {
         self.0.read()
+    }
+    /* This method is for testing. It will ALWAYS deadlock. */
+    pub fn write(&self) -> LockedPageAllocatorWriteGuard<GlobalPTType> {
+        self.0.write()
     }
 }
 // TODO

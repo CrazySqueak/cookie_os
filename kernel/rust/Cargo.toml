@@ -31,5 +31,9 @@ crate-type = ["staticlib"]
 [profile.dev]
 panic = "abort"
 
+[profile.dev.package."*"]
+# Optimise dependencies even in dev mode
+opt-level = 3
+
 [profile.release]
 panic = "abort"

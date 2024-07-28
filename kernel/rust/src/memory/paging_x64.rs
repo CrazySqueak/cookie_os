@@ -79,6 +79,6 @@ pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
 pub(super) fn inval_tlb_pg(virt_addr: usize){
     use x86_64::instructions::tlb::flush;
     use x86_64::addr::VirtAddr;
-    klog!(Debug, "memory.paging", "Flushing TLB for 0x{:x}", virt_addr);
+    klog!(Debug, "memory.paging.tlb", "Flushing TLB for 0x{:x}", virt_addr);
     flush(VirtAddr::new_truncate(virt_addr.try_into().unwrap()))
 }

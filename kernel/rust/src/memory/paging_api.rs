@@ -192,12 +192,12 @@ impl core::ops::Deref for PagingContext {
 }
 
 // = GUARDS =
-pub struct LockedPageAllocatorWriteGuard<PFA: PageFrameAllocator, GuardT>
+pub struct LockedPageAllocatorWriteGuard<PFA: PageFrameAllocator, GuardT, const MUST_INV_TLB: bool>
   where GuardT: core::ops::Deref<Target=PFA> + core::ops::DerefMut<Target=PFA>
     { guard: GuardT, meta: LPAMetadata }
 //pub type TLPageAllocatorWriteGuard<'a> = LockedPageAllocatorWriteGuard<'a, BaseTLPageAllocator>;
-pub type LPageAllocatorRWLWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, RwLockWriteGuard<'a, PFA>>;
-pub type LPageAllocatorUnsafeWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, ForcedUpgradeGuard<'a, PFA>>;
+pub type LPageAllocatorRWLWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, RwLockWriteGuard<'a, PFA>, false>;
+pub type LPageAllocatorUnsafeWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, ForcedUpgradeGuard<'a, PFA>, true>;
 
 macro_rules! ppa_define_foreach {
     // Note: body takes four variables from the outside: allocator, ptable, index, and offset (as well as any other args they specify).
@@ -216,7 +216,7 @@ macro_rules! ppa_define_foreach {
         }
     }
 }
-impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT> 
+impl<PFA: PageFrameAllocator, GuardT, const MUST_INV_TLB: bool> LockedPageAllocatorWriteGuard<PFA, GuardT, MUST_INV_TLB> 
   where GuardT: core::ops::Deref<Target=PFA> + core::ops::DerefMut<Target=PFA>
   {
     fn get_page_table(&mut self) -> &mut PFA {
@@ -224,6 +224,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     }
     
     // Allocating
+    // (we don't need to flush the TLB for allocation as the page has gone from NOT PRESENT -> NOT PRESENT - instead we flush it when it's mapped to an address)
     pub fn allocate(&mut self, size: usize) -> Option<PageAllocation> {
         let allocator = self.get_page_table();
         let allocation = allocator.allocate(size)?;
@@ -255,6 +256,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         unsafe {
             Self::_set_addr_inner(self.get_page_table(), allocation.into(), base_addr);
         }
+        if MUST_INV_TLB { self.invalidate_tlb(allocation) };
     }
     
     ppa_define_foreach!(unsafe: _set_missing_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, data: usize, {
@@ -268,6 +270,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         unsafe {
             Self::_set_missing_inner(self.get_page_table(), allocation.into(), data);
         }
+        if MUST_INV_TLB { self.invalidate_tlb(allocation) };
     }
     
     ppa_define_foreach!(: _inval_tlb_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, vmem_start: usize, {
@@ -326,14 +329,14 @@ pub struct PageAllocation {
     allocation: PartialPageAllocation,
 }
 impl PageAllocation {
-    pub(super) fn new<PFA:PageFrameAllocator>(allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>, allocation: PartialPageAllocation) -> Self {
+    pub(super) fn new<PFA:PageFrameAllocator,const MUST_INV_TLB: bool>(allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>, MUST_INV_TLB>, allocation: PartialPageAllocation) -> Self {
         Self {
             pagetable_tag: allocator.get_page_table().get_page_table_ptr() as *const u8,
             allocation: allocation,
         }
     }
     
-    fn assert_pt_tag<PFA:PageFrameAllocator>(&self, allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>){
+    fn assert_pt_tag<PFA:PageFrameAllocator,const MUST_INV_TLB: bool>(&self, allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>, MUST_INV_TLB>){
         assert!(allocator.get_page_table().get_page_table_ptr() as *const u8 == self.pagetable_tag, "Allocation used with incorrect allocator!");
     }
 }

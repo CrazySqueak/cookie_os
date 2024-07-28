@@ -75,3 +75,10 @@ pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
     klog!(Debug, "memory.paging", "Switching active page table from 0x{:x} to 0x{:x}. (cr3flags={:?})", oldaddr.start_address(), phys_addr, cr3flags);
     Cr3::write(PhysFrame::from_start_address(PhysAddr::new(phys_addr.try_into().unwrap())).expect("Page Table Address Not Aligned!"), cr3flags)
 }
+
+pub(super) fn inval_tlb_pg(virt_addr: usize){
+    use x86_64::instructions::tlb::flush;
+    use x86_64::addr::VirtAddr;
+    klog!(Debug, "memory.paging", "Flushing TLB for 0x{:x}", virt_addr);
+    flush(VirtAddr::new(virt_addr.try_into().unwrap()))
+}

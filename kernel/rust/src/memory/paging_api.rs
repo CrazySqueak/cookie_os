@@ -6,7 +6,7 @@ use spin::Mutex;
 use super::*;
 
 type BaseTLPageAllocator = arch::TopLevelPageAllocator;
-use arch::set_active_page_table;
+use arch::{set_active_page_table,inval_tlb_pg};
 
 // Note: Flags follow a "union" pattern
 // in other words: the combination of all flags should be the most permissive/compatible option
@@ -197,6 +197,17 @@ impl<PFA: PageFrameAllocator> LockedPageAllocatorWriteGuard<'_, PFA> {
         unsafe {
             Self::_set_missing_inner(self.get_page_table(), allocation.into(), data);
         }
+    }
+    
+    ppa_define_foreach!(: _inval_tlb_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, vmem_start: usize, {
+        inval_tlb_pg(vmem_start + offset)
+    });
+    /* Invalidate the TLB entries for the given allocation (on the current CPU).
+        Note: No check is performed to ensure that the allocation is correct nor that this page table is active, as the only consequence (provided all other code handling Page Tables / TLB is correct) is a performance hit from the unnecessary INVLPG operations + the resulting cache misses.
+        Note: Using this method is unnecessary yourself. Usually it is provided by write_when_active or similar. */
+    pub fn invalidate_tlb(&mut self, allocation: &PageAllocation){
+        let vmem_offset = self.meta.offset;
+        Self::_inval_tlb_inner(self.get_page_table(), allocation.into(), vmem_offset);
     }
 }
 

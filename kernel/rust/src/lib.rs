@@ -43,7 +43,8 @@ pub fn _kinit() {
         let pagetable = PagingContext::new();
         
         {
-            let mut allocator = memory::paging::global_pages::KERNEL_PTABLE.write_when_active();
+            let mut allocator = pagetable.write();
+            let mut kallocator = memory::paging::global_pages::KERNEL_PTABLE.write_when_active();
             let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
             
             // Null guard
@@ -51,8 +52,8 @@ pub fn _kinit() {
             allocator.set_absent(&nullguard, 0x4E554C_505452);  // "NULPTR"
             
             // From start -> stack guard
-            let alloc1 = allocator.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
-            allocator.set_base_addr(&alloc1, 0); // 0+HHOFF -> 0
+            let alloc1 = kallocator.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
+            kallocator.set_base_addr(&alloc1, 0); // 0+HHOFF -> 0
         }
         
         // Activate

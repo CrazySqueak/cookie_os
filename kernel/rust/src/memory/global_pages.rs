@@ -4,6 +4,7 @@ use spin::RwLockReadGuard;
 use super::*;
 use super::arch;
 
+const TOPLEVEL_PAGE_SIZE: usize = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::PAGE_SIZE;
 type GlobalPTType = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::SubAllocType;
 pub struct GlobalPageTable(LockedPageAllocator<GlobalPTType>);
 impl GlobalPageTable {
@@ -33,7 +34,7 @@ impl GlobalPageTable {
 pub const GLOBAL_PAGES_START_IDX: usize = GlobalPTType::NPAGES / 2;  // Index of the first globally mapped page
 
 pub const KERNEL_PTABLE_IDX  : usize = GLOBAL_PAGES_START_IDX+0;
-pub const KERNEL_PTABLE_VADDR: usize = KERNEL_PTABLE_IDX*GlobalPTType::PAGE_SIZE;
+pub const KERNEL_PTABLE_VADDR: usize = KERNEL_PTABLE_IDX*TOPLEVEL_PAGE_SIZE;
 
 lazy_static! {
     

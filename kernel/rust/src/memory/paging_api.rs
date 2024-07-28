@@ -230,8 +230,15 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         Some(PageAllocation::new(self, allocation))
     }
     pub fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PageAllocation> {
+        // Convert the address
+        // 1. Convert from canonical vmem addr to 0-extended (so it can be converted to an index)
+        let addr = addr&0x0000ffff_ffffffff;
+        // 2. We subtract the offset from the vmem address (as we need it to be relative to the start of our table)
+        let rel_addr = addr.checked_sub(self.meta.offset).unwrap_or_else(||panic!("Cannot allocate memory before the start of the page! addr=0x{:x} page_start=0x{:x}",addr,self.meta.offset));
+        
+        // Allocate
         let allocator = self.get_page_table();
-        let allocation = allocator.allocate_at(addr, size)?;
+        let allocation = allocator.allocate_at(rel_addr, size)?;
         Some(PageAllocation::new(self, allocation))
     }
     
@@ -243,12 +250,10 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */
     pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize){
         allocation.assert_pt_tag(self);
-        // N.B. If offset is non-zero, we must convert from an absolute vmem address to an address relative to the start of the table
-        let vmem_rel_addr = base_addr - self.meta.offset;
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
         // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.
         unsafe {
-            Self::_set_addr_inner(self.get_page_table(), allocation.into(), vmem_rel_addr);
+            Self::_set_addr_inner(self.get_page_table(), allocation.into(), base_addr);
         }
     }
     

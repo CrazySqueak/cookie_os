@@ -7,20 +7,25 @@ use super::arch;
 type GlobalPTType = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::SubAllocType;
 pub struct GlobalPageTable(LockedPageAllocator<GlobalPTType>);
 impl GlobalPageTable {
-    pub fn new(vmemaddr: usize) -> Self {
-        let allocator = LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: vmemaddr });
-        // Lock the allocator, as global pages are always active
-        allocator._begin_active();
-        
-        Self(allocator)
+    fn new(vmemaddr: usize) -> Self {
+        Self(LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: vmemaddr }))
+    }
+    
+    /* Called to leak the pointer that will be put into every page table to reference this global page mapping */
+    fn _begin_active(&self) -> &GlobalPTType {
+        self.0._begin_active()
     }
     
     pub fn read(&self) -> RwLockReadGuard<GlobalPTType> {
         self.0.read()
     }
     /* This method is for testing. It will ALWAYS deadlock. */
-    pub fn write(&self) -> LockedPageAllocatorWriteGuard<GlobalPTType> {
+    pub fn write(&self) -> LPageAllocatorRWLWriteGuard<GlobalPTType> {
         self.0.write()
+    }
+    /* Write when active!!! */
+    pub fn write_when_active(&self) -> LPageAllocatorUnsafeWriteGuard<GlobalPTType> {
+        self.0.write_when_active()
     }
 }
 // TODO
@@ -36,5 +41,5 @@ lazy_static! {
     
     // SAFETY: all tables in this array must have the 'static lifetime
     //         also TODO: ensure they don't get moved within physmem
-    pub static ref GLOBAL_TABLE_PHYSADDRS: [usize; 1] = [&KERNEL_PTABLE].map(|pt| ptaddr_virt_to_phys(RwLockReadGuard::leak(pt.read()).get_page_table_ptr() as usize));
+    pub static ref GLOBAL_TABLE_PHYSADDRS: [usize; 1] = [&KERNEL_PTABLE].map(|pt| ptaddr_virt_to_phys(pt._begin_active().get_page_table_ptr() as usize));
 }

@@ -1,6 +1,7 @@
 
+use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
-use spin::rwlock::{RwLock,RwLockReadGuard,RwLockWriteGuard};
+use spin::rwlock::{RwLock,RwLockReadGuard,RwLockWriteGuard,RwLockUpgradableGuard};
 use spin::Mutex;
 
 use super::*;
@@ -33,12 +34,15 @@ struct LPAInternal<PFA: PageFrameAllocator> {
     lock: RwLock<PFA>,
     // Other metadata
     meta: LPAMetadata,
+    // The number of times this is "active" - usually 1 for global tables, or <number of CPUs table is active for> for top-level contexts.
+    active_count: AtomicU16,
 }
 impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
     fn new(alloc: PFA, meta: LPAMetadata) -> Self {
         Self {
             lock: RwLock::new(alloc),
             meta: meta,
+            active_count: AtomicU16::new(0),
         }
     }
     pub fn metadata(&self) -> LPAMetadata {
@@ -65,23 +69,69 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     /* Lock the allocator for reading until _end_active is called.
     This is intended to be used when the page table is possibly being read/cached by the CPU, as when locked by _begin_active, writes via write_when_active are still possible (as they flush the TLB). */
     pub(super) fn _begin_active(&self) -> &PFA {
-        RwLockReadGuard::leak(self.0.read())
+        // Lock
+        let alloc = RwLockReadGuard::leak(self.0.read());
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
+        // Increment active count
+        self.0.active_count.fetch_add(1, Ordering::Acquire);
+        // Return
+        alloc
     }
     pub(super) unsafe fn _end_active(&self){
-        self.0.force_read_decrement()
+        // Decrement active count
+        self.0.active_count.fetch_sub(1, Ordering::Release);
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
+        // Unlock
+        self.0.force_read_decrement();
     }
     
     pub fn read(&self) -> RwLockReadGuard<PFA> {
         self.0.read()
     }
     
-    pub fn write(&self) -> LockedPageAllocatorWriteGuard<PFA> {
+    pub fn write(&self) -> LPageAllocatorRWLWriteGuard<PFA> {
         LockedPageAllocatorWriteGuard{guard: self.0.write(), meta: self.0.metadata()}
     }
-    pub fn try_write(&self) -> Option<LockedPageAllocatorWriteGuard<PFA>> {
+    pub fn try_write(&self) -> Option<LPageAllocatorRWLWriteGuard<PFA>> {
         match self.0.try_write() {
             Some(guard) => Some(LockedPageAllocatorWriteGuard{guard, meta: self.0.metadata()}),
             None => None,
+        }
+    }
+    
+    /* Write to a page table that is currently active, provided there are no other read/write locks.
+        Writes using this guard will automatically invalidate the TLB entries as needed for the current CPU (but currently not OTHERS!!! TODO).*/
+    pub fn write_when_active(&self) -> LPageAllocatorUnsafeWriteGuard<PFA> {  // TODO: With TLB inval
+        // Acquire an upgradable read guard, to ensure that A. there are no writers, and B. there are no new readers while we're determining what to do
+        let upgradable = self.0.upgradeable_read();
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
+        
+        // Ensure reader count matches our active_count
+        /* SAFETY / SYNC:
+           Since no new readers can be allocated, reader_count will not have increased during this time
+           Since reader_count is incremented before active_count, if a race occurs during _begin_active, then reader_count > active_count, which means a lock is not acquired and we must wait and try again.
+           Similarly, active_count must be decremented before reader_count in _end_active. If a race occurs during _end_active, then reader_count > active_count, which means a lock is not acquired blah blah blah
+           We also read reader_count before active_count, to ensure that in a race with _end_active, we will end up with reader_count > active_count (since active_count is decremented first).
+           
+           Note: Reader count was incremented by 1 when we took the upgradeable guard - so actually we should compare against active_count+1.
+        */
+        loop {
+            let reader_count = self.0.reader_count();
+            core::sync::atomic::compiler_fence(Ordering::SeqCst);
+            let active_count = self.0.active_count.load(Ordering::Acquire);
+            if reader_count <= (active_count+1).into() {
+                // Force-upgrade and return the write lock
+                // We cannot upgrade normally because that would require there to be no readers
+                // Whereas here we've ensured that the readers are all CPU/TLB readers or something
+                // So we want to forcibly create an upgraded version
+                let write_guard = unsafe { ForcedUpgradeGuard::new(&self.0, upgradable) };
+                return LockedPageAllocatorWriteGuard{guard: write_guard, meta: self.0.metadata()};
+            } else {
+                // Relax
+                // 🛏☺☕ ahhh
+                use spin::RelaxStrategy;
+                spin::relax::Spin::relax();
+            }
         }
     }
 }
@@ -141,8 +191,13 @@ impl core::ops::Deref for PagingContext {
     }
 }
 
-pub struct LockedPageAllocatorWriteGuard<'a, PFA: PageFrameAllocator>{ guard: RwLockWriteGuard<'a, PFA>, meta: LPAMetadata }
-pub type TLPageAllocatorWriteGuard<'a> = LockedPageAllocatorWriteGuard<'a, BaseTLPageAllocator>;
+// = GUARDS =
+pub struct LockedPageAllocatorWriteGuard<PFA: PageFrameAllocator, GuardT>
+  where GuardT: core::ops::Deref<Target=PFA> + core::ops::DerefMut<Target=PFA>
+    { guard: GuardT, meta: LPAMetadata }
+//pub type TLPageAllocatorWriteGuard<'a> = LockedPageAllocatorWriteGuard<'a, BaseTLPageAllocator>;
+pub type LPageAllocatorRWLWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, RwLockWriteGuard<'a, PFA>>;
+pub type LPageAllocatorUnsafeWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, ForcedUpgradeGuard<'a, PFA>>;
 
 macro_rules! ppa_define_foreach {
     // Note: body takes four variables from the outside: allocator, ptable, index, and offset (as well as any other args they specify).
@@ -161,7 +216,9 @@ macro_rules! ppa_define_foreach {
         }
     }
 }
-impl<PFA: PageFrameAllocator> LockedPageAllocatorWriteGuard<'_, PFA> {
+impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT> 
+  where GuardT: core::ops::Deref<Target=PFA> + core::ops::DerefMut<Target=PFA>
+  {
     fn get_page_table(&mut self) -> &mut PFA {
         &mut*self.guard
     }
@@ -220,6 +277,37 @@ impl<PFA: PageFrameAllocator> LockedPageAllocatorWriteGuard<'_, PFA> {
     }
 }
 
+pub struct ForcedUpgradeGuard<'a, T> {
+    guard: RwLockUpgradableGuard<'a, T>,
+    ptr: &'a mut T,
+}
+impl<'a,T> ForcedUpgradeGuard<'a, T>{
+    // SAFETY: HERE BE DRAGONS
+    unsafe fn new(lock: &RwLock<T>, guard: RwLockUpgradableGuard<'a, T>) -> Self {
+        use core::ops::Deref;
+        // 👻👻👻👻👻
+        // TODO: Find a better alternative
+        // This dirty hack gives me the creeps
+        let ptr = &mut *lock.as_mut_ptr();
+        Self {
+            guard,
+            ptr,
+        }
+    }
+}
+impl<T> core::ops::Deref for ForcedUpgradeGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &*self.guard
+    }
+}
+impl<T> core::ops::DerefMut for ForcedUpgradeGuard<'_, T>{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.ptr
+    }
+}
+
+// = ACTIVE OR SMTH? =
 // the currently active page table
 static _ACTIVE_PAGE_TABLE: Mutex<Option<PagingContext>> = Mutex::new(None);
 
@@ -233,14 +321,14 @@ pub struct PageAllocation {
     allocation: PartialPageAllocation,
 }
 impl PageAllocation {
-    pub(super) fn new(allocator: &mut LockedPageAllocatorWriteGuard<'_,impl PageFrameAllocator>, allocation: PartialPageAllocation) -> Self {
+    pub(super) fn new<PFA:PageFrameAllocator>(allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>, allocation: PartialPageAllocation) -> Self {
         Self {
             pagetable_tag: allocator.get_page_table().get_page_table_ptr() as *const u8,
             allocation: allocation,
         }
     }
     
-    fn assert_pt_tag(&self, allocator: &mut LockedPageAllocatorWriteGuard<'_,impl PageFrameAllocator>){
+    fn assert_pt_tag<PFA:PageFrameAllocator>(&self, allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>){
         assert!(allocator.get_page_table().get_page_table_ptr() as *const u8 == self.pagetable_tag, "Allocation used with incorrect allocator!");
     }
 }

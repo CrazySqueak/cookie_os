@@ -43,7 +43,7 @@ pub fn _kinit() {
         let pagetable = PagingContext::new();
         
         {
-            let mut allocator = memory::paging::global_pages::KERNEL_PTABLE.write();
+            let mut allocator = memory::paging::global_pages::KERNEL_PTABLE.write_when_active();
             let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
             
             // Null guard

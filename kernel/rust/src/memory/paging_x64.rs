@@ -39,12 +39,12 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
     // TODO: Handle flags properly somehow???
     unsafe fn set_subtable_addr(&mut self, idx: usize, phys_addr: usize){
         let flags = Self::_default_flags() | PageTableFlags::PRESENT;
-        klog!(Debug, "memory.paging.map", "Mapping sub-table {:x}[{}] -> {:x}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, phys_addr);
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping sub-table {:x}[{}] -> {:x}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, phys_addr);
         self.0[idx].set_addr(PhysAddr::new(phys_addr as u64), flags);
     }
     fn add_subtable_flags(&mut self, idx: usize, flags: PageFlags){
         let flags = Self::_calc_flags(self.0[idx].flags(), flags);
-        klog!(Debug, "memory.paging.map", "Setting sub-table {:x}[{}] flags to {:?}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, flags);
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Setting sub-table {:x}[{}] flags to {:?}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, flags);
         self.0[idx].set_flags(flags);
     }
     
@@ -53,12 +53,12 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
             1 => PageTableFlags::PRESENT,  // (huge page flag is used for PAT on level 1 page tables)
             _ => PageTableFlags::PRESENT | PageTableFlags::HUGE_PAGE,
         }, flags);
-        klog!(Debug, "memory.paging.map", "Mapping entry {:x}[{}] to {:x} (flags={:?})", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, physaddr, flags);
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping entry {:x}[{}] to {:x} (flags={:?})", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, physaddr, flags);
         self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);  // set addr
     }
     fn set_absent(&mut self, idx: usize, data: usize){
         let data = data.checked_shl(1).expect("Data value is out-of-bounds!") &!1;  // clear the "present" flag
-        klog!(Debug, "memory.paging.map", "Mapping entry {:x}[{}] to N/A (data={:x})", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, data);
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping entry {:x}[{}] to N/A (data={:x})", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, data);
         unsafe { *((&mut self.0[idx] as *mut PageTableEntry) as *mut u64) = data as u64; }  // Update entry manually
     }
 }
@@ -90,13 +90,13 @@ pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
     use x86_64::registers::control::Cr3;
     
     let (oldaddr, cr3flags) = Cr3::read();
-    klog!(Debug, "memory.paging", "Switching active page table from 0x{:x} to 0x{:x}. (cr3flags={:?})", oldaddr.start_address(), phys_addr, cr3flags);
+    klog!(Debug, MEMORY_PAGING_MAPPINGS, "Switching active page table from 0x{:x} to 0x{:x}. (cr3flags={:?})", oldaddr.start_address(), phys_addr, cr3flags);
     Cr3::write(PhysFrame::from_start_address(PhysAddr::new(phys_addr.try_into().unwrap())).expect("Page Table Address Not Aligned!"), cr3flags)
 }
 
 pub(super) fn inval_tlb_pg(virt_addr: usize){
     use x86_64::instructions::tlb::flush;
     use x86_64::addr::VirtAddr;
-    klog!(Debug, "memory.paging.tlb", "Flushing TLB for 0x{:x}", virt_addr);
+    klog!(Debug, MEMORY_PAGING_TLB, "Flushing TLB for 0x{:x}", virt_addr);
     flush(VirtAddr::new_truncate(virt_addr.try_into().unwrap()))
 }

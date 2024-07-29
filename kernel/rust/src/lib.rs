@@ -80,12 +80,12 @@ pub extern "C" fn _kmain() -> ! {
     for i in 1..32 {
         let l = alloc::alloc::Layout::from_size_align(1024*1024*i, 2048*1024).unwrap();
         let x = memory::physical::palloc(l);
-        klog!(Debug, "memory.physical", "Allocated {:?}, Got {:?}\n", l, x);
+        klog!(Debug, MEMORY_PHYSICAL, "Allocated {:?}, Got {:?}\n", l, x);
     }
     
-    klog!(Debug, "beep", "Test1235");
-    klog!(Debug, "beep", "2+2={}", 5);
-    klog!(Warning, "beep", "Wait no");
+    klog!(Debug, ROOT, "Test1235");
+    klog!(Debug, ROOT, "2+2={}", 5);
+    klog!(Warning, ROOT, "Wait no");
     
     // TODO
     loop{}//lowlevel::halt();
@@ -94,7 +94,7 @@ pub extern "C" fn _kmain() -> ! {
 /// This function is called on panic.
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    klog!(Fatal, "panic", "KERNEL PANIC: {}", _info);
+    klog!(Fatal, ROOT, "KERNEL PANIC: {}", _info);
     
     // Forcefully acquire a reference to the current writer, bypassing the lock (which may have been locked at the time of the panic and will not unlock as we don't have stack unwinding)
     let mut writer = unsafe{let wm=core::mem::transmute::<&display_vga::LockedVGAConsoleWriter,&spin::Mutex<display_vga::VGAConsoleWriter>>(&*VGA_WRITER);wm.force_unlock();wm.lock()};

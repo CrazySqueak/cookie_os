@@ -29,14 +29,15 @@ pub fn grow_kheap(amount: usize) -> Result<usize,()>{
     use core::mem::forget;
     use core::alloc::Layout;
     
+    // TODO: Paging support
     let l = Layout::from_size_align(amount, 4096).unwrap();
-    klog!(Debug, "memory.kheap", "Expanding kernel heap by {} bytes...", amount);
+    klog!(Debug, MEMORY_KHEAP, "Expanding kernel heap by {} bytes...", amount);
     let allocation = palloc(l).ok_or_else(||{
-        klog!(Severe, "memory.kheap", "Unable to expand kernel heap! Requested {} bytes but allocation failed.", amount);
+        klog!(Severe, MEMORY_KHEAP, "Unable to expand kernel heap! Requested {} bytes but allocation failed.", amount);
     })?;
     
     let bytes_added = allocation.get_size();
-    klog!(Info, "memory.kheap", "Expanded kernel heap by {} bytes.", bytes_added);
+    klog!(Info, MEMORY_KHEAP, "Expanded kernel heap by {} bytes.", bytes_added);
     
     crate::lowlevel::without_interrupts(||{ unsafe {
         // Add allocation to heap

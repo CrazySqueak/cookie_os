@@ -160,7 +160,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         // We only support a non-page-sized remainder if we support sub-tables (as page frames cannot be divided)
         let pages = if SUBTABLES { size / Self::PAGE_SIZE } else { size.div_ceil(Self::PAGE_SIZE) };
         let remainder = if SUBTABLES { size % Self::PAGE_SIZE } else { 0 };
-        klog!(Debug, "memory.paging.allocator.mlff", "allocate: addr=ANY pages={} rem={} search=[0,{})", pages, remainder, Self::NPAGES-pages+1);
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "allocate: addr=ANY pages={} rem={} search=[0,{})", pages, remainder, Self::NPAGES-pages+1);
         
         // TODO: Replace with something that's not effectively O(n^2)
         for offset in 0..(Self::NPAGES-pages+1) {
@@ -192,7 +192,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
                 let contig_result = self._alloc_contiguous(start, end);
                 
                 // Return allocation
-                klog!(Debug, "memory.paging.allocator.mlff", "Allocated {} pages (page_size=0x{:x}) + {} bytes @ start={}", pages, Self::PAGE_SIZE, remainder, offset);
+                klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Allocated {} pages (page_size=0x{:x}) + {} bytes @ start={}", pages, Self::PAGE_SIZE, remainder, offset);
                 return Some(self._build_allocation(contig_result,remainder_allocated));
             };
         }
@@ -209,11 +209,11 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         let remainder = if SUBTABLES { size % Self::PAGE_SIZE } else { 0 };
         let end = start_idx+pages;
         
-        klog!(Debug, "memory.paging.allocator.mlff", "allocate_at: offset=0x{:x} page_size=0x{:x} start={} pages={} rem={}", addr, Self::PAGE_SIZE, start_idx, pages, remainder);
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "allocate_at: offset=0x{:x} page_size=0x{:x} start={} pages={} rem={}", addr, Self::PAGE_SIZE, start_idx, pages, remainder);
         
         // Check that the main area is clear
         for i in start_idx..end {
-            if self.get_availability(i) != 0b00u8 { klog!(Debug, "memory.paging.allocator.mlff", "Unable to allocate start={} pages={}: index {} is occupied.", start_idx, pages, i); return None; }
+            if self.get_availability(i) != 0b00u8 { klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Unable to allocate start={} pages={}: index {} is occupied.", start_idx, pages, i); return None; }
         }
         // Check that the remainder is clear (if applicable)
         let remainder_allocated = 'allocrem: { if remainder != 0 && SUBTABLES {
@@ -221,7 +221,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
                     break 'allocrem Some((PAllocSubAlloc{index:end,offset:pages*Self::PAGE_SIZE,alloc:alloc},0));
                 }
             // failed
-            klog!(Debug, "memory.paging.allocator.mlff", "Unable to allocate start={} pages={}: failed to allocate remainder.", start_idx, pages);
+            klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Unable to allocate start={} pages={}: failed to allocate remainder.", start_idx, pages);
             return None;
             }
             // no remainder
@@ -232,7 +232,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         let contig_result = self._alloc_contiguous(start_idx, end);
         
         // And return
-        klog!(Debug, "memory.paging.allocator.mlff", "Allocated {} pages (page_size=0x{:x}) + {} bytes.", pages, Self::PAGE_SIZE, remainder);
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Allocated {} pages (page_size=0x{:x}) + {} bytes.", pages, Self::PAGE_SIZE, remainder);
         Some(self._build_allocation(contig_result,remainder_allocated))
     }
 
@@ -240,7 +240,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         assert!(SUBTABLES);
         assert!(self.get_availability(index) == 0b00u8);
         
-        klog!(Debug, "memory.paging.allocator.mlff", "Adding global page @{} -> {:x} (flags={:?})", index, phys_addr, flags);
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Adding global page @{} -> {:x} (flags={:?})", index, phys_addr, flags);
         
         self.page_table.set_subtable_addr(index, phys_addr);
         self.page_table.add_subtable_flags(index, flags);

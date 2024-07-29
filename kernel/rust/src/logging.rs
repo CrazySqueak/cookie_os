@@ -40,22 +40,50 @@ pub fn _kernel_log(level: LogLevel, component: &str, msg: &str){
 }
 
 macro_rules! klog {
-    ($level: ident, $component: literal, $template:expr, $($x:expr),*) => {
+    ($level: ident, $component:ident, $template:expr, $($x:expr),*) => {
         crate::logging::klog!($level, $component, &alloc::format!($template, $($x),*));
     };
     
-    ($level: ident, $component:literal, $msg: expr) => {
+    ($level: ident, $component:ident, $msg: expr) => {
         {
             use crate::logging::LogLevel::*;
-            if $level >= crate::logging::configured_log_level($component.as_bytes()) {
-                crate::logging::_kernel_log($level, &alloc::format!("{}@{}:{}", $component, file!(), line!()), $msg);
-            }
+            use crate::logging::contexts::*;
+            if const { ($level as u8) >= ($component as u8) } { crate::logging::_kernel_log($level, stringify!($component), $msg) };
         }
     };
 }
 pub(in crate) use klog;
 
-// Logging config
+// Logging contexts allow filtered log levels to be configured per-context
+pub mod contexts {
+    use super::LogLevel; use LogLevel::*;
+    macro_rules! def_context {
+        ($id: ident, $parent: ident, $filter_level: ident) => {
+            pub const $id: LogLevel = $filter_level;
+        };
+        ($id: ident, $parent: ident) => {
+            pub const $id: LogLevel = $parent;
+        };
+    }
+    
+    pub const DEFAULT_MIN_LOG_LEVEL: super::LogLevel = Info;
+    pub const ROOT: LogLevel = DEFAULT_MIN_LOG_LEVEL;
+    
+    // Configure contexts in here! :)
+    def_context!(MEMORY, ROOT);
+      def_context!(MEMORY_PAGING, MEMORY, Debug);
+        def_context!(MEMORY_PAGING_CONTEXT, MEMORY_PAGING);
+        def_context!(MEMORY_PAGING_ALLOCATOR, MEMORY_PAGING);
+          def_context!(MEMORY_PAGING_ALLOCATOR_MLFF, MEMORY_PAGING_ALLOCATOR);
+        def_context!(MEMORY_PAGING_MAPPINGS, MEMORY_PAGING);
+        def_context!(MEMORY_PAGING_TLB, MEMORY_PAGING);
+      def_context!(MEMORY_KHEAP, MEMORY, Debug);
+      def_context!(MEMORY_PHYSICAL, MEMORY);
+        def_context!(MEMORY_PHYSICAL_BUDDIES, MEMORY_PHYSICAL, Warning);
+        def_context!(MEMORY_PHYSICAL_RAMMAP, MEMORY_PHYSICAL);
+        def_context!(MEMORY_PHYSICAL_ALLOCATOR, MEMORY_PHYSICAL);
+}
+
 // Returns the minimum log level for the chosen component
 // log messages below that are ignored
 // Note: more specific configs (e.g. x.y.z) override less specific ones (e.g. x.y)

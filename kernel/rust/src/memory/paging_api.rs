@@ -138,7 +138,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
 pub struct PagingContext(LockedPageAllocator<BaseTLPageAllocator>);
 impl PagingContext {
     pub fn new() -> Self {
-        klog!(Debug, "memory.paging.context", "Creating new paging context.");
+        klog!(Debug, MEMORY_PAGING_CONTEXT, "Creating new paging context.");
         let mut allocator = BaseTLPageAllocator::new();
         // Add global pages
         for (i,addr) in global_pages::GLOBAL_TABLE_PHYSADDRS.iter().enumerate(){
@@ -167,7 +167,7 @@ impl PagingContext {
         
         // activate table
         let table_addr = ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize);
-        klog!(Info, "memory.paging.context", "Switching active context to 0x{:x}", table_addr);
+        klog!(Info, MEMORY_PAGING_CONTEXT, "Switching active context to 0x{:x}", table_addr);
         set_active_page_table(table_addr);
         
         // store reference

@@ -253,6 +253,15 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     fn get_page_table(&mut self) -> &mut PFA {
         &mut*self.guard
     }
+    /* Used for logging */
+    #[inline(always)]
+    fn _pt_phys_addr(&mut self) -> usize {
+        ptaddr_virt_to_phys(self.get_page_table().get_page_table_ptr() as usize)
+    }
+    #[inline(always)]
+    fn _fmt_pa(&mut self, allocation: &PageAllocation) -> alloc::string::String {
+        alloc::format!("{:x}[{:?}]", self._pt_phys_addr(), allocation.allocation)
+    }
     
     // Allocating
     // (we don't need to flush the TLB for allocation as the page has gone from NOT PRESENT -> NOT PRESENT - instead we flush it when it's mapped to an address)
@@ -282,6 +291,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */
     pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize, flags: PageFlags){
         allocation.assert_pt_tag(self);
+        klog!(Debug, MEMORY_PAGING_CONTEXT, "Mapping {} to base addr {:x} (flags={:?})", self._fmt_pa(allocation), base_addr, flags);
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
         // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.
         unsafe {
@@ -298,6 +308,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
         // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.
         allocation.assert_pt_tag(self);
+        klog!(Debug, MEMORY_PAGING_CONTEXT, "Mapping {} as absent (data={:x})", self._fmt_pa(allocation), data);
         unsafe {
             Self::_set_missing_inner(self.get_page_table(), allocation.into(), data);
         }
@@ -311,6 +322,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         Note: No check is performed to ensure that the allocation is correct nor that this page table is active, as the only consequence (provided all other code handling Page Tables / TLB is correct) is a performance hit from the unnecessary INVLPG operations + the resulting cache misses.
         Note: Using this method is unnecessary yourself. Usually it is provided by write_when_active or similar. */
     pub fn invalidate_tlb(&mut self, allocation: &PageAllocation){
+        klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
         let vmem_offset = self.meta.offset;
         Self::_inval_tlb_inner(self.get_page_table(), allocation.into(), vmem_offset);
     }

@@ -103,6 +103,59 @@ mod sealed {
                 entries, suballocs,
             }
         }
+        fn _fmt_inner(&self, dbl: &mut core::fmt::DebugList<'_,'_>, prefix: &str, parentoffset: usize){
+            // Entries
+            let mut previndex: [usize; 2] = [69420, 69440]; let mut prevoff: [usize; 2] = [42069, 42068];  // [recent, 2nd most recent]
+            let mut doneellipsis: bool = false;
+            
+            #[inline(always)]
+            fn fmte(dbl: &mut core::fmt::DebugList<'_,'_>, prefix: &str, idx: usize, offset: usize){
+                dbl.entry(&alloc::format!("{}[{}]@+{:x}", prefix, idx, offset));
+            }
+            
+            for entry in &self.entries {
+                // (handle consistent entries with a "...")
+                'fmtentry: {
+                    if entry.index == previndex[0]+1 {
+                        // Safety: if you're seriously using the 64th bit on a physical address offset  then you're fucking mental - it's not even supported by the page table
+                        let offset: isize = entry.offset as isize;
+                        let prevoff: [isize; 2] = [prevoff[0] as isize, prevoff[1] as isize];
+                        
+                        let prevdiff: isize = prevoff[0] - prevoff[1];
+                        let curdiff: isize = offset - prevoff[0];
+                        if prevdiff == curdiff {
+                            if !doneellipsis { dbl.entry(&"..."); doneellipsis = true; }
+                            // We're done here!
+                            break 'fmtentry;
+                        }
+                    }
+                    // Else clear ... state
+                    if doneellipsis {
+                        doneellipsis = false;
+                        fmte(dbl, prefix, previndex[1], parentoffset+prevoff[1]);
+                        fmte(dbl, prefix, previndex[0], parentoffset+prevoff[0]);
+                    }
+                    
+                    // And add current one...
+                    fmte(dbl, prefix, entry.index, entry.offset);
+                }
+                previndex[1] = previndex[0]; previndex[0] = entry.index;
+                prevoff[1] = prevoff[0]; prevoff[0] = entry.offset;
+            }
+            // Clear ... state
+            if doneellipsis { fmte(dbl, prefix, previndex[1], parentoffset+prevoff[1]); fmte(dbl, prefix, previndex[0], parentoffset+prevoff[0]); }
+            // Sub-allocations
+            for suballoc in &self.suballocs {
+                suballoc.alloc._fmt_inner(dbl, &alloc::format!("{}[{}]", prefix, suballoc.index), parentoffset+suballoc.offset);
+            }
+        }
+    }
+    impl core::fmt::Debug for PartialPageAllocation {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut dbl = f.debug_list();
+            self._fmt_inner(&mut dbl, "", 0);
+            dbl.finish()
+        }
     }
 }
 pub(in self) use sealed::{PageFrameAllocatorImpl,IPageTableImpl,PAllocEntry,PAllocSubAlloc,PartialPageAllocation};

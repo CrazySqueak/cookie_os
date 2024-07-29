@@ -89,11 +89,17 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     }
     
     pub fn write(&self) -> LPageAllocatorRWLWriteGuard<PFA> {
-        LockedPageAllocatorWriteGuard{guard: self.0.write(), meta: self.0.metadata()}
+        let options = LPAWGOptions::new_default();
+        
+        LockedPageAllocatorWriteGuard{guard: self.0.write(), meta: self.0.metadata(), options}
     }
     pub fn try_write(&self) -> Option<LPageAllocatorRWLWriteGuard<PFA>> {
         match self.0.try_write() {
-            Some(guard) => Some(LockedPageAllocatorWriteGuard{guard, meta: self.0.metadata()}),
+            Some(guard) => {
+                let options = LPAWGOptions::new_default();
+                
+                Some(LockedPageAllocatorWriteGuard{guard, meta: self.0.metadata(), options})
+            },
             None => None,
         }
     }
@@ -124,7 +130,11 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
                 // Whereas here we've ensured that the readers are all CPU/TLB readers or something
                 // So we want to forcibly create an upgraded version
                 let write_guard = unsafe { ForcedUpgradeGuard::new(&self.0, upgradable) };
-                return LockedPageAllocatorWriteGuard{guard: write_guard, meta: self.0.metadata()};
+                
+                let mut options = LPAWGOptions::new_default();
+                options.auto_flush_tlb = true;
+                
+                return LockedPageAllocatorWriteGuard{guard: write_guard, meta: self.0.metadata(), options};
             } else {
                 // Relax
                 // 🛏☺☕ ahhh
@@ -191,12 +201,29 @@ impl core::ops::Deref for PagingContext {
 }
 
 // = GUARDS =
-pub struct LockedPageAllocatorWriteGuard<PFA: PageFrameAllocator, GuardT, const MUST_INV_TLB: bool>
-  where GuardT: core::ops::Deref<Target=PFA> + core::ops::DerefMut<Target=PFA>
-    { guard: GuardT, meta: LPAMetadata }
+pub struct LPAWGOptions {
+    pub(super) auto_flush_tlb: bool,
+    pub(super) is_global_page: bool,
+}
+impl LPAWGOptions {
+    fn new_default() -> Self {
+        Self {
+            auto_flush_tlb: false,
+            is_global_page: false,  // TODO
+        }
+    }
+}
+
+pub struct LockedPageAllocatorWriteGuard<PFA: PageFrameAllocator, GuardT>
+  where GuardT: core::ops::Deref<Target=PFA> + core::ops::DerefMut<Target=PFA> 
+  {
+    guard: GuardT, meta: LPAMetadata,
+    
+    pub(super) options: LPAWGOptions,
+}
 //pub type TLPageAllocatorWriteGuard<'a> = LockedPageAllocatorWriteGuard<'a, BaseTLPageAllocator>;
-pub type LPageAllocatorRWLWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, RwLockWriteGuard<'a, PFA>, false>;
-pub type LPageAllocatorUnsafeWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, ForcedUpgradeGuard<'a, PFA>, true>;
+pub type LPageAllocatorRWLWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, RwLockWriteGuard<'a, PFA>>;
+pub type LPageAllocatorUnsafeWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, ForcedUpgradeGuard<'a, PFA>>;
 
 macro_rules! ppa_define_foreach {
     // Note: body takes four variables from the outside: allocator, ptable, index, and offset (as well as any other args they specify).
@@ -220,7 +247,7 @@ macro_rules! ppa_define_foreach {
         }
     }
 }
-impl<PFA: PageFrameAllocator, GuardT, const MUST_INV_TLB: bool> LockedPageAllocatorWriteGuard<PFA, GuardT, MUST_INV_TLB> 
+impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT> 
   where GuardT: core::ops::Deref<Target=PFA> + core::ops::DerefMut<Target=PFA>
   {
     fn get_page_table(&mut self) -> &mut PFA {
@@ -260,7 +287,7 @@ impl<PFA: PageFrameAllocator, GuardT, const MUST_INV_TLB: bool> LockedPageAlloca
         unsafe {
             Self::_set_addr_inner(self.get_page_table(), allocation.into(), base_addr, flags);
         }
-        if MUST_INV_TLB { self.invalidate_tlb(allocation) };
+        if self.options.auto_flush_tlb { self.invalidate_tlb(allocation) };
     }
     
     ppa_define_foreach!(unsafe: _set_missing_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, data: usize, {
@@ -274,7 +301,7 @@ impl<PFA: PageFrameAllocator, GuardT, const MUST_INV_TLB: bool> LockedPageAlloca
         unsafe {
             Self::_set_missing_inner(self.get_page_table(), allocation.into(), data);
         }
-        if MUST_INV_TLB { self.invalidate_tlb(allocation) };
+        if self.options.auto_flush_tlb { self.invalidate_tlb(allocation) };
     }
     
     ppa_define_foreach!(: _inval_tlb_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, vmem_start: usize, {
@@ -333,14 +360,14 @@ pub struct PageAllocation {
     allocation: PartialPageAllocation,
 }
 impl PageAllocation {
-    pub(super) fn new<PFA:PageFrameAllocator,const MUST_INV_TLB: bool>(allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>, MUST_INV_TLB>, allocation: PartialPageAllocation) -> Self {
+    pub(super) fn new<PFA:PageFrameAllocator>(allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>, allocation: PartialPageAllocation) -> Self {
         Self {
             pagetable_tag: allocator.get_page_table().get_page_table_ptr() as *const u8,
             allocation: allocation,
         }
     }
     
-    fn assert_pt_tag<PFA:PageFrameAllocator,const MUST_INV_TLB: bool>(&self, allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>, MUST_INV_TLB>){
+    fn assert_pt_tag<PFA:PageFrameAllocator>(&self, allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>){
         assert!(allocator.get_page_table().get_page_table_ptr() as *const u8 == self.pagetable_tag, "Allocation used with incorrect allocator!");
     }
 }

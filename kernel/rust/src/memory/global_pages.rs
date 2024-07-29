@@ -22,11 +22,15 @@ impl GlobalPageTable {
     }
     /* This method is for testing. It will ALWAYS deadlock. */
     pub fn write(&self) -> LPageAllocatorRWLWriteGuard<GlobalPTType> {
-        self.0.write()
+        let mut guard = self.0.write();
+        guard.options.is_global_page = true;
+        guard
     }
     /* Write when active!!! */
     pub fn write_when_active(&self) -> LPageAllocatorUnsafeWriteGuard<GlobalPTType> {
-        self.0.write_when_active()
+        let mut guard = self.0.write_when_active();
+        guard.options.is_global_page = true;
+        guard
     }
 }
 // TODO

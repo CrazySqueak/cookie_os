@@ -9,8 +9,9 @@ use super::*;
 type BaseTLPageAllocator = arch::TopLevelPageAllocator;
 use arch::{set_active_page_table,inval_tlb_pg};
 
-// Note: Flags follow a "union" pattern
+// These flags represent various page permissions/settings, and follow a "union" pattern
 // in other words: the combination of all flags should be the most permissive/compatible option
+// (with the exception of internal flags (beginning with a _) which are used internally to override various settings/flags, and should not be set by user code)
 bitflags::bitflags! {
     #[derive(Debug,Clone,Copy)]
     pub struct PageFlags: u16 {
@@ -20,6 +21,13 @@ bitflags::bitflags! {
         const WRITEABLE = 1<<1;
         // Execution is allowed
         const EXECUTABLE = 1<<2;
+        
+        // = INTERNAL FLAGS =
+        // Page mapping is global
+        // If set for a given mapping, this must be true for that mapping (any sub-table mappings this gets set on must also be global)
+        // This is a break from the usual "when set on shared mappings it picks the least headache-causing"
+        // TODO: Maybe make a different method for handling these sorts of things? idk
+        const _OVR_GLOBAL = 1<<15;
     }
 }
 
@@ -289,8 +297,11 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     }, { ptable.add_subtable_flags(index, flags); });
     
     /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */
-    pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize, flags: PageFlags){
+    pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize, mut flags: PageFlags){
         allocation.assert_pt_tag(self);
+        
+        if self.options.is_global_page { flags |= PageFlags::_OVR_GLOBAL; }
+        
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Mapping {} to base addr {:x} (flags={:?})", self._fmt_pa(allocation), base_addr, flags);
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
         // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.

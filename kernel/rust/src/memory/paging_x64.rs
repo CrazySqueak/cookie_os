@@ -17,7 +17,13 @@ impl<const LEVEL: usize> X64PageTable<LEVEL> {
         if add.contains(PageFlags::USER_ALLOWED) { previous |=  PageTableFlags::USER_ACCESSIBLE };
         if add.contains(PageFlags::WRITEABLE   ) { previous |=  PageTableFlags::WRITABLE        };
         if add.contains(PageFlags::EXECUTABLE  ) { previous &=! PageTableFlags::NO_EXECUTE      };
+        
+        if add.contains(PageFlags::_OVR_GLOBAL ) { previous |= PageTableFlags::GLOBAL           };
         previous
+    }
+    
+    fn _logging_physaddr(&self) -> usize {
+        ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize)
     }
 }
 impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
@@ -39,12 +45,12 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
     // TODO: Handle flags properly somehow???
     unsafe fn set_subtable_addr(&mut self, idx: usize, phys_addr: usize){
         let flags = Self::_default_flags() | PageTableFlags::PRESENT;
-        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping sub-table {:x}[{}] -> {:x}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, phys_addr);
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping sub-table {:x}[{}] -> {:x}", self._logging_physaddr(), idx, phys_addr);
         self.0[idx].set_addr(PhysAddr::new(phys_addr as u64), flags);
     }
     fn add_subtable_flags(&mut self, idx: usize, flags: PageFlags){
         let flags = Self::_calc_flags(self.0[idx].flags(), flags);
-        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Setting sub-table {:x}[{}] flags to {:?}", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, flags);
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Setting sub-table {:x}[{}] flags to {:?}", self._logging_physaddr(), idx, flags);
         self.0[idx].set_flags(flags);
     }
     
@@ -53,7 +59,7 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
             1 => PageTableFlags::PRESENT,  // (huge page flag is used for PAT on level 1 page tables)
             _ => PageTableFlags::PRESENT | PageTableFlags::HUGE_PAGE,
         }, flags);
-        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping entry {:x}[{}] to {:x} (flags={:?})", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, physaddr, flags);
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping entry {:x}[{}] to {:x} (flags={:?})", self._logging_physaddr(), idx, physaddr, flags);
         self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);  // set addr
     }
     fn set_absent(&mut self, idx: usize, data: usize){

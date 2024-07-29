@@ -243,7 +243,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Adding global page @{} -> {:x} (flags={:?})", index, phys_addr, flags);
         
         self.page_table.set_subtable_addr(index, phys_addr);
-        self.page_table.add_subtable_flags(index, flags);
+        self.page_table.add_subtable_flags(index, flags | PageFlags::_OVR_GLOBAL);
         // Set spot in availability bitmap, to ensure that it isn't overwritten
         self.set_availability(index, 0b11u8);
     }

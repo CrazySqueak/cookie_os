@@ -12,15 +12,14 @@ use arch::{set_active_page_table,inval_tlb_pg};
 // Note: Flags follow a "union" pattern
 // in other words: the combination of all flags should be the most permissive/compatible option
 bitflags::bitflags! {
+    #[derive(Debug,Clone,Copy)]
     pub struct PageFlags: u16 {
         // User can access this page
         const USER_ALLOWED = 1<<0;
-        // User can write to this page (requires USER_ALLOWED)
+        // User can write to this page (provided they have access to it)
         const WRITEABLE = 1<<1;
         // Execution is allowed
         const EXECUTABLE = 1<<2;
-        // This page is not present in all page tables, and so should be invalidated when CR3 is updated
-        const TLB_NON_GLOBAL = 1<<3;
     }
 }
 
@@ -144,7 +143,7 @@ impl PagingContext {
         // Add global pages
         for (i,addr) in global_pages::GLOBAL_TABLE_PHYSADDRS.iter().enumerate(){
             // SAFETY: See documentation for put_global_table and GLOBAL_TABLE_PHYSADDRS
-            unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i,*addr); }
+            unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i,*addr, PageFlags::EXECUTABLE); }  // TODO per-global-page flags
         }
         // Return
         Self(LockedPageAllocator::new(allocator, LPAMetadata { offset: 0 }))
@@ -201,16 +200,21 @@ pub type LPageAllocatorUnsafeWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard
 
 macro_rules! ppa_define_foreach {
     // Note: body takes four variables from the outside: allocator, ptable, index, and offset (as well as any other args they specify).
-    ($($fkw:ident)*: $fnname: ident, $pfaname:ident:&mut PFA, $allocname:ident:&PPA, $ptname:ident:&mut IPT, $idxname:ident:usize, $offname:ident:usize, $($argname:ident:$argtype:ty),*, $body:block) => {
+    ($($fkw:ident)*: $fnname: ident, $pfaname:ident:&mut PFA, $allocname:ident:&PPA, $ptname:ident:&mut IPT, $idxname:ident:usize, $offname:ident:usize, $($argname:ident:$argtype:ty),*, $body:block, $sabody: block) => {
         $($fkw)* fn $fnname($pfaname: &mut impl PageFrameAllocator, $allocname: &PartialPageAllocation, $($argname:$argtype),*){
-            // entries
+            // entries (full pages)
             let $ptname = $pfaname.get_page_table_mut();
             for &PAllocEntry{index:$idxname, offset:$offname} in &$allocname.entries {
-                $body;
+                $body;  // Apply changes to full pages
             }
-            // sub-allocators
-            for PAllocSubAlloc{index, offset, alloc: suballocation} in &$allocname.suballocs {
-                let suballocator = $pfaname.get_suballocator_mut(*index).expect("Allocation expected sub-allocator but none was found!");
+            // Apply current-level changes to subtables (if applicable)
+            // I hope dear god LLVM removes this loop if $sabody is empty
+            for &PAllocSubAlloc{index:$idxname, offset:$offname, ..} in &$allocname.suballocs {
+                $sabody;
+            }
+            // Apply changes in sub-allocators (by recursing)
+            for &PAllocSubAlloc{index:$idxname, offset, alloc: ref suballocation} in &$allocname.suballocs {
+                let suballocator = $pfaname.get_suballocator_mut($idxname).expect("Allocation expected sub-allocator but none was found!");
                 Self::$fnname(suballocator,suballocation, $($argname),*);  // TODO: offset?
             }
         }
@@ -244,24 +248,24 @@ impl<PFA: PageFrameAllocator, GuardT, const MUST_INV_TLB: bool> LockedPageAlloca
     }
     
     // Managing allocations
-    ppa_define_foreach!(unsafe: _set_addr_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, base_addr: usize, {
-        ptable.set_huge_addr(index, base_addr+offset);
-    });
+    ppa_define_foreach!(unsafe: _set_addr_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, base_addr: usize, flags: PageFlags, {
+        ptable.set_huge_addr(index, base_addr+offset, flags);
+    }, { ptable.add_subtable_flags(index, flags); });
     
     /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */
-    pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize){
+    pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize, flags: PageFlags){
         allocation.assert_pt_tag(self);
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
         // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.
         unsafe {
-            Self::_set_addr_inner(self.get_page_table(), allocation.into(), base_addr);
+            Self::_set_addr_inner(self.get_page_table(), allocation.into(), base_addr, flags);
         }
         if MUST_INV_TLB { self.invalidate_tlb(allocation) };
     }
     
     ppa_define_foreach!(unsafe: _set_missing_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, data: usize, {
         ptable.set_absent(index, data);
-    });
+    }, {});
     /* Set the given allocation as absent (not in physical memory). */
     pub fn set_absent(&mut self, allocation: &PageAllocation, data: usize){
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
@@ -275,7 +279,7 @@ impl<PFA: PageFrameAllocator, GuardT, const MUST_INV_TLB: bool> LockedPageAlloca
     
     ppa_define_foreach!(: _inval_tlb_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, vmem_start: usize, {
         inval_tlb_pg(vmem_start + offset)
-    });
+    }, {});
     /* Invalidate the TLB entries for the given allocation (on the current CPU).
         Note: No check is performed to ensure that the allocation is correct nor that this page table is active, as the only consequence (provided all other code handling Page Tables / TLB is correct) is a performance hit from the unnecessary INVLPG operations + the resulting cache misses.
         Note: Using this method is unnecessary yourself. Usually it is provided by write_when_active or similar. */

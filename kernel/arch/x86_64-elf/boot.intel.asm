@@ -179,6 +179,7 @@ configure_identity_paging:
 %define CR4FLAG_PAE 1<<5
 %define MSR_EFER 0xC0000080
 %define EFERFLAG_LONGMODE 1<<8
+%define EFERFLAG_NXE 1<<11
 %define CR0FLAG_PAGING 1<<31
 enable_paging_and_long_mode:
     ; load P4 into CR3
@@ -193,7 +194,7 @@ enable_paging_and_long_mode:
     ; set long mode in the EFER MSR
     mov ecx, MSR_EFER
     rdmsr
-    or eax, EFERFLAG_LONGMODE
+    or eax, EFERFLAG_LONGMODE | EFERFLAG_NXE
     wrmsr
     
     ; Enable paging

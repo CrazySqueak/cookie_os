@@ -236,13 +236,14 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         Some(self._build_allocation(contig_result,remainder_allocated))
     }
 
-    unsafe fn put_global_table(&mut self, index: usize, phys_addr: usize){
+    unsafe fn put_global_table(&mut self, index: usize, phys_addr: usize, flags: PageFlags){
         assert!(SUBTABLES);
         assert!(self.get_availability(index) == 0b00u8);
         
-        klog!(Debug, "memory.paging.allocator.mlff", "Adding global page @{} -> {:x}", index, phys_addr);
+        klog!(Debug, "memory.paging.allocator.mlff", "Adding global page @{} -> {:x} (flags={:?})", index, phys_addr, flags);
         
-        self.page_table.set_subtable_addr(index, phys_addr);  // TODO: Flags
+        self.page_table.set_subtable_addr(index, phys_addr);
+        self.page_table.add_subtable_flags(index, flags);
         // Set spot in availability bitmap, to ensure that it isn't overwritten
         self.set_availability(index, 0b11u8);
     }

@@ -53,7 +53,7 @@ mod sealed {
             SAFETY: The given address must be the physical address of the table. Global page tables are expected to belong to the 'static lifetime.
                     Global page tables must be present for a given vmem addr in all paging contexts, as it is not cleared from the TLB when switching.
                     And many more. Here be dragons. */
-        unsafe fn put_global_table(&mut self, index: usize, phys_addr: usize);
+        unsafe fn put_global_table(&mut self, index: usize, phys_addr: usize, flags: PageFlags);
     }
 
     pub trait IPageTableImpl {
@@ -80,8 +80,11 @@ mod sealed {
         unsafe fn set_subtable_addr_from_allocator<PFA: PageFrameAllocator>(&mut self, idx: usize, allocator: &PFA){
             self.set_subtable_addr(idx, ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize))
         }
+        /* Add the given flags to the subtable (defaulting to the most permissive option). */
+        fn add_subtable_flags(&mut self, idx: usize, flags: PageFlags);
+        
         /* Set the address for the given item (huge pages only, not subtables). */
-        fn set_huge_addr(&mut self, idx: usize, physaddr: usize);
+        fn set_huge_addr(&mut self, idx: usize, physaddr: usize, flags: PageFlags);
         /* Set the given item as absent, and clear its present flag. */
         fn set_absent(&mut self, idx: usize, data: usize);
     }

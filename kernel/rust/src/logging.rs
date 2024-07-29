@@ -83,26 +83,3 @@ pub mod contexts {
         def_context!(MEMORY_PHYSICAL_RAMMAP, MEMORY_PHYSICAL);
         def_context!(MEMORY_PHYSICAL_ALLOCATOR, MEMORY_PHYSICAL);
 }
-
-// Returns the minimum log level for the chosen component
-// log messages below that are ignored
-// Note: more specific configs (e.g. x.y.z) override less specific ones (e.g. x.y)
-pub const fn configured_log_level(component: &[u8]) -> LogLevel {
-    use LogLevel::*;
-    match component {
-        b"memory.paging" => Debug,
-        b"memory.kheap" => Debug,
-        
-        b"default" => Info,
-        _ => {
-            // Split string by "." if possible
-            let mut dot_pos: Option<usize> = None;
-            let mut i = component.len()-1; while i > 0 { if component[i] == b'.' { dot_pos = Some(i); break; }; i -= 1; }
-            if let Some(dot_pos) = dot_pos {
-                let (prefix, _) = component.split_at(dot_pos);
-                configured_log_level(prefix)
-            }
-            else { configured_log_level(b"default") }
-        }
-    }
-}

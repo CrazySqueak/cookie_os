@@ -89,20 +89,36 @@ mod sealed {
         fn set_absent(&mut self, idx: usize, data: usize);
     }
     
-    pub struct PAllocEntry{pub index: usize, pub offset: usize}
-    pub struct PAllocSubAlloc{pub index: usize, pub offset: usize, pub alloc: PartialPageAllocation}
-    // PartialPageAllocation stores the indicies and offsets of page allocations internally while allocation is being done
-    pub struct PartialPageAllocation {
-        pub entries: Vec<PAllocEntry>,  
-        pub suballocs: Vec<PAllocSubAlloc>,  
-        // (offset is the offset for the start of the frame/subpage in physmem, measured from the base physmem address)
+    // (offset is the offset for the start of the frame/subpage in physmem, measured from the base physmem address)
+    pub enum PAllocItem {
+        Page{index: usize, offset: usize},
+        SubTable{index: usize, offset: usize, alloc: PartialPageAllocation}
     }
-    impl PartialPageAllocation {
-        pub fn new(entries: Vec<PAllocEntry>, suballocs: Vec<PAllocSubAlloc>) -> Self {
-            Self {
-                entries, suballocs,
+    impl PAllocItem {
+        #[inline]
+        pub fn offset(&self) -> &usize {
+            match self {
+                PAllocItem::Page { offset, .. } | PAllocItem::SubTable { offset, .. } => offset,
             }
         }
+        #[inline]
+        pub fn offset_mut(&mut self) -> &mut usize {
+            match self {
+                PAllocItem::Page { offset, .. } | PAllocItem::SubTable { offset, .. } => offset,
+            }
+        }
+    }
+    // PartialPageAllocation stores the indicies and offsets of page allocations internally
+    pub struct PartialPageAllocation(Vec<PAllocItem>);
+    impl PartialPageAllocation {
+        pub fn new(items: Vec<PAllocItem>) -> Self {
+            Self(items)
+        }
+        
+        pub fn entries(&self) -> &[PAllocItem] {
+            &self.0
+        }
+        
         fn _fmt_inner(&self, dbl: &mut core::fmt::DebugList<'_,'_>, prefix: &str, parentoffset: usize){
             // Entries
             let mut previndex: [usize; 2] = [69420, 69440]; let mut prevoff: [usize; 2] = [42069, 42068];  // [recent, 2nd most recent]
@@ -113,41 +129,48 @@ mod sealed {
                 dbl.entry(&alloc::format!("{}[{}]@+{:x}", prefix, idx, offset));
             }
             
-            for entry in &self.entries {
-                // (handle consistent entries with a "...")
-                'fmtentry: {
-                    if entry.index == previndex[0]+1 {
-                        // Safety: if you're seriously using the 64th bit on a physical address offset  then you're fucking mental - it's not even supported by the page table
-                        let offset: isize = entry.offset as isize;
-                        let prevoff: [isize; 2] = [prevoff[0] as isize, prevoff[1] as isize];
-                        
-                        let prevdiff: isize = prevoff[0] - prevoff[1];
-                        let curdiff: isize = offset - prevoff[0];
-                        if prevdiff == curdiff {
-                            if !doneellipsis { dbl.entry(&"..."); doneellipsis = true; }
-                            // We're done here!
-                            break 'fmtentry;
+            for item in &self.0 {
+                match item {
+                    entry @ &PAllocItem::Page{ index, offset } => {
+                        // Page
+                        // (handle consistent entries with a "...")
+                        'fmtentry: {
+                            if index == previndex[0]+1 {
+                                // Safety: if you're seriously using the 64th bit on a physical address offset  then you're fucking mental - it's not even supported by the page table
+                                let offset: isize = offset as isize;
+                                let prevoff: [isize; 2] = [prevoff[0] as isize, prevoff[1] as isize];
+                                
+                                let prevdiff: isize = prevoff[0] - prevoff[1];
+                                let curdiff: isize = offset - prevoff[0];
+                                if prevdiff == curdiff {
+                                    if !doneellipsis { dbl.entry(&"..."); doneellipsis = true; }
+                                    // We're done here!
+                                    break 'fmtentry;
+                                }
+                            }
+                            // Else clear ... state
+                            if doneellipsis {
+                                doneellipsis = false;
+                                fmte(dbl, prefix, previndex[1], parentoffset+prevoff[1]);
+                                fmte(dbl, prefix, previndex[0], parentoffset+prevoff[0]);
+                            }
+                            
+                            // And add current one...
+                            fmte(dbl, prefix, index, offset);
                         }
+                        previndex[1] = previndex[0]; previndex[0] = index;
+                        prevoff[1] = prevoff[0]; prevoff[0] = offset;
                     }
-                    // Else clear ... state
-                    if doneellipsis {
-                        doneellipsis = false;
-                        fmte(dbl, prefix, previndex[1], parentoffset+prevoff[1]);
-                        fmte(dbl, prefix, previndex[0], parentoffset+prevoff[0]);
+                    suballoc @ &PAllocItem::SubTable{ index, offset, ref alloc } => {
+                        // Clear ... state
+                        if doneellipsis { fmte(dbl, prefix, previndex[1], parentoffset+prevoff[1]); fmte(dbl, prefix, previndex[0], parentoffset+prevoff[0]); }
+                        // Sub-allocation
+                        alloc._fmt_inner(dbl, &alloc::format!("{}[{}]", prefix, index), parentoffset+offset);
                     }
-                    
-                    // And add current one...
-                    fmte(dbl, prefix, entry.index, entry.offset);
                 }
-                previndex[1] = previndex[0]; previndex[0] = entry.index;
-                prevoff[1] = prevoff[0]; prevoff[0] = entry.offset;
             }
             // Clear ... state
             if doneellipsis { fmte(dbl, prefix, previndex[1], parentoffset+prevoff[1]); fmte(dbl, prefix, previndex[0], parentoffset+prevoff[0]); }
-            // Sub-allocations
-            for suballoc in &self.suballocs {
-                suballoc.alloc._fmt_inner(dbl, &alloc::format!("{}[{}]", prefix, suballoc.index), parentoffset+suballoc.offset);
-            }
         }
     }
     impl core::fmt::Debug for PartialPageAllocation {
@@ -158,7 +181,7 @@ mod sealed {
         }
     }
 }
-pub(in self) use sealed::{PageFrameAllocatorImpl,IPageTableImpl,PAllocEntry,PAllocSubAlloc,PartialPageAllocation};
+pub(in self) use sealed::{PageFrameAllocatorImpl,IPageTableImpl,PAllocItem,PartialPageAllocation};
 
 #[allow(private_bounds)]
 pub trait PageFrameAllocator: PageFrameAllocatorImpl {}

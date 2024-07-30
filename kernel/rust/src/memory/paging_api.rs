@@ -254,21 +254,38 @@ macro_rules! ppa_define_foreach {
     // Note: body takes four variables from the outside: allocator, ptable, index, and offset (as well as any other args they specify).
     ($($fkw:ident)*: $fnname: ident, $pfaname:ident:&mut PFA, $allocname:ident:&PPA, $ptname:ident:&mut IPT, $idxname:ident:usize, $offname:ident:usize, $($argname:ident:$argtype:ty),*, $body:block, $sabody: block) => {
         $($fkw)* fn $fnname($pfaname: &mut impl PageFrameAllocator, $allocname: &PartialPageAllocation, $($argname:$argtype),*){
-            // entries (full pages)
             let $ptname = $pfaname.get_page_table_mut();
-            for &PAllocEntry{index:$idxname, offset:$offname} in &$allocname.entries {
-                $body;  // Apply changes to full pages
+            // Call on current-level entries
+            for item in $allocname.entries() {
+                match item {
+                    &PAllocItem::Page { index: $idxname, offset: $offname } => $body,
+                    &PAllocItem::SubTable { index: $idxname, offset: $offname, .. } => {
+                        $sabody
+                    },
+                }
             }
-            // Apply current-level changes to subtables (if applicable)
-            // I hope dear god LLVM removes this loop if $sabody is empty
-            for &PAllocSubAlloc{index:$idxname, offset:$offname, ..} in &$allocname.suballocs {
-                $sabody;
+            // Recurse into sub-allocators
+            for item in $allocname.entries() {
+                if let &PAllocItem::SubTable { index, alloc: ref suballocation, .. } = item {
+                    let suballocator = $pfaname.get_suballocator_mut(index).expect("Allocation expected sub-allocator but none was found!");
+                    Self::$fnname(suballocator,suballocation, $($argname),*);
+                }
             }
-            // Apply changes in sub-allocators (by recursing)
-            for &PAllocSubAlloc{index:$idxname, offset, alloc: ref suballocation} in &$allocname.suballocs {
-                let suballocator = $pfaname.get_suballocator_mut($idxname).expect("Allocation expected sub-allocator but none was found!");
-                Self::$fnname(suballocator,suballocation, $($argname),*);  // TODO: offset?
-            }
+            // // entries (full pages)
+            // let $ptname = $pfaname.get_page_table_mut();
+            // for &PAllocEntry{index:$idxname, offset:$offname} in &$allocname.entries {
+            //     $body;  // Apply changes to full pages
+            // }
+            // // Apply current-level changes to subtables (if applicable)
+            // // I hope dear god LLVM removes this loop if $sabody is empty
+            // for &PAllocSubAlloc{index:$idxname, offset:$offname, ..} in &$allocname.suballocs {
+            //     $sabody;
+            // }
+            // // Apply changes in sub-allocators (by recursing)
+            // for &PAllocSubAlloc{index:$idxname, offset, alloc: ref suballocation} in &$allocname.suballocs {
+            //     let suballocator = $pfaname.get_suballocator_mut($idxname).expect("Allocation expected sub-allocator but none was found!");
+            //     Self::$fnname(suballocator,suballocation, $($argname),*);  // TODO: offset?
+            // }
         }
     }
 }

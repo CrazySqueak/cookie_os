@@ -57,6 +57,14 @@ pub fn _kinit() {
             kallocator.set_base_addr(&alloc1, 0, PageFlags::new(TransitivePageFlags::EXECUTABLE /* TODO */, MappingSpecificPageFlags::PINNED)); // 0+HHOFF -> 0
             let alloc2 = kallocator.allocate(4096).expect("Test alloc failed!");
             kallocator.set_base_addr(&alloc2, 0, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()));
+            
+            // test 2
+            let at2 = kallocator.allocate(2*1024*1024*1024 + 512*1024).unwrap();
+            kallocator.set_base_addr(&at2, 1207*4096, PageFlags::new(TransitivePageFlags::USER_WRITEABLE, MappingSpecificPageFlags::empty()));
+            
+            // test 3
+            let at3 = allocator.allocate(2*1024*1024 +1).unwrap();
+            allocator.set_base_addr(&at3, 0xFFFF * 4096, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()));
         }
         
         // Activate

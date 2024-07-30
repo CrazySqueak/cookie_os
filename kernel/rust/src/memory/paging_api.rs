@@ -24,10 +24,10 @@ bitflags::bitflags! {
     // Therefore: the combination of all flags should be the most permissive/compatible option
     #[derive(Debug,Clone,Copy)]
     pub struct TransitivePageFlags: u16 {
-        // User can access this page
-        const USER_ALLOWED = 1<<0;
-        // User can write to this page (provided they have access to it)
-        const WRITEABLE = 1<<1;
+        // User can access this page.
+        const USER_READABLE = 1<<0;
+        // User can write to this page (provided they have access to it).
+        const USER_WRITEABLE = 1<<1;
         // Execution is allowed. (if feature per_page_NXE_bit is not enabled then this is ignored)
         const EXECUTABLE = 1<<2;
     }
@@ -174,9 +174,11 @@ impl PagingContext {
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Creating new paging context.");
         let mut allocator = BaseTLPageAllocator::new();
         // Add global pages
-        for (i,addr) in global_pages::GLOBAL_TABLE_PHYSADDRS.iter().enumerate(){
+        for i in 0..global_pages::N_GLOBAL_TABLES {
+            let phys_addr = global_pages::GLOBAL_TABLE_PHYSADDRS[i];
+            let flags = global_pages::GLOBAL_TABLE_FLAGS[i];
             // SAFETY: See documentation for put_global_table and GLOBAL_TABLE_PHYSADDRS
-            unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i,*addr, PageFlags::new(TransitivePageFlags::EXECUTABLE,MappingSpecificPageFlags::empty())); }  // TODO per-global-page flags
+            unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i, phys_addr, flags); }
         }
         // Return
         Self(LockedPageAllocator::new(allocator, LPAMetadata { offset: 0 }))

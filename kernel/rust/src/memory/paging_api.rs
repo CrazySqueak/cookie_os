@@ -253,22 +253,26 @@ pub type LPageAllocatorUnsafeWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard
 macro_rules! ppa_define_foreach {
     // Note: body takes four variables from the outside: allocator, ptable, index, and offset (as well as any other args they specify).
     ($($fkw:ident)*: $fnname: ident, $pfaname:ident:&mut PFA, $allocname:ident:&PPA, $ptname:ident:&mut IPT, $idxname:ident:usize, $offname:ident:usize, $($argname:ident:$argtype:ty),*, $body:block, $sabody: block) => {
-        $($fkw)* fn $fnname($pfaname: &mut impl PageFrameAllocator, $allocname: &PartialPageAllocation, $($argname:$argtype),*){
+        $($fkw)* fn $fnname($pfaname: &mut impl PageFrameAllocator, $allocname: &PartialPageAllocation, parentoffset: usize, $($argname:$argtype),*){
             let $ptname = $pfaname.get_page_table_mut();
             // Call on current-level entries
             for item in $allocname.entries() {
                 match item {
-                    &PAllocItem::Page { index: $idxname, offset: $offname } => $body,
-                    &PAllocItem::SubTable { index: $idxname, offset: $offname, .. } => {
+                    &PAllocItem::Page { index: $idxname, offset } => {
+                        let $offname = parentoffset+offset;
+                        $body
+                    },
+                    &PAllocItem::SubTable { index: $idxname, offset, .. } => {
+                        let $offname = parentoffset+offset;
                         $sabody
                     },
                 }
             }
             // Recurse into sub-allocators
             for item in $allocname.entries() {
-                if let &PAllocItem::SubTable { index, alloc: ref suballocation, .. } = item {
+                if let &PAllocItem::SubTable { index, offset, alloc: ref suballocation } = item {
                     let suballocator = $pfaname.get_suballocator_mut(index).expect("Allocation expected sub-allocator but none was found!");
-                    Self::$fnname(suballocator,suballocation, $($argname),*);
+                    Self::$fnname(suballocator,suballocation, parentoffset+offset, $($argname),*);
                 }
             }
             // // entries (full pages)
@@ -340,7 +344,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
         // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.
         unsafe {
-            Self::_set_addr_inner(self.get_page_table(), allocation.into(), base_addr, flags);
+            Self::_set_addr_inner(self.get_page_table(), allocation.into(), 0, base_addr, flags);
         }
         if self.options.auto_flush_tlb { self.invalidate_tlb(allocation) };
     }
@@ -355,7 +359,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         allocation.assert_pt_tag(self);
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Mapping {} as absent (data={:x})", self._fmt_pa(allocation), data);
         unsafe {
-            Self::_set_missing_inner(self.get_page_table(), allocation.into(), data);
+            Self::_set_missing_inner(self.get_page_table(), allocation.into(), 0, data);
         }
         if self.options.auto_flush_tlb { self.invalidate_tlb(allocation) };
     }
@@ -369,7 +373,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     pub fn invalidate_tlb(&mut self, allocation: &PageAllocation){
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
         let vmem_offset = self.meta.offset;
-        Self::_inval_tlb_inner(self.get_page_table(), allocation.into(), vmem_offset);
+        Self::_inval_tlb_inner(self.get_page_table(), allocation.into(), 0, vmem_offset);
     }
 }
 

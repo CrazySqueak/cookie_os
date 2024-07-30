@@ -156,7 +156,7 @@ mod sealed {
                             }
                             
                             // And add current one...
-                            fmte(dbl, prefix, index, offset);
+                            fmte(dbl, prefix, index, parentoffset+offset);
                         }
                         previndex[1] = previndex[0]; previndex[0] = index;
                         prevoff[1] = prevoff[0]; prevoff[0] = offset;

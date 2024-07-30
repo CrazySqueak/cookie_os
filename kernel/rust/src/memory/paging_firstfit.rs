@@ -67,7 +67,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
     
     // allocates indexes [start, end)
     fn _alloc_contiguous(&mut self, start: usize, end: usize) -> Vec<PAllocItem> {
-        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Attempting contiguous allocation from [{},{})", start, end+1);
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Attempting contiguous allocation from [{},{})", start, end);
         let mut allocs = Vec::<PAllocItem>::new();
         for idx in start..end {
             // Allocate huge pages or subtables depending on if it's necessary
@@ -95,11 +95,22 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
     }
     fn _alloc_rem(&mut self, idx: usize, inner_offset: usize, size: usize) -> Option<PartialPageAllocation> {
         assert!(SUBTABLES);
-        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Attempting remainder allocation @ index={}, size={:x}, inner_offset={:x}", idx, size, inner_offset);
         let required_availability: u8 = if size >= Self::NPAGES/2 { 0b01u8 } else { 0b10u8 };  // Only test half-full ones if our remainder is small enough
         if idx < Self::NPAGES && self.get_availability(idx) <= required_availability {
+            klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Attempting remainder allocation @ index={}, size={:x}, inner_offset={:x}", idx, size, inner_offset);
             // allocate remainder
             if let Some(allocation) = self.get_subtable_always(idx).allocate_at(inner_offset, size) {
+                self.refresh_availability(idx);
+                return Some(allocation);
+            }
+        };
+        None
+    }
+    fn _alloc_inside(&mut self, idx: usize, size: usize) -> Option<PartialPageAllocation> {
+        assert!(SUBTABLES);
+        if idx < Self::NPAGES && self.get_availability(idx) < 0b11u8 {
+            klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Attempting smaller allocation @ idx={}, size={:x}", idx, size);
+            if let Some(allocation) = self.get_subtable_always(idx).allocate(size) {
                 self.refresh_availability(idx);
                 return Some(allocation);
             }
@@ -167,35 +178,47 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         // TODO: Replace with something that's not effectively O(n^2)
         for offset in 0..(Self::NPAGES-pages+1) {
             'check: {
-                let start = offset; let end = offset+pages;
-                
-                // Test contiguous middle section
-                for i in start..end { if self.get_availability(i) != 0b00u8 { break 'check; } };
-                
-                // Test remainder (and if successful, we've got it!)
-                let remainder_allocated = 'allocrem: {
-                  if remainder != 0 && SUBTABLES {
-                    // Allocating before the contig part is TODO as idk how to ensure it's page-aligned at the bottom level
-                    //if let Some(alloc) = self._alloc_rem(start.wrapping_sub(1), Self::PAGE_SIZE-remainder, remainder){
-                    //    break 'allocrem Some((PAllocSubAlloc{index:end,offset:0,alloc:alloc}, 0));  // (allocation, offset for contig part)
-                    //}
-                    // Allocating at the end is fine
-                    if let Some(alloc) = self._alloc_rem(end, 0, remainder){
-                        break 'allocrem Some((PAllocItem::SubTable{index:end,offset:pages*Self::PAGE_SIZE,alloc:alloc}, 0));   // (allocation, offset for contig part)
-                    }
-                    // cannot allocate remainder
-                    break 'check;
-                  }
-                  // No remainder (or subtables not possible so already rounded up)
-                  None
-                };
-                
-                // Allocate middle
-                let contig_result = self._alloc_contiguous(start, end);
-                
-                // Return allocation
-                klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Allocated {} pages (page_size=0x{:x}) + {} bytes @ start={}", pages, Self::PAGE_SIZE, remainder, offset);
-                return Some(self._build_allocation(contig_result,remainder_allocated));
+                if SUBTABLES && pages < 1 {  // No whole pages needed. We don't need this complex sh*t. Just pass it down to a suballocator who is better equipped to deal with this
+                    let i = offset;
+                    
+                    let result = if let Some(alloc) = self._alloc_inside(i, remainder) {
+                        PAllocItem::SubTable { index: i, offset: 0, alloc: alloc }
+                    } else { break 'check; };
+                    
+                    klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Allocated {} bytes (page_size=0x{:x}) @ start={}", remainder, Self::PAGE_SIZE, i);
+                    return Some(PartialPageAllocation::new(alloc::vec![result]));
+                    
+                } else {
+                    let start = offset; let end = offset+pages;
+                    
+                    // Test contiguous middle section
+                    for i in start..end { if self.get_availability(i) != 0b00u8 { break 'check; } };
+                    
+                    // Test remainder (and if successful, we've got it!)
+                    let remainder_allocated = 'allocrem: {
+                      if remainder != 0 && SUBTABLES {
+                        // Allocating before the contig part is TODO as idk how to ensure it's page-aligned at the bottom level
+                        //if let Some(alloc) = self._alloc_rem(start.wrapping_sub(1), Self::PAGE_SIZE-remainder, remainder){
+                        //    break 'allocrem Some((PAllocSubAlloc{index:end,offset:0,alloc:alloc}, 0));  // (allocation, offset for contig part)
+                        //}
+                        // Allocating at the end is fine
+                        if let Some(alloc) = self._alloc_rem(end, 0, remainder){
+                            break 'allocrem Some((PAllocItem::SubTable{index:end,offset:pages*Self::PAGE_SIZE,alloc:alloc}, 0));   // (allocation, offset for contig part)
+                        }
+                        // cannot allocate remainder
+                        break 'check;
+                      }
+                      // No remainder (or subtables not possible so already rounded up)
+                      None
+                    };
+                    
+                    // Allocate middle
+                    let contig_result = self._alloc_contiguous(start, end);
+                    
+                    // Return allocation
+                    klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Allocated {} pages (page_size=0x{:x}) + {} bytes @ start={}", pages, Self::PAGE_SIZE, remainder, offset);
+                    return Some(self._build_allocation(contig_result,remainder_allocated));
+                }
             };
         }
         // If we get here then sadly we've failed

@@ -329,6 +329,19 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         Some(PageAllocation::new(self, allocation))
     }
     
+    /* Split the allocation into two separate allocations. The first one will contain bytes [0,n) (rounding up if not page aligned), and the second one will contain the rest.
+       If necessary, huge pages will be split to meet the midpoint as accurately as possible.
+       Note: It is not guaranteed that the second allocation will not be empty. */
+    pub fn split_allocation(&mut self, allocation: PageAllocation, mid: usize) -> (PageAllocation, PageAllocation) {
+        allocation.assert_pt_tag(self);
+        let PageAllocation { allocation, pagetable_tag } = allocation;
+        
+        let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid);
+        (
+            PageAllocation { pagetable_tag, allocation: lhs },
+            PageAllocation { pagetable_tag, allocation: rhs },
+        )
+    }
     pub fn _split_alloc_inner(pfa: &mut impl PageFrameAllocator, allocation: PartialPageAllocation, mid: usize) -> (PartialPageAllocation, PartialPageAllocation) {
         use alloc::collections::vec_deque::VecDeque;
         let mut lhs = Vec::<PAllocItem>::new();
@@ -379,25 +392,9 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
             PartialPageAllocation::new(rhs),
         )
     }
-    /* Split the allocation into two separate allocations. The first one will contain bytes [0,n) (rounding up if not page aligned), and the second one will contain the rest.
-       If necessary, huge pages will be split to meet the midpoint as accurately as possible.
-       Note: It is not guaranteed that the second allocation will not be empty. */
-    pub fn split_allocation(&mut self, allocation: PageAllocation, mid: usize) -> (PageAllocation, PageAllocation) {
-        allocation.assert_pt_tag(self);
-        let PageAllocation { allocation, pagetable_tag } = allocation;
-        
-        let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid);
-        (
-            PageAllocation { pagetable_tag, allocation: lhs },
-            PageAllocation { pagetable_tag, allocation: rhs },
-        )
-    }
+    
     
     // Managing allocations
-    ppa_define_foreach!(unsafe: _set_addr_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, base_addr: usize, flags: PageFlags, {
-        ptable.set_huge_addr(index, base_addr+offset, flags);
-    }, { ptable.add_subtable_flags::<false>(index, &flags); });
-    
     /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */
     pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize, mut flags: PageFlags){
         allocation.assert_pt_tag(self);
@@ -412,10 +409,10 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         }
         if self.options.auto_flush_tlb { self.invalidate_tlb(allocation) };
     }
+    ppa_define_foreach!(unsafe: _set_addr_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, base_addr: usize, flags: PageFlags, {
+        ptable.set_huge_addr(index, base_addr+offset, flags);
+    }, { ptable.add_subtable_flags::<false>(index, &flags); });
     
-    ppa_define_foreach!(unsafe: _set_missing_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, data: usize, {
-        ptable.set_absent(index, data);
-    }, {});
     /* Set the given allocation as absent (not in physical memory). */
     pub fn set_absent(&mut self, allocation: &PageAllocation, data: usize){
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
@@ -427,10 +424,10 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         }
         if self.options.auto_flush_tlb { self.invalidate_tlb(allocation) };
     }
-    
-    ppa_define_foreach!(: _inval_tlb_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, vmem_start: usize, {
-        inval_tlb_pg(vmem_start + offset)
+    ppa_define_foreach!(unsafe: _set_missing_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, data: usize, {
+        ptable.set_absent(index, data);
     }, {});
+    
     /* Invalidate the TLB entries for the given allocation (on the current CPU).
         Note: No check is performed to ensure that the allocation is correct nor that this page table is active, as the only consequence (provided all other code handling Page Tables / TLB is correct) is a performance hit from the unnecessary INVLPG operations + the resulting cache misses.
         Note: Using this method is unnecessary yourself. Usually it is provided by write_when_active or similar. */
@@ -439,6 +436,9 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         let vmem_offset = self.meta.offset;
         Self::_inval_tlb_inner(self.get_page_table(), allocation.into(), 0, vmem_offset);
     }
+    ppa_define_foreach!(: _inval_tlb_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, vmem_start: usize, {
+        inval_tlb_pg(vmem_start + offset)
+    }, {});
 }
 
 pub struct ForcedUpgradeGuard<'a, T> {

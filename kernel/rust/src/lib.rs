@@ -53,9 +53,10 @@ pub fn _kinit() {
             
             // From start -> stack guard
             let alloc1 = kallocator.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
-            kallocator.set_base_addr(&alloc1, 0, memory::paging::PageFlags::EXECUTABLE /* TODO */); // 0+HHOFF -> 0
+            use memory::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
+            kallocator.set_base_addr(&alloc1, 0, PageFlags::new(TransitivePageFlags::EXECUTABLE /* TODO */, MappingSpecificPageFlags::PINNED)); // 0+HHOFF -> 0
             let alloc2 = kallocator.allocate(4096).expect("Test alloc failed!");
-            kallocator.set_base_addr(&alloc2, 0, memory::paging::PageFlags::empty());
+            kallocator.set_base_addr(&alloc2, 0, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()));
         }
         
         // Activate

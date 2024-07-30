@@ -9,25 +9,40 @@ use super::*;
 type BaseTLPageAllocator = arch::TopLevelPageAllocator;
 use arch::{set_active_page_table,inval_tlb_pg};
 
-// These flags represent various page permissions/settings, and follow a "union" pattern
-// in other words: the combination of all flags should be the most permissive/compatible option
-// (with the exception of internal flags (beginning with a _) which are used internally to override various settings/flags, and should not be set by user code)
+#[derive(Debug,Clone,Copy)]
+pub struct PageFlags {
+    pub tflags: TransitivePageFlags,
+    pub mflags: MappingSpecificPageFlags,
+}
+impl PageFlags {
+    pub fn new(tflags: TransitivePageFlags, mflags: MappingSpecificPageFlags) -> Self {
+        Self { tflags, mflags }
+    }
+}
 bitflags::bitflags! {
+    // These flags follow a "union" pattern - flags applied to upper levels will also override lower levels (the most restrictive version winning)
+    // Therefore: the combination of all flags should be the most permissive/compatible option
     #[derive(Debug,Clone,Copy)]
-    pub struct PageFlags: u16 {
+    pub struct TransitivePageFlags: u16 {
         // User can access this page
         const USER_ALLOWED = 1<<0;
         // User can write to this page (provided they have access to it)
         const WRITEABLE = 1<<1;
         // Execution is allowed. (if feature per_page_NXE_bit is not enabled then this is ignored)
         const EXECUTABLE = 1<<2;
-        
-        // = INTERNAL FLAGS =
-        // Page mapping is global
-        // If set for a given mapping, this must be true for that mapping (any sub-table mappings this gets set on must also be global)
-        // This is a break from the usual "when set on shared mappings it picks the least headache-causing"
-        // TODO: Maybe make a different method for handling these sorts of things? idk
-        const _OVR_GLOBAL = 1<<15;
+    }
+    // These flags are non-transitive. For regular mappings, they work the same as transitive flags. For sub-table mappings, they apply to the sub-table itself, rather than any descendant page mappings.
+    #[derive(Debug,Clone,Copy)]
+    pub struct MappingSpecificPageFlags: u16 {
+        // Page mapping is global (available in all address spaces), and should not be flushed from the TLB on an address-space switch.
+        // On pages: Page is not flushed from the TLB on address-space switch.
+        // On sub-tables: Architecture dependent.
+        const GLOBAL = 1<<0;
+        // Page is pinned. Pinned pages must not be moved in (or swapped out of) physical memory, as they may contain important structures such as page tables or interrupt handlers.
+        // This is a custom flag which is interpreted by the OS' page handler
+        // On pages: Page must always point to the same frame. Frame's contents must not be moved.
+        // On sub-tables: No effect.
+        const PINNED = 1<<1;
     }
 }
 
@@ -161,7 +176,7 @@ impl PagingContext {
         // Add global pages
         for (i,addr) in global_pages::GLOBAL_TABLE_PHYSADDRS.iter().enumerate(){
             // SAFETY: See documentation for put_global_table and GLOBAL_TABLE_PHYSADDRS
-            unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i,*addr, PageFlags::EXECUTABLE); }  // TODO per-global-page flags
+            unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i,*addr, PageFlags::new(TransitivePageFlags::EXECUTABLE,MappingSpecificPageFlags::empty())); }  // TODO per-global-page flags
         }
         // Return
         Self(LockedPageAllocator::new(allocator, LPAMetadata { offset: 0 }))
@@ -294,13 +309,13 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     // Managing allocations
     ppa_define_foreach!(unsafe: _set_addr_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, base_addr: usize, flags: PageFlags, {
         ptable.set_huge_addr(index, base_addr+offset, flags);
-    }, { ptable.add_subtable_flags(index, flags); });
+    }, { ptable.add_subtable_flags::<false>(index, &flags); });
     
     /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */
     pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize, mut flags: PageFlags){
         allocation.assert_pt_tag(self);
         
-        if self.options.is_global_page { flags |= PageFlags::_OVR_GLOBAL; }
+        if self.options.is_global_page { flags.mflags |= MappingSpecificPageFlags::GLOBAL; }
         
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Mapping {} to base addr {:x} (flags={:?})", self._fmt_pa(allocation), base_addr, flags);
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere

@@ -6,21 +6,31 @@ use super::*;
 use super::impl_firstfit::MLFFAllocator;
 use crate::logging::klog;
 
+const PF_PINNED: PageTableFlags = PageTableFlags::BIT_9;
+
 #[repr(transparent)]
 pub struct X64PageTable<const LEVEL: usize>(PageTable);
 impl<const LEVEL: usize> X64PageTable<LEVEL> {
-    /* Returns the default flags (most restrictive). Only for flags that PageFlags supports (so GLOBAL, HUGE, and PRESENT are not included) */
+    /* Returns the default flags (most restrictive). ??? TODO */
     const fn _default_flags() -> PageTableFlags {
         let mut defaults = PageTableFlags::empty();
         if cfg!(feature = "per_page_NXE_bit") { defaults = defaults.union(PageTableFlags::NO_EXECUTE); }
         defaults
     }
-    fn _calc_flags(mut previous: PageTableFlags, add: PageFlags) -> PageTableFlags {
-        if add.contains(PageFlags::USER_ALLOWED) { previous |=  PageTableFlags::USER_ACCESSIBLE };
-        if add.contains(PageFlags::WRITEABLE   ) { previous |=  PageTableFlags::WRITABLE        };
-        if cfg!(feature="per_page_NXE_bit") && add.contains(PageFlags::EXECUTABLE) { previous &=! PageTableFlags::NO_EXECUTE      };
-        
-        if add.contains(PageFlags::_OVR_GLOBAL ) { previous |= PageTableFlags::GLOBAL           };
+    fn _calc_flags<const INCLUDE_NON_TRANSITIVE: bool>(mut previous: PageTableFlags, add: &PageFlags) -> PageTableFlags {
+        {
+            let add = add.tflags;
+            use TransitivePageFlags as TF;
+            if add.contains(TF::USER_ALLOWED) { previous |=  PageTableFlags::USER_ACCESSIBLE };
+            if add.contains(TF::WRITEABLE   ) { previous |=  PageTableFlags::WRITABLE        };
+            if cfg!(feature="per_page_NXE_bit") && add.contains(TF::EXECUTABLE) { previous &=! PageTableFlags::NO_EXECUTE      };
+        }
+        if INCLUDE_NON_TRANSITIVE {
+            let add = add.mflags;
+            use MappingSpecificPageFlags as MF;
+            if add.contains(MF::PINNED) { previous |= PF_PINNED };
+            if cfg!(feature="page_global_bit") && add.contains(MF::GLOBAL) { previous |=  PageTableFlags::GLOBAL };
+        }
         previous
     }
     
@@ -44,23 +54,22 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
     }
     
     // modification
-    // TODO: Handle flags properly somehow???
     unsafe fn set_subtable_addr(&mut self, idx: usize, phys_addr: usize){
         let flags = Self::_default_flags() | PageTableFlags::PRESENT;
         klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping sub-table {:x}[{}] -> {:x}", self._logging_physaddr(), idx, phys_addr);
         self.0[idx].set_addr(PhysAddr::new(phys_addr as u64), flags);
     }
-    fn add_subtable_flags(&mut self, idx: usize, flags: PageFlags){
-        let flags = Self::_calc_flags(self.0[idx].flags(), flags);
+    fn add_subtable_flags<const INCLUDE_NON_TRANSITIVE: bool>(&mut self, idx: usize, flags: &PageFlags){
+        let flags = Self::_calc_flags::<INCLUDE_NON_TRANSITIVE>(self.0[idx].flags(), &flags);
         klog!(Debug, MEMORY_PAGING_MAPPINGS, "Setting sub-table {:x}[{}] flags to {:?}", self._logging_physaddr(), idx, flags);
         self.0[idx].set_flags(flags);
     }
     
     fn set_huge_addr(&mut self, idx: usize, physaddr: usize, flags: PageFlags){
-        let flags = Self::_calc_flags(Self::_default_flags() | match LEVEL { // Set present + huge flag
+        let flags = Self::_calc_flags::<true>(Self::_default_flags() | match LEVEL { // Set present + huge flag
             1 => PageTableFlags::PRESENT,  // (huge page flag is used for PAT on level 1 page tables)
             _ => PageTableFlags::PRESENT | PageTableFlags::HUGE_PAGE,
-        }, flags);
+        }, &flags);
         klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping entry {:x}[{}] to {:x} (flags={:?})", self._logging_physaddr(), idx, physaddr, flags);
         self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);  // set addr
     }

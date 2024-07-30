@@ -42,7 +42,7 @@ pub fn init_msr(){
         let mut cr4flags = Cr4::read();
         klog!(Debug, FEATURE_FLAGS, "Reading control registers: EFER={:?} CR4={:?}", eferflags, cr4flags);
         
-        // Apply features
+        // Apply/check features
         // No Execute in Page Tables
         if cfg!(feature = "per_page_NXE_bit"){
             if cpuid_epfi.is_some() && cpuid_epfi.unwrap().has_execute_disable() {
@@ -77,6 +77,16 @@ pub fn init_msr(){
                 eferflags |= EferFlags::TRANSLATION_CACHE_EXTENSION;
             } else {
                 klog!(Info, FEATURE_FLAGS, "Compiled with TCE support, but TCE is unavailable on this CPU.");
+            }
+        }
+        
+        // 1GiB Huge Pages
+        if cfg!(feature = "1G_huge_pages"){
+            if cpuid_epfi.is_some() && cpuid_epfi.unwrap().has_1gib_pages() {
+                klog!(Debug, FEATURE_FLAGS, "Enabling 1GiB Huge Page support.");
+                // Note: no flag to set here (it's set in the page entries)
+            } else {
+                panic!("Compiled with 1GiB Huge Page support, but 1GiB Huge Pages are unavailable on this CPU!");
             }
         }
         

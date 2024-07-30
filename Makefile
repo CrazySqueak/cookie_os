@@ -3,7 +3,8 @@ export LD := x86_64-elf-ld
 export NASM := nasm -f elf64
 export QEMU := qemu-system-x86_64
 
-export KBUILDFEATURES := per_page_NXE_bit enable_amd64_TCE page_global_bit
+export KBUILDFEATURES ?= per_page_NXE_bit enable_amd64_TCE page_global_bit 1G_huge_pages
+export QEMUCPU ?= qemu64,+pdpe1gb,+smep,+tce
 
 export BUILDNAME := $(ARCH)
 
@@ -52,13 +53,13 @@ clean:
 	$(MAKE) -C kernel clean
 
 run: $(ISONAME)
-	$(QEMU) --cdrom $(ISONAME) -serial stdio $(QEMUARGS)
+	$(QEMU) --cdrom $(ISONAME) -cpu $(QEMUCPU) -serial stdio $(QEMUARGS)
 debug: $(ISONAME) $(SYSROOT)/boot/kernel.bin
 	@if [ "$$INCLUDE_DEBUG_SYMBOLS" != "1" ]; then\
 		echo -e "\033[0;33mWARNING: Debug symbols were not included in this build! Set $$INCLUDE_DEBUG_SYMBOLS to 1 to include them!\033[0m";\
 		sleep 1;\
 	fi
-	$(QEMU) --cdrom $(ISONAME) $(QEMUARGS) -s -S &
+	$(QEMU) --cdrom $(ISONAME) -cpu $(QEMUCPU) $(QEMUARGS) -s -S &
 	gdb -q --symbols=$(SYSROOT)/boot/kernel.bin -ex "target remote localhost:1234"
 
 FORCE:

@@ -19,7 +19,7 @@ bitflags::bitflags! {
         const USER_ALLOWED = 1<<0;
         // User can write to this page (provided they have access to it)
         const WRITEABLE = 1<<1;
-        // Execution is allowed
+        // Execution is allowed. (if feature per_page_NXE_bit is not enabled then this is ignored)
         const EXECUTABLE = 1<<2;
         
         // = INTERNAL FLAGS =

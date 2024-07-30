@@ -10,13 +10,15 @@ use crate::logging::klog;
 pub struct X64PageTable<const LEVEL: usize>(PageTable);
 impl<const LEVEL: usize> X64PageTable<LEVEL> {
     /* Returns the default flags (most restrictive). Only for flags that PageFlags supports (so GLOBAL, HUGE, and PRESENT are not included) */
-    fn _default_flags() -> PageTableFlags {
-        PageTableFlags::NO_EXECUTE
+    const fn _default_flags() -> PageTableFlags {
+        let mut defaults = PageTableFlags::empty();
+        if cfg!(feature = "per_page_NXE_bit") { defaults = defaults.union(PageTableFlags::NO_EXECUTE); }
+        defaults
     }
     fn _calc_flags(mut previous: PageTableFlags, add: PageFlags) -> PageTableFlags {
         if add.contains(PageFlags::USER_ALLOWED) { previous |=  PageTableFlags::USER_ACCESSIBLE };
         if add.contains(PageFlags::WRITEABLE   ) { previous |=  PageTableFlags::WRITABLE        };
-        if add.contains(PageFlags::EXECUTABLE  ) { previous &=! PageTableFlags::NO_EXECUTE      };
+        if cfg!(feature="per_page_NXE_bit") && add.contains(PageFlags::EXECUTABLE) { previous &=! PageTableFlags::NO_EXECUTE      };
         
         if add.contains(PageFlags::_OVR_GLOBAL ) { previous |= PageTableFlags::GLOBAL           };
         previous
@@ -38,7 +40,7 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
     }
     
     fn get_num_pages_used(&self) -> usize {
-        self.0.iter().filter(|e| e.is_unused()).count()
+        self.0.iter().filter(|e| !e.is_unused()).count()
     }
     
     // modification

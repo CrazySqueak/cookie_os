@@ -79,19 +79,15 @@ pub extern "C" fn _kmain() -> ! {
     let s = format!("\n\nKernel bounds: {:x?}", memory::physical::get_kernel_bounds());
     VGA_WRITER.write_string(&s);
     
-    // Test allocation
-    for i in 1..32 {
-        let l = alloc::alloc::Layout::from_size_align(1024*1024*i, 2048*1024).unwrap();
-        let x = memory::physical::palloc(l);
-        klog!(Debug, MEMORY_PHYSICAL, "Allocated {:?}, Got {:?}\n", l, x);
-    }
-    
-    klog!(Debug, ROOT, "Test1235");
-    klog!(Debug, ROOT, "2+2={}", 5);
-    klog!(Warning, ROOT, "Wait no");
+    unsafe { lowlevel::context_switch::_cs_push(test); }
     
     // TODO
     loop{}//lowlevel::halt();
+}
+
+extern "sysv64" fn test(rsp: *const u8) -> ! {
+    klog!(Info, ROOT, "RSP: {:p}", rsp);
+    unsafe { lowlevel::context_switch::_cs_pop(rsp); }
 }
 
 /// This function is called on panic.

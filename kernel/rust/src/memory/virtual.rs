@@ -96,9 +96,9 @@ mod sealed {
     }
     impl PAllocItem {
         #[inline]
-        pub fn offset(&self) -> &usize {
+        pub fn offset(&self) -> usize {
             match self {
-                PAllocItem::Page { offset, .. } | PAllocItem::SubTable { offset, .. } => offset,
+                PAllocItem::Page { offset, .. } | PAllocItem::SubTable { offset, .. } => *offset,
             }
         }
         #[inline]
@@ -117,6 +117,9 @@ mod sealed {
         
         pub fn entries(&self) -> &[PAllocItem] {
             &self.0
+        }
+        pub fn into_entries(self) -> Vec<PAllocItem> {
+            self.0
         }
         
         fn _fmt_inner(&self, dbl: &mut core::fmt::DebugList<'_,'_>, prefix: &str, parentoffset: usize){

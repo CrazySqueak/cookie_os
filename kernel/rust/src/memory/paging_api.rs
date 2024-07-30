@@ -329,6 +329,70 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         Some(PageAllocation::new(self, allocation))
     }
     
+    pub fn _split_alloc_inner(pfa: &mut impl PageFrameAllocator, allocation: PartialPageAllocation, mid: usize) -> (PartialPageAllocation, PartialPageAllocation) {
+        use alloc::collections::vec_deque::VecDeque;
+        let mut lhs = Vec::<PAllocItem>::new();
+        let mut rhs = Vec::<PAllocItem>::new();
+        
+        let mut entries = VecDeque::from(allocation.into_entries());
+        
+        while let Some(item) = entries.pop_front() {
+            if item.offset() < mid {
+                // LHS or "pivot"
+                if entries.front().map_or(true, |ni| ni.offset() > mid) {
+                    // Next item is after the mid-point, so this item is the pivot (has the midpoint INSIDE it rather than on a boundrary)
+                    // (if we're at the end and not past the midpoint, then the final item is considered the pivot)
+                    match item {
+                        PAllocItem::SubTable { index, offset, alloc: suballoc } => {
+                            // It's a table, so we can split this if recurse
+                            let suballocator = pfa.get_suballocator_mut(index).expect("Allocation expected sub-allocator but none was found!");
+                            let (left, right) = Self::_split_alloc_inner(suballocator, suballoc, mid.checked_sub(offset).unwrap());
+                            lhs.push(PAllocItem::SubTable { index, offset, alloc: left });
+                            rhs.push(PAllocItem::SubTable { index, offset, alloc: right });
+                        }
+                        
+                        // Splitting huge pages is hard and im tired so I'll do it tmmw
+                        _ => todo!(),
+                    }
+                } else {
+                    // LHS
+                    lhs.push(item);
+                }
+            } else {
+                // RHS
+                rhs.push(item);
+            }
+        }
+        
+        // Adjust RHS offsets so they are based on the RHS rather than the original allocation as a whole
+        // (it's sorted (as this algo is stable and sorting is required) so we just take the first one lmao)
+        if !rhs.is_empty() {
+            let min_offset = rhs[0].offset();
+            for item in &mut rhs {
+                *item.offset_mut() -= min_offset;
+            }
+        }
+        
+        // Return allocations
+        (
+            PartialPageAllocation::new(lhs),
+            PartialPageAllocation::new(rhs),
+        )
+    }
+    /* Split the allocation into two separate allocations. The first one will contain bytes [0,n) (rounding up if not page aligned), and the second one will contain the rest.
+       If necessary, huge pages will be split to meet the midpoint as accurately as possible.
+       Note: It is not guaranteed that the second allocation will not be empty. */
+    pub fn split_allocation(&mut self, allocation: PageAllocation, mid: usize) -> (PageAllocation, PageAllocation) {
+        allocation.assert_pt_tag(self);
+        let PageAllocation { allocation, pagetable_tag } = allocation;
+        
+        let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid);
+        (
+            PageAllocation { pagetable_tag, allocation: lhs },
+            PageAllocation { pagetable_tag, allocation: rhs },
+        )
+    }
+    
     // Managing allocations
     ppa_define_foreach!(unsafe: _set_addr_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, base_addr: usize, flags: PageFlags, {
         ptable.set_huge_addr(index, base_addr+offset, flags);
@@ -415,6 +479,7 @@ static _ACTIVE_PAGE_TABLE: Mutex<Option<PagingContext>> = Mutex::new(None);
 // Note: Allocations must be allocated/deallocated manually
 // and do not hold a reference to the allocator
 // they are more akin to indices
+#[derive(Debug)]
 pub struct PageAllocation {
     // Pagetable tag is used to check that the correct page table is used or something?
     pagetable_tag: *const u8,

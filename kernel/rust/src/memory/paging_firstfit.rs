@@ -133,7 +133,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
             // Push remainder
             contig_result.push(rem_alloc);
             // Ensure result is sorted
-            contig_result.sort_by_key(|i| *i.offset());
+            contig_result.sort_by_key(|i| i.offset());
         }
         
         PartialPageAllocation::new(contig_result)

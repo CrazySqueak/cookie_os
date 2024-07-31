@@ -115,17 +115,43 @@ mod sealed {
         }
     }
     // PartialPageAllocation stores the indicies and offsets of page allocations internally
-    pub struct PartialPageAllocation(Vec<PAllocItem>);
+    // (as it is not a generic class, it also stores the size of a "page", since otherwise address calculations are impossible without locking the original allocator or making questionable guesses)
+    // Entries MUST be ordered in order of offset
+    pub struct PartialPageAllocation(Vec<PAllocItem>,usize);
     impl PartialPageAllocation {
-        pub fn new(items: Vec<PAllocItem>) -> Self {
-            Self(items)
+        pub fn new(items: Vec<PAllocItem>, page_size: usize) -> Self {
+            Self(items,page_size)
         }
         
+        #[inline]
         pub fn entries(&self) -> &[PAllocItem] {
             &self.0
         }
+        #[inline]
         pub fn into_entries(self) -> Vec<PAllocItem> {
             self.0
+        }
+        
+        #[inline]
+        pub fn page_size(&self) -> usize {
+            self.1
+        }
+        /* The starting address of this allocation in VMem, relative to the corresponding page table. (0 if empty) */
+        pub fn start_addr(&self) -> usize {
+            if self.0.is_empty() { return 0; }
+            match &self.0[0] {
+                &PAllocItem::Page { index, .. } => index*self.page_size(),
+                &PAllocItem::SubTable { index, ref alloc, .. } => alloc.start_addr()+(index*self.page_size()),
+            }
+        }
+        /* The size of this allocation in VMem. */
+        pub fn size(&self) -> usize {
+            let mut size = 0;
+            for entry in &self.0 { match entry {
+                &PAllocItem::Page { .. } => size+=self.page_size(),
+                &PAllocItem::SubTable { ref alloc, .. } => size+=alloc.size(),
+            }}
+            size
         }
         
         fn _fmt_inner(&self, dbl: &mut core::fmt::DebugList<'_,'_>, prefix: &str, parentoffset: usize){

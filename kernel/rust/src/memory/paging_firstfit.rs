@@ -143,7 +143,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
             contig_result.sort_by_key(|i| i.offset());
         }
         
-        PartialPageAllocation::new(contig_result)
+        PartialPageAllocation::new(contig_result, Self::PAGE_SIZE)
     }
 }
 impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrameAllocatorImpl for MLFFAllocator<ST,PT,SUBTABLES,HUGEPAGES>
@@ -193,7 +193,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
                     } else { break 'check; };
                     
                     klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Allocated {} bytes (page_size=0x{:x}) @ start={}", remainder, Self::PAGE_SIZE, i);
-                    return Some(PartialPageAllocation::new(alloc::vec![result]));
+                    return Some(PartialPageAllocation::new(alloc::vec![result],Self::PAGE_SIZE));
                     
                 } else {
                     let start = offset; let end = offset+pages;

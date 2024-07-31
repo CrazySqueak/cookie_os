@@ -11,6 +11,9 @@ impl GlobalPageTable {
     fn new(vmemaddr: usize, flags: PageFlags) -> Self {
         Self(LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: vmemaddr }), flags)
     }
+    pub fn get_vmem_offset(&self) -> usize {
+        self.0.metadata().offset
+    }
     
     /* Called to leak the pointer that will be put into every page table to reference this global page mapping */
     fn _begin_active(&self) -> &GlobalPTType {

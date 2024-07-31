@@ -26,7 +26,8 @@ mod memory;
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
 mod lowlevel;
 
-pub fn _kinit() {
+// Like all init functions, this must be called ONCE. No more. No less.
+pub unsafe fn _kinit() {
     // Create initial heap
     memory::kernel_heap::init_kheap();
     
@@ -36,46 +37,56 @@ pub fn _kinit() {
     // Initialise physical memory
     memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
     
-    // Testing: setup kernel heap
-    unsafe {
-        use alloc::boxed::Box;
-        use memory::paging::{PagingContext};
-        let pagetable = PagingContext::new();
+    // Initialise paging (bunch of testing code)
+    use alloc::boxed::Box;
+    use memory::paging::{PagingContext};
+    let pagetable = PagingContext::new();
+    {
+        let mut allocator = pagetable.write();
+        let mut kallocator = memory::paging::global_pages::KERNEL_PTABLE.write_when_active();
+        let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
         
-        {
-            let mut allocator = pagetable.write();
-            let mut kallocator = memory::paging::global_pages::KERNEL_PTABLE.write_when_active();
-            let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
-            
-            // Null guard
-            let nullguard = allocator.allocate_at(0, 1).expect("VMem Allocation Failed!");
-            allocator.set_absent(&nullguard, 0x4E554C_505452);  // "NULPTR"
-            
-            // From start -> stack guard
-            let alloc1 = kallocator.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
-            use memory::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
-            kallocator.set_base_addr(&alloc1, 0, PageFlags::new(TransitivePageFlags::EXECUTABLE /* TODO */, MappingSpecificPageFlags::PINNED)); // 0+HHOFF -> 0
-            let alloc2 = kallocator.allocate(4096).expect("Test alloc failed!");
-            kallocator.set_base_addr(&alloc2, 0, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()));
-            
-            // // test 2
-            // let at2 = kallocator.allocate(2*1024*1024*1024 + 512*1024).unwrap();
-            // kallocator.set_base_addr(&at2, 1207*4096, PageFlags::new(TransitivePageFlags::USER_WRITEABLE, MappingSpecificPageFlags::empty()));
-            
-            // test 3
-            for split in [2*1024*1024, 4096] {
-                let at3 = allocator.allocate(2*1024*1024 +1).unwrap();
-                klog!(Info, ROOT, "Splitting {:?} at {:x}", at3, split);
-                let (at3l, at3r) = allocator.split_allocation(at3, split);
-                klog!(Info, ROOT, "Got {:?}, {:?}", at3l, at3r);
-                allocator.set_absent(&at3l, 0xF47B33F0);
-                allocator.set_base_addr(&at3r, 0xFFFF * 4096, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()));
-            }
-        }
+        // Null guard
+        let nullguard = allocator.allocate_at(0, 1).expect("VMem Allocation Failed!");
+        allocator.set_absent(&nullguard, 0x4E554C_505452);  // "NULPTR"
         
-        // Activate
-        pagetable.activate();
+        // From start -> stack guard
+        let alloc1 = kallocator.allocate_at(start+lowlevel::HIGHER_HALF_OFFSET, size).expect("VMem Allocation Failed!");
+        use memory::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
+        kallocator.set_base_addr(&alloc1, 0, PageFlags::new(TransitivePageFlags::EXECUTABLE /* TODO */, MappingSpecificPageFlags::PINNED)); // 0+HHOFF -> 0
+        let alloc2 = kallocator.allocate(4096).expect("Test alloc failed!");
+        kallocator.set_base_addr(&alloc2, 0, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()));
+        
+        // // test 2
+        // let at2 = kallocator.allocate(2*1024*1024*1024 + 512*1024).unwrap();
+        // kallocator.set_base_addr(&at2, 1207*4096, PageFlags::new(TransitivePageFlags::USER_WRITEABLE, MappingSpecificPageFlags::empty()));
+        
+        // test 3
+        //for split in [2*1024*1024, 4096] {
+        //    let at3 = allocator.allocate(2*1024*1024 +1).unwrap();
+        //    klog!(Info, ROOT, "Splitting {:?} at {:x}", at3, split);
+        //    let (at3l, at3r) = allocator.split_allocation(at3, split);
+        //    klog!(Info, ROOT, "Got {:?}, {:?}", at3l, at3r);
+        //    allocator.set_absent(&at3l, 0xF47B33F0);
+        //    allocator.set_base_addr(&at3r, 0xFFFF * 4096, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()));
+        //}
     }
+    // Activate context
+    pagetable.activate();
+    
+    // Initialise kernel heap rescue
+    memory::kernel_heap::init_kheap_2();
+    
+    // test kernel heap rescue
+    let mut i = 0;
+    loop {
+        i+=1;
+        const L: alloc::alloc::Layout = unsafe{alloc::alloc::Layout::from_size_align_unchecked(69420,2)};
+        let p = alloc::alloc::alloc(L);
+        if p == core::ptr::null_mut() { alloc::alloc::handle_alloc_error(L); }
+        klog!(Info,ROOT,"{} {:p}",i,p);
+    }
+    
     
     // Grow kernel heap by 16+32MiB
     //let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
@@ -84,7 +95,7 @@ pub fn _kinit() {
 
 #[no_mangle]
 pub extern "C" fn _kmain() -> ! {
-    _kinit();
+    unsafe{_kinit();}
     
     VGA_WRITER.write_string("OKAY!! 👌👌👌👌");
     

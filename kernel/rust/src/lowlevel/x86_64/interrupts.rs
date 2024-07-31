@@ -16,6 +16,7 @@ lazy_static! {
         let mut idt = InterruptDescriptorTable::new();
         
         idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.general_protection_fault.set_handler_fn(gp_fault_handler);
         
         unsafe {
             idt.double_fault.set_handler_fn(double_fault_handler).set_stack_index(super::gdt::DOUBLE_FAULT_IST_INDEX);
@@ -50,6 +51,9 @@ extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, e
 
 extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> ! {
     panic!("Double Fault!\n{:?}", stack_frame);
+}
+extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> () {
+    unsafe { core::arch::asm!("nop"); } //panic!("General Protection Fault!\n{:?}", stack_frame);
 }
 
 // PICs

@@ -206,14 +206,14 @@ pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
 // ALLOCATIONS
 #[derive(Debug)]
 pub struct PhysicalMemoryAllocation {
-    ptr: core::ptr::NonNull<u8>,
+    addr: usize,
     layout: Layout,
     size: usize,
     
     block: (usize, usize),  // (order, addr)
 }
 impl PhysicalMemoryAllocation {
-    pub fn get_ptr(&self) -> core::ptr::NonNull<u8> { self.ptr }
+    pub fn get_addr(&self) -> usize { self.addr }
     pub fn get_size(&self) -> usize { self.size }
 }
 // Memory allocations cannot be copied nor cloned,
@@ -251,7 +251,7 @@ pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
         Some((addr, order, PFrameAllocator::block_size(order)))
     })?;
     Some(PhysicalMemoryAllocation { 
-        ptr: core::ptr::NonNull::new(addr as *mut u8).unwrap(),
+        addr: addr as usize,
         layout: layout,
         size: size,
         block: (order, addr),

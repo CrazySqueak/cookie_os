@@ -33,6 +33,23 @@ impl<const LEVEL: usize> X64PageTable<LEVEL> {
         }
         previous
     }
+    fn _deser_flags(flags: PageTableFlags) -> PageFlags {
+        PageFlags::new(
+            {
+                use TransitivePageFlags as TF; let mut tf = TF::empty();
+                if  flags.contains(PageTableFlags::USER_ACCESSIBLE) { tf |= TF::USER_READABLE }
+                if  flags.contains(PageTableFlags::WRITABLE       ) { tf |= TF::USER_WRITEABLE}
+                if !flags.contains(PageTableFlags::NO_EXECUTE     ) { tf |= TF::EXECUTABLE    }
+                tf
+            },
+            {
+                use MappingSpecificPageFlags as MF; let mut mf = MF::empty();
+                if  flags.contains(PageTableFlags::GLOBAL) { mf |= MF::GLOBAL }
+                if  flags.contains(PF_PINNED)              { mf |= MF::PINNED }
+                mf
+            },
+        )
+    }
     
     fn _logging_physaddr(&self) -> usize {
         ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize)
@@ -51,6 +68,18 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
     
     fn get_num_pages_used(&self) -> usize {
         self.0.iter().filter(|e| !e.is_unused()).count()
+    }
+    
+    fn get_entry(&self, idx: usize) -> Result<(usize, PageFlags),usize> {
+        let flags = self.0[idx].flags();
+        if flags.contains(PageTableFlags::PRESENT) {
+            let addr: usize = self.0[idx].addr().as_u64().try_into().unwrap();
+            let flags = Self::_deser_flags(flags);
+            Ok((addr, flags))
+        } else {
+            let data = unsafe { *((&self.0[idx] as *const PageTableEntry) as *const u64) } >> 1;
+            Err(data.try_into().unwrap())
+        }
     }
     
     // modification

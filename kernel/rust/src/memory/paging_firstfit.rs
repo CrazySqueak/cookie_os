@@ -21,14 +21,21 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
             return subtable;
         } else {
             // Create new allocator
-            let new_st = self.suballocators[idx].insert(Box::new(ST::new()));
+            let new_st = self.suballocators[idx].insert(Self::__inst_subtable());
             // Add to page table
-            // SAFETY: The suballocator we take a reference to is owned by us. Therefore, it will not be freed unless we are freed, in which case the page table is also being freed.
-            unsafe {
-                self.page_table.set_subtable_addr_from_allocator(idx, &**new_st);
-            };
+            Self::__point_to_subtable(&mut self.page_table, idx, new_st);
             // And return
             new_st
+        }
+    }
+    
+    fn __inst_subtable() -> Box<ST> {
+        Box::new(ST::new())
+    }
+    fn __point_to_subtable<'a>(page_table: &'a mut PT, idx: usize, new_st: &'a Box<ST>){
+        // SAFETY: The suballocator we take a reference to is owned by us. Therefore, it will not be freed unless we are freed, in which case the page table is also being freed.
+        unsafe {
+            page_table.set_subtable_addr_from_allocator(idx, &**new_st);
         }
     }
     
@@ -260,7 +267,37 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Allocated {} pages (page_size=0x{:x}) + {} bytes.", pages, Self::PAGE_SIZE, remainder);
         Some(self._build_allocation(contig_result,remainder_allocated))
     }
-
+    
+    fn split_page(&mut self, index: usize) -> Result<PartialPageAllocation,()> {
+        if (!SUBTABLES) || (!HUGEPAGES) { return Err(()); }  // not supported
+        if self.get_availability(index) != 0b11u8 { return Err(()); }  // not a huge page
+        if let Some(_) = self.suballocators[index] { return Err(()); }  // already a subtable
+        
+        // Create new allocation
+        let suballoc = self.suballocators[index].insert(Self::__inst_subtable());
+        let allocation = suballoc.allocate(Self::PAGE_SIZE).unwrap();
+        
+        // Copy flags across
+        let entry = self.page_table.get_entry(index);
+        let subpt = suballoc.get_page_table_mut();
+        if let Ok((addr, flags)) = entry {
+            for i in 0..ST::NPAGES {
+                subpt.set_huge_addr(i, addr+(i*ST::PAGE_SIZE), flags);
+            }
+        } else if let Err(data) = entry {
+            for i in 0..ST::NPAGES {
+                subpt.set_absent(i, data);
+            }
+        } else { unreachable!() }
+        
+        // Point to new subtable
+        Self::__point_to_subtable(&mut self.page_table, index, suballoc);
+        self.refresh_availability(index);
+        
+        // Et voila!
+        Ok(allocation)
+    }
+    
     unsafe fn put_global_table(&mut self, index: usize, phys_addr: usize, mut flags: PageFlags){
         assert!(SUBTABLES);
         assert!(self.get_availability(index) == 0b00u8);

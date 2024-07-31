@@ -275,21 +275,6 @@ macro_rules! ppa_define_foreach {
                     Self::$fnname(suballocator,suballocation, parentoffset+offset, $($argname),*);
                 }
             }
-            // // entries (full pages)
-            // let $ptname = $pfaname.get_page_table_mut();
-            // for &PAllocEntry{index:$idxname, offset:$offname} in &$allocname.entries {
-            //     $body;  // Apply changes to full pages
-            // }
-            // // Apply current-level changes to subtables (if applicable)
-            // // I hope dear god LLVM removes this loop if $sabody is empty
-            // for &PAllocSubAlloc{index:$idxname, offset:$offname, ..} in &$allocname.suballocs {
-            //     $sabody;
-            // }
-            // // Apply changes in sub-allocators (by recursing)
-            // for &PAllocSubAlloc{index:$idxname, offset, alloc: ref suballocation} in &$allocname.suballocs {
-            //     let suballocator = $pfaname.get_suballocator_mut($idxname).expect("Allocation expected sub-allocator but none was found!");
-            //     Self::$fnname(suballocator,suballocation, $($argname),*);  // TODO: offset?
-            // }
         }
     }
 }
@@ -364,8 +349,21 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
                             rhs.push(PAllocItem::SubTable { index, offset, alloc: right });
                         }
                         
-                        // Splitting huge pages is hard and im tired so I'll do it tmmw
-                        _ => todo!(),
+                        PAllocItem::Page { index, offset } => {
+                            // Attempt to split the page
+                            let result = pfa.split_page(index);
+                            if let Ok(suballocation) = result {
+                                // Success - split the newly created table
+                                let suballocator = pfa.get_suballocator_mut(index).unwrap();
+                                let (left, right) = Self::_split_alloc_inner(suballocator, suballocation, mid.checked_sub(offset).unwrap());
+                                lhs.push(PAllocItem::SubTable { index, offset, alloc: left });
+                                rhs.push(PAllocItem::SubTable { index, offset, alloc: right });
+                            } else {
+                                // \_(o.o)_/
+                                // round up so lhs.size is always >= mid
+                                lhs.push(PAllocItem::Page { index, offset });
+                            }
+                        }
                     }
                 } else {
                     // LHS

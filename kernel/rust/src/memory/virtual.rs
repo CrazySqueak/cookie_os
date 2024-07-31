@@ -48,6 +48,9 @@ mod sealed {
         /* Allocate the requested amount of memory at the given virtual memory address (relative to the start of this table's jurisdiction). */
         fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PartialPageAllocation>;
         
+        /* Split the given huge page into a sub-table, if possible. */
+        fn split_page(&mut self, index: usize) -> Result<PartialPageAllocation,()>;
+        
         /* Add a reference to a global table. Panics if the index is already in use. Once the global table is added, it must not be overwritten or re-allocated.
             get_suballocator_mut must still return None for this index, as getting a mutable reference to a global table would violate Rust's aliasing rules.
             SAFETY: The given address must be the physical address of the table. Global page tables are expected to belong to the 'static lifetime.
@@ -65,6 +68,9 @@ mod sealed {
         fn is_unused(&self, idx: usize) -> bool;
         /* Get the number of pages currenty used */
         fn get_num_pages_used(&self) -> usize;
+        
+        /* Get the address and flags of the entry if present, or data if not present. */
+        fn get_entry(&self, idx: usize) -> Result<(usize, PageFlags),usize>;
         
         /* Reserve a page (which will later be filled with a proper allocation.) */
         fn reserve(&mut self, idx: usize){

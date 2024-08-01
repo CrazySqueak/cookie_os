@@ -552,8 +552,7 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
 }
 impl<PFA:PageFrameAllocator> core::ops::Drop for PageAllocation<PFA> {
     fn drop(&mut self){
-        // TODO
-        klog!(Info, ROOT, "Dropping allocation @{:x}", self.start());
+        todo!()
     }
 }
 impl<'a,PFA:PageFrameAllocator> From<&'a PageAllocation<PFA>> for &'a PartialPageAllocation {

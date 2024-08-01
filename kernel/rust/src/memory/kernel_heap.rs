@@ -102,7 +102,7 @@ use core::alloc::Layout;
 use crate::sync::Mutex;
 // As allocating new memory may require heap memory, we keep a 1MiB rescue section pre-allocated.
 const RESCUE_SIZE: usize = 1*1024*1024;  // 1MiB
-type RescueT = (PhysicalMemoryAllocation,PageAllocation);
+type RescueT = (PhysicalMemoryAllocation,PageAllocation<super::paging::global_pages::GlobalPTType>);
 
 fn on_oom(heap: &LockedHeap<32>, layout: &Layout, rescue: &Mutex<Option<RescueT>>){
     unsafe {
@@ -121,19 +121,19 @@ unsafe fn _use_rescue(heap: &LockedHeap<32>, rescue: &mut Option<RescueT>) -> Re
     let (pallocation, vallocation) = match rescue.take(){ Some(x)=>x, None=>return Err(()), };
     heap.lock().init(vallocation.start(), vallocation.size());  // (note: this assumes that the allocation is contiguous (which it should be))
     // Forget allocation so that it doesn't get Drop'd and deallocated
-    core::mem::forget((pallocation, vallocation));
+    core::mem::forget(pallocation); vallocation.leak();
     klog!(Info, MEMORY_KHEAP, "Rescued kernel heap.");
     Ok(())
 }
 
 unsafe fn _reinit_rescue(rescue: &mut Option<RescueT>){
     klog!(Debug, MEMORY_KHEAP, "Allocating new rescue...");
-    let mut kernel_table = KERNEL_PTABLE.write_when_active();
+    let kernel_table = &KERNEL_PTABLE;
     let newrescue = (||{
         use super::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
         let pallocation = palloc(Layout::from_size_align(RESCUE_SIZE,1).unwrap())?;
         let vallocation = kernel_table.allocate_at(KERNEL_PTABLE.get_vmem_offset()+pallocation.get_addr(), pallocation.get_size())?;
-        kernel_table.set_base_addr(&vallocation, pallocation.get_addr(), PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::empty()));
+        vallocation.set_base_addr(pallocation.get_addr(), PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::empty()));
         Some((pallocation, vallocation))
     })();
     match newrescue {

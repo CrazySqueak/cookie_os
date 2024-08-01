@@ -5,11 +5,12 @@ use super::*;
 use super::arch;
 
 const TOPLEVEL_PAGE_SIZE: usize = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::PAGE_SIZE;
-type GlobalPTType = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::SubAllocType;
+pub type GlobalPTType = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::SubAllocType;
 pub struct GlobalPageTable(LockedPageAllocator<GlobalPTType>,PageFlags);
 impl GlobalPageTable {
     fn new(vmemaddr: usize, flags: PageFlags) -> Self {
-        Self(LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: canonical_addr(vmemaddr) }), flags)
+        let mut dopts = LPAWGOptions::new_default(); dopts.is_global_page = true;
+        Self(LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: canonical_addr(vmemaddr), default_options: dopts }), flags)
     }
     pub fn get_vmem_offset(&self) -> usize {
         self.0.metadata().offset
@@ -19,21 +20,11 @@ impl GlobalPageTable {
     fn _begin_active(&self) -> &GlobalPTType {
         self.0._begin_active()
     }
-    
-    pub fn read(&self) -> RwLockReadGuard<GlobalPTType> {
-        self.0.read()
-    }
-    /* This method is for testing. It will ALWAYS deadlock. */
-    pub fn write(&self) -> LPageAllocatorRWLWriteGuard<GlobalPTType> {
-        let mut guard = self.0.write();
-        guard.options.is_global_page = true;
-        guard
-    }
-    /* Write when active!!! */
-    pub fn write_when_active(&self) -> LPageAllocatorUnsafeWriteGuard<GlobalPTType> {
-        let mut guard = self.0.write_when_active();
-        guard.options.is_global_page = true;
-        guard
+}
+impl core::ops::Deref for GlobalPageTable {
+    type Target = LockedPageAllocator<GlobalPTType>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 // TODO
@@ -62,25 +53,26 @@ lazy_static! {
 
 extern "C" { static kstack_guard_page: u8; }
 /* Map the kernel to the kernel table. Should be called on initialisation. */
-fn _map_kernel(_kernel_ptable: &GlobalPageTable){
+fn _map_kernel(kernel_ptable: &GlobalPageTable){
     use crate::logging::klog;
     klog!(Info, MEMORY_PAGING_GLOBALPAGES, "Initialising KERNEL_PTABLE.");
-    let mut kernel_ptable = _kernel_ptable.write_when_active();
     
     let (kstart, kend) = crate::memory::physical::get_kernel_bounds();
     let ksize = kend - kstart;
-    let kvstart = _kernel_ptable.get_vmem_offset() + kstart;
+    let kvstart = kernel_ptable.get_vmem_offset() + kstart;
     
     // Map kernel
     klog!(Debug, MEMORY_PAGING_GLOBALPAGES, "Mapping kernel into KERNEL_PTABLE. (kstart={:x} kend={:x} ksize={:x} kvstart={:x})", kstart, kend, ksize, kvstart);
     let allocation = kernel_ptable.allocate_at(kvstart, ksize).expect("Error initialising kernel page: Unable to map kernel.");
-    kernel_ptable.set_base_addr(&allocation, kstart, PageFlags::new(TransitivePageFlags::EXECUTABLE, MappingSpecificPageFlags::PINNED));
+    allocation.set_base_addr(kstart, PageFlags::new(TransitivePageFlags::EXECUTABLE, MappingSpecificPageFlags::PINNED));
     
     // Map guard page
     let guard_vaddr = unsafe { core::ptr::addr_of!(kstack_guard_page) as usize };
     let guard_offset = guard_vaddr - allocation.start();
     klog!(Debug, MEMORY_PAGING_GLOBALPAGES, "Mapping stack guard page (vaddr={:x} offset={:x})", guard_vaddr, guard_offset);
-    let (k1alloc, rem) = kernel_ptable.split_allocation(allocation, guard_offset);
-    let (guard, k2alloc) = kernel_ptable.split_allocation(rem, 4096);  // guard page is 4096 bytes
-    kernel_ptable.set_absent(&guard, 0xFA7B_EEF0>>1);
+    let (k1alloc, rem) = allocation.split(guard_offset);
+    let (guard, k2alloc) = rem.split(4096);  // guard page is 4096 bytes
+    guard.set_absent(0xFA7B_EEF0);
+    
+    k1alloc.leak(); guard.leak(); k2alloc.leak();
 }

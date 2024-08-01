@@ -50,6 +50,8 @@ bitflags::bitflags! {
 pub struct LPAMetadata {
     // Offset in VMEM for the start of the page table's jurisdiction. For top-level tables this is 0. For tables nested inside of other tables, this might not be 0
     pub offset: usize,
+    // Default options for new write guards
+    pub default_options: LPAWGOptions,
 }
 struct LPAInternal<PFA: PageFrameAllocator> {
     // The locked allocator
@@ -77,8 +79,6 @@ impl<PFA: PageFrameAllocator> core::ops::Deref for LPAInternal<PFA>{
         &self.lock
     }
 }
-
-
 
 pub struct LockedPageAllocator<PFA: PageFrameAllocator>(Arc<LPAInternal<PFA>>);
 impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
@@ -118,14 +118,14 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     }
     
     pub(super) fn write(&self) -> LPageAllocatorRWLWriteGuard<PFA> {
-        let options = LPAWGOptions::new_default();
+        let options = self.metadata().default_options;
         
         LockedPageAllocatorWriteGuard{guard: self.0.write(), allocator: Self::clone_ref(self), options}
     }
     pub(super) fn try_write(&self) -> Option<LPageAllocatorRWLWriteGuard<PFA>> {
         match self.0.try_write() {
             Some(guard) => {
-                let options = LPAWGOptions::new_default();
+                let options = self.metadata().default_options;
                 
                 Some(LockedPageAllocatorWriteGuard{guard, allocator: Self::clone_ref(self), options})
             },
@@ -160,7 +160,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
                 // So we want to forcibly create an upgraded version
                 let write_guard = unsafe { ForcedUpgradeGuard::new(&self.0, upgradable) };
                 
-                let mut options = LPAWGOptions::new_default();
+                let mut options = self.metadata().default_options;
                 options.auto_flush_tlb = active_count > 0;  // if we are active in any contexts, we should remember to flush TLB
                 
                 return LockedPageAllocatorWriteGuard{guard: write_guard, allocator: Self::clone_ref(self), options};
@@ -194,7 +194,8 @@ impl PagingContext {
             unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i, phys_addr, flags); }
         }
         // Return
-        Self(LockedPageAllocator::new(allocator, LPAMetadata { offset: 0 }))
+        let dopts = LPAWGOptions::new_default();
+        Self(LockedPageAllocator::new(allocator, LPAMetadata { offset: 0, default_options: dopts }))
     }
     pub fn clone_ref(x: &Self) -> Self {
         Self(LockedPageAllocator::clone_ref(&x.0))
@@ -239,12 +240,13 @@ impl core::ops::Deref for PagingContext {
 }
 
 // = GUARDS =
+#[derive(Debug,Clone,Copy)]
 pub struct LPAWGOptions {
     pub(super) auto_flush_tlb: bool,
     pub(super) is_global_page: bool,
 }
 impl LPAWGOptions {
-    fn new_default() -> Self {
+    pub(super) fn new_default() -> Self {
         Self {
             auto_flush_tlb: false,
             is_global_page: false,
@@ -333,12 +335,12 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
        Note: It is not guaranteed that the second allocation will not be empty. */
     pub(super) fn split_allocation(&mut self, allocation: PageAllocation<PFA>, mid: usize) -> (PageAllocation<PFA>, PageAllocation<PFA>) {
         allocation.assert_pt_tag(self);
-        let PageAllocation { allocation, allocator, metadata } = allocation;
+        let (allocation, allocator, metadata) = allocation.leak();
         
         let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid);
         (
             PageAllocation { allocator: LockedPageAllocator::clone_ref(&allocator), allocation: lhs, metadata },
-            PageAllocation { allocator: LockedPageAllocator::clone_ref(&allocator), allocation: rhs, metadata },
+            PageAllocation { allocator:                                 allocator , allocation: rhs, metadata },
         )
     }
     fn _split_alloc_inner<SPF:PageFrameAllocator>(pfa: &mut SPF, allocation: PartialPageAllocation, mid: usize) -> (PartialPageAllocation, PartialPageAllocation) {
@@ -510,8 +512,18 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
     
     /* Deliberately leak the allocation, without freeing it.
        Use this instead of core::mem::forget, as this makes sure to drop the Arc<> which means the page table will be dropped when appropriate. */
-    pub fn leak(self){
-        // TODO
+    pub fn leak(self) -> (PartialPageAllocation, LockedPageAllocator<PFA>, LPAMetadata) {
+        use core::{mem::MaybeUninit,ptr};
+        let me = MaybeUninit::new(self);
+        let me_ptr = me.as_ptr();
+        
+        // SAFETY: We must make sure to either extract or drop each field within ourselves
+        //          as we will not be Drop'd
+        unsafe{ (
+            ptr::read(&(*me_ptr).allocation),
+            ptr::read(&(*me_ptr).allocator ),
+            ptr::read(&(*me_ptr).metadata  ),
+        )}
     }
     
     /* Find the start address of this allocation in VMem */
@@ -536,6 +548,12 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
         let allocator = LockedPageAllocator::clone_ref(&self.allocator);
         let result = allocator.write_when_active().split_allocation(self, mid);
         result
+    }
+}
+impl<PFA:PageFrameAllocator> core::ops::Drop for PageAllocation<PFA> {
+    fn drop(&mut self){
+        // TODO
+        klog!(Info, ROOT, "Dropping allocation @{:x}", self.start());
     }
 }
 impl<'a,PFA:PageFrameAllocator> From<&'a PageAllocation<PFA>> for &'a PartialPageAllocation {

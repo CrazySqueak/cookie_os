@@ -43,16 +43,18 @@ pub unsafe fn _kinit() {
     use memory::paging::{PagingContext,PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
     let pagetable = PagingContext::new();
     {
-        let mut allocator = pagetable.write();
-        let mut kallocator = memory::paging::global_pages::KERNEL_PTABLE.write_when_active();
+        let allocator = &pagetable;
+        let kallocator = &memory::paging::global_pages::KERNEL_PTABLE;
         
         // Null guard
         let nullguard = allocator.allocate_at(0, 1).expect("VMem Allocation Failed!");
-        allocator.set_absent(&nullguard, 0x4E554C_505452);  // "NULPTR"
+        nullguard.set_absent(0x4E554C_505452);  // "NULPTR"
+        nullguard.leak();
         
         // VGA Buffer memory-mapped IO
         let vgabuf = kallocator.allocate_at(display_vga::VGA_BUFFER_ADDR, display_vga::VGA_BUFFER_SIZE).expect("Unable to map VGA buffer");
-        kallocator.set_base_addr(&vgabuf, display_vga::VGA_BUFFER_PHYSICAL, PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::PINNED));
+        vgabuf.set_base_addr(display_vga::VGA_BUFFER_PHYSICAL, PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::PINNED));
+        vgabuf.leak();
         
         // Guess who doesn't have to manually map the kernel in lib.rs anymore because it's done in global_pages.rs!!!
     }

@@ -78,6 +78,8 @@ impl<PFA: PageFrameAllocator> core::ops::Deref for LPAInternal<PFA>{
     }
 }
 
+
+
 pub struct LockedPageAllocator<PFA: PageFrameAllocator>(Arc<LPAInternal<PFA>>);
 impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     pub fn new(alloc: PFA, meta: LPAMetadata) -> Self {
@@ -111,21 +113,21 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         self.0.force_read_decrement();
     }
     
-    pub fn read(&self) -> RwLockReadGuard<PFA> {
+    pub(super) fn read(&self) -> RwLockReadGuard<PFA> {
         self.0.read()
     }
     
-    pub fn write(&self) -> LPageAllocatorRWLWriteGuard<PFA> {
+    pub(super) fn write(&self) -> LPageAllocatorRWLWriteGuard<PFA> {
         let options = LPAWGOptions::new_default();
         
-        LockedPageAllocatorWriteGuard{guard: self.0.write(), meta: self.0.metadata(), options}
+        LockedPageAllocatorWriteGuard{guard: self.0.write(), allocator: Self::clone_ref(self), options}
     }
-    pub fn try_write(&self) -> Option<LPageAllocatorRWLWriteGuard<PFA>> {
+    pub(super) fn try_write(&self) -> Option<LPageAllocatorRWLWriteGuard<PFA>> {
         match self.0.try_write() {
             Some(guard) => {
                 let options = LPAWGOptions::new_default();
                 
-                Some(LockedPageAllocatorWriteGuard{guard, meta: self.0.metadata(), options})
+                Some(LockedPageAllocatorWriteGuard{guard, allocator: Self::clone_ref(self), options})
             },
             None => None,
         }
@@ -133,7 +135,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     
     /* Write to a page table that is currently active, provided there are no other read/write locks.
         Writes using this guard will automatically invalidate the TLB entries as needed for the current CPU (but currently not OTHERS!!! TODO).*/
-    pub fn write_when_active(&self) -> LPageAllocatorUnsafeWriteGuard<PFA> {  // TODO: With TLB inval
+    pub(super) fn write_when_active(&self) -> LPageAllocatorUnsafeWriteGuard<PFA> {
         // Acquire an upgradable read guard, to ensure that A. there are no writers, and B. there are no new readers while we're determining what to do
         let upgradable = self.0.upgradeable_read();
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
@@ -159,9 +161,9 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
                 let write_guard = unsafe { ForcedUpgradeGuard::new(&self.0, upgradable) };
                 
                 let mut options = LPAWGOptions::new_default();
-                options.auto_flush_tlb = true;
+                options.auto_flush_tlb = active_count > 0;  // if we are active in any contexts, we should remember to flush TLB
                 
-                return LockedPageAllocatorWriteGuard{guard: write_guard, meta: self.0.metadata(), options};
+                return LockedPageAllocatorWriteGuard{guard: write_guard, allocator: Self::clone_ref(self), options};
             } else {
                 // Relax
                 // 🛏☺☕ ahhh
@@ -169,6 +171,13 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
                 crate::sync::SchedulerYield::relax();
             }
         }
+    }
+    
+    pub fn allocate(&self, size: usize) -> Option<PageAllocation<PFA>> {
+        self.write_when_active().allocate(size)
+    }
+    pub fn allocate_at(&self, addr: usize, size: usize) -> Option<PageAllocation<PFA>> {
+        self.write_when_active().allocate_at(addr, size)
     }
 }
 
@@ -238,7 +247,7 @@ impl LPAWGOptions {
     fn new_default() -> Self {
         Self {
             auto_flush_tlb: false,
-            is_global_page: false,  // TODO
+            is_global_page: false,
         }
     }
 }
@@ -246,7 +255,7 @@ impl LPAWGOptions {
 pub struct LockedPageAllocatorWriteGuard<PFA: PageFrameAllocator, GuardT>
   where GuardT: core::ops::Deref<Target=PFA> + core::ops::DerefMut<Target=PFA> 
   {
-    guard: GuardT, meta: LPAMetadata,
+    guard: GuardT, allocator: LockedPageAllocator<PFA>,
     
     pub(super) options: LPAWGOptions,
 }
@@ -285,6 +294,9 @@ macro_rules! ppa_define_foreach {
 impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT> 
   where GuardT: core::ops::Deref<Target=PFA> + core::ops::DerefMut<Target=PFA>
   {
+    fn meta(&self) -> &LPAMetadata {
+        self.allocator.metadata()
+    }
     fn get_page_table(&mut self) -> &mut PFA {
         &mut*self.guard
     }
@@ -294,42 +306,42 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         ptaddr_virt_to_phys(self.get_page_table().get_page_table_ptr() as usize)
     }
     #[inline(always)]
-    fn _fmt_pa(&mut self, allocation: &PageAllocation) -> alloc::string::String {
+    fn _fmt_pa(&mut self, allocation: &PageAllocation<PFA>) -> alloc::string::String {
         alloc::format!("{:x}[{:?}]", self._pt_phys_addr(), allocation.allocation)
     }
     
     // Allocating
     // (we don't need to flush the TLB for allocation as the page has gone from NOT PRESENT -> NOT PRESENT - instead we flush it when it's mapped to an address)
-    pub fn allocate(&mut self, size: usize) -> Option<PageAllocation> {
+    pub(super) fn allocate(&mut self, size: usize) -> Option<PageAllocation<PFA>> {
         let allocator = self.get_page_table();
         let allocation = allocator.allocate(size)?;
-        Some(PageAllocation::new(self, allocation))
+        Some(PageAllocation::new(LockedPageAllocator::clone_ref(&self.allocator), allocation))
     }
-    pub fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PageAllocation> {
+    pub(super) fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PageAllocation<PFA>> {
         // Convert the address
         // Subtract the offset from the vmem address (as we need it to be relative to the start of our table)
-        let rel_addr = addr.checked_sub(self.meta.offset).unwrap_or_else(||panic!("Cannot allocate memory before the start of the page! addr=0x{:x} page_start=0x{:x}",addr,self.meta.offset));
+        let rel_addr = addr.checked_sub(self.meta().offset).unwrap_or_else(||panic!("Cannot allocate memory before the start of the page! addr=0x{:x} page_start=0x{:x}",addr,self.meta().offset));
         
         // Allocate
         let allocator = self.get_page_table();
         let allocation = allocator.allocate_at(rel_addr, size)?;
-        Some(PageAllocation::new(self, allocation))
+        Some(PageAllocation::new(LockedPageAllocator::clone_ref(&self.allocator), allocation))
     }
     
     /* Split the allocation into two separate allocations. The first one will contain bytes [0,n) (rounding up if not page aligned), and the second one will contain the rest.
        If necessary, huge pages will be split to meet the midpoint as accurately as possible.
        Note: It is not guaranteed that the second allocation will not be empty. */
-    pub fn split_allocation(&mut self, allocation: PageAllocation, mid: usize) -> (PageAllocation, PageAllocation) {
+    pub(super) fn split_allocation(&mut self, allocation: PageAllocation<PFA>, mid: usize) -> (PageAllocation<PFA>, PageAllocation<PFA>) {
         allocation.assert_pt_tag(self);
-        let PageAllocation { allocation, pagetable_tag, metadata } = allocation;
+        let PageAllocation { allocation, allocator, metadata } = allocation;
         
         let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid);
         (
-            PageAllocation { pagetable_tag, allocation: lhs, metadata },
-            PageAllocation { pagetable_tag, allocation: rhs, metadata },
+            PageAllocation { allocator: LockedPageAllocator::clone_ref(&allocator), allocation: lhs, metadata },
+            PageAllocation { allocator: LockedPageAllocator::clone_ref(&allocator), allocation: rhs, metadata },
         )
     }
-    pub fn _split_alloc_inner<SPF:PageFrameAllocator>(pfa: &mut SPF, allocation: PartialPageAllocation, mid: usize) -> (PartialPageAllocation, PartialPageAllocation) {
+    fn _split_alloc_inner<SPF:PageFrameAllocator>(pfa: &mut SPF, allocation: PartialPageAllocation, mid: usize) -> (PartialPageAllocation, PartialPageAllocation) {
         use alloc::collections::vec_deque::VecDeque;
         let mut lhs = Vec::<PAllocItem>::new();
         let mut rhs = Vec::<PAllocItem>::new();
@@ -396,7 +408,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     
     // Managing allocations
     /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */
-    pub fn set_base_addr(&mut self, allocation: &PageAllocation, base_addr: usize, mut flags: PageFlags){
+    pub(super) fn set_base_addr(&mut self, allocation: &PageAllocation<PFA>, base_addr: usize, mut flags: PageFlags){
         allocation.assert_pt_tag(self);
         
         if self.options.is_global_page { flags.mflags |= MappingSpecificPageFlags::GLOBAL; }
@@ -414,7 +426,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     }, { ptable.add_subtable_flags::<false>(index, &flags); });
     
     /* Set the given allocation as absent (not in physical memory). */
-    pub fn set_absent(&mut self, allocation: &PageAllocation, data: usize){
+    pub(super) fn set_absent(&mut self, allocation: &PageAllocation<PFA>, data: usize){
         // SAFETY: By holding a mutable borrow of ourselves (the allocator), we can verify that the page table is not in use elsewhere
         // (it is the programmer's responsibility to ensure the addresses are correct before they call unsafe fn activate() to activate it.
         allocation.assert_pt_tag(self);
@@ -431,7 +443,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     /* Invalidate the TLB entries for the given allocation (on the current CPU).
         Note: No check is performed to ensure that the allocation is correct nor that this page table is active, as the only consequence (provided all other code handling Page Tables / TLB is correct) is a performance hit from the unnecessary INVLPG operations + the resulting cache misses.
         Note: Using this method is unnecessary yourself. Usually it is provided by write_when_active or similar. */
-    pub fn invalidate_tlb(&mut self, allocation: &PageAllocation){
+    pub(super) fn invalidate_tlb(&mut self, allocation: &PageAllocation<PFA>){
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
         let vmem_offset = allocation.start();  // (vmem offset is now added by PageAllocation itself)
         Self::_inval_tlb_inner(self.get_page_table(), allocation.into(), 0, vmem_offset);
@@ -479,24 +491,27 @@ static _ACTIVE_PAGE_TABLE: Mutex<Option<PagingContext>> = Mutex::new(None);
 // Note: Allocations must be allocated/deallocated manually
 // and do not hold a reference to the allocator
 // they are more akin to indices
-#[derive(Debug)]
-pub struct PageAllocation {
-    // Pagetable tag is used to check that the correct page table is used or something?
-    pagetable_tag: usize,
+pub struct PageAllocation<PFA: PageFrameAllocator> {
+    allocator: LockedPageAllocator<PFA>,
     allocation: PartialPageAllocation,
     metadata: LPAMetadata,
 }
-impl PageAllocation {
-    pub(super) fn new<PFA:PageFrameAllocator>(allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>, allocation: PartialPageAllocation) -> Self {
+impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
+    pub(super) fn new(allocator: LockedPageAllocator<PFA>, allocation: PartialPageAllocation) -> Self {
         Self {
-            pagetable_tag: allocator.get_page_table().get_page_table_ptr() as usize,
+            metadata: *allocator.metadata(),
+            allocator: allocator,
             allocation: allocation,
-            metadata: allocator.meta,
         }
     }
+    fn assert_pt_tag(&self, allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>){
+        // TODO
+    }
     
-    fn assert_pt_tag<PFA:PageFrameAllocator>(&self, allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>){
-        assert!(allocator.get_page_table().get_page_table_ptr() as usize == self.pagetable_tag, "Allocation used with incorrect allocator!");
+    /* Deliberately leak the allocation, without freeing it.
+       Use this instead of core::mem::forget, as this makes sure to drop the Arc<> which means the page table will be dropped when appropriate. */
+    pub fn leak(self){
+        // TODO
     }
     
     /* Find the start address of this allocation in VMem */
@@ -506,9 +521,25 @@ impl PageAllocation {
     pub fn size(&self) -> usize {
         self.allocation.size()
     }
+    
+    pub fn set_base_addr(&self, base_addr: usize, flags: PageFlags){
+        self.allocator.write_when_active().set_base_addr(self, base_addr, flags)
+    }
+    pub fn set_absent(&self, data: usize){
+        self.allocator.write_when_active().set_absent(self, data)
+    }
+    pub fn flush_tlb(&self){
+        self.allocator.write_when_active().invalidate_tlb(self)
+    }
+    
+    pub fn split(self, mid: usize) -> (Self, Self) {
+        let allocator = LockedPageAllocator::clone_ref(&self.allocator);
+        let result = allocator.write_when_active().split_allocation(self, mid);
+        result
+    }
 }
-impl<'a> From<&'a PageAllocation> for &'a PartialPageAllocation {
-    fn from(value: &'a PageAllocation) -> Self {
+impl<'a,PFA:PageFrameAllocator> From<&'a PageAllocation<PFA>> for &'a PartialPageAllocation {
+    fn from(value: &'a PageAllocation<PFA>) -> Self {
         &value.allocation
     }
 }

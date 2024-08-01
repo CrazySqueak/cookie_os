@@ -53,10 +53,10 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
             if let Some(alloc) = &self.suballocators[idx] {  // sub-table
                 assert!(SUBTABLES);  // let statements in this position are unstable so fuck me i guess
                 let npages_used = alloc.get_num_pages_used();
-                if npages_used >= ST::NPAGES {
+                if npages_used >= ST::NPAGES && alloc.is_full() {
                     0b11u8  // full
-                } else if npages_used >= ST::NPAGES/2 {
-                    0b10u8  // half full +
+                } else if npages_used > ST::NPAGES/2 {
+                    0b10u8  // more than half full
                 } else {
                     // less than half full
                     0b01u8
@@ -102,7 +102,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
     }
     fn _alloc_rem(&mut self, idx: usize, inner_offset: usize, size: usize) -> Option<PartialPageAllocation> {
         assert!(SUBTABLES);
-        let required_availability: u8 = if size >= Self::NPAGES/2 { 0b01u8 } else { 0b10u8 };  // Only test half-full ones if our remainder is small enough
+        let required_availability: u8 = if size >= Self::PAGE_SIZE/2 { 0b01u8 } else { 0b10u8 };  // Only test half-full ones if our remainder is small enough
         if idx < Self::NPAGES && self.get_availability(idx) <= required_availability {
             klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Attempting remainder allocation @ index={}, size={:x}, inner_offset={:x}", idx, size, inner_offset);
             // allocate remainder
@@ -164,6 +164,12 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
     
     fn get_num_pages_used(&self) -> usize {
         self.page_table.get_num_pages_used()
+    }
+    fn is_full(&self) -> bool {
+        for av in &self.availability_bitmap {
+            if *av != 0xFFu8 { return false; }  // If there's any space at all in sub-pages, then we're not full
+        }
+        true
     }
     fn get_page_table_ptr(&self) -> *const Self::PageTableType {
         core::ptr::addr_of!(self.page_table)
@@ -249,6 +255,9 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         }
         // Check that the remainder is clear (if applicable)
         let remainder_allocated = 'allocrem: { if remainder != 0 && SUBTABLES {
+                //klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "remainder @{},{:x},{:x}? availability={}",end,0+start_rem,remainder, self.get_availability(end));
+                //{ klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "{:?}", self.suballocators[end].as_ref().map(|a| a.get_num_pages_used())); }
+                
                 if let Some(alloc) = self._alloc_rem(end, 0+start_rem, remainder){
                     break 'allocrem Some((PAllocItem::SubTable{index:end,offset:pages*Self::PAGE_SIZE,alloc:alloc},0));
                 }

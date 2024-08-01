@@ -15,6 +15,7 @@ impl PageFrameAllocatorImpl for NoDeeper {
     type SubAllocType = NoDeeper;
     fn new() -> Self { nope!(); }
     fn get_num_pages_used(&self) -> usize { nope!(); }
+    fn is_full(&self) -> bool { nope!(); }
     fn get_page_table_ptr(&self) -> *const Self::PageTableType { nope!(); }
     fn get_page_table_mut(&mut self) -> &mut Self::PageTableType { nope!(); }
     fn get_suballocator_mut(&mut self, index: usize) -> Option<&mut Self::SubAllocType> { nope!(); }

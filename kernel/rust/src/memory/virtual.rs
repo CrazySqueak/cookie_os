@@ -33,6 +33,8 @@ mod sealed {
         fn new() -> Self;
         /* Get the number of pages which are occupied. */
         fn get_num_pages_used(&self) -> usize;
+        /* Returns true if the allocator is full and cannot allocate any more pages (even in sub-allocators that it controls) */
+        fn is_full(&self) -> bool;
         
         /* Get a pointer to this allocator's page table.
            (used for pointing higher-level page tables to their children) */

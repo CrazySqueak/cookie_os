@@ -239,7 +239,7 @@ pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
         // Smallest order that is larger than or equal to the minimum size
         let order = match (0..PFrameAllocator::MAX_ORDER).position(|o| PFrameAllocator::block_size(o) >= alloc_size){ Some(x) => x, None => {klog!(Info, MEMORY_PHYSICAL_ALLOCATOR, "No supported order is large enough to fulfill this request for {} bytes!", alloc_size); None?}};
         klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Selected order {}.", order);
-        let addr = match req_block(&mut allocator, order){ Some(x) => x, None => {klog!(Warning, MEMORY_PHYSICAL_ALLOCATOR, "Cannot allocate {} bytes. No free blocks of that order (or higher)!", alloc_size); None?}};
+        let addr = match req_block(&mut allocator, order){ Some(x) => x, None => {klog!(Warning, MEMORY_PHYSICAL_ALLOCATOR, "Cannot allocate {} bytes. No free blocks of that order (or higher)! ({})", alloc_size, allocator_free_str(&allocator)); None?}};
         
         allocator.amount_free -= PFrameAllocator::block_size(order);
         allocator.amount_allocated += PFrameAllocator::block_size(order);

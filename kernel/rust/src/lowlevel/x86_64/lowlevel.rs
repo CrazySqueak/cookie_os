@@ -25,6 +25,15 @@ pub fn without_interrupts<R,F: FnOnce()->R>(f: F) -> R{
     interrupts::without_interrupts(f)
 }
 
+macro_rules! incompatible {
+    ($fn:ident, $bn:ident, $s:expr) => {
+        $fn = true;
+        let s = $s;
+        klog!(Fatal, FEATURE_FLAGS, s);
+        $bn.push(s);
+    }
+}
+
 use crate::logging::klog;
 pub fn init_msr(){
     // SAFETY: Care must be taken to set the flags correctly.
@@ -33,6 +42,10 @@ pub fn init_msr(){
         use raw_cpuid::CpuId;
         use x86_64::registers::model_specific::{Efer,EferFlags};
         use x86_64::registers::control::{Cr4,Cr4Flags};
+        // if one or more options are incompatible, this is set
+        // by setting this rather than immediately panicking, we allow people to see the full list of incompatible options instead of just one at a time
+        let mut failed = false;
+        let mut fail_reasons = alloc::vec::Vec::new();
         
         // Load CPUID and current flags
         let cpu_id = CpuId::new();
@@ -50,7 +63,7 @@ pub fn init_msr(){
                 klog!(Debug, FEATURE_FLAGS, "Enabling per-page NX support.");
                 eferflags |= EferFlags::NO_EXECUTE_ENABLE;
             } else {
-                panic!("Compiled with per-page NX support, but per-page NX is unavailable on this CPU!");
+                incompatible!(failed, fail_reasons, "Compiled with per-page NX support, but per-page NX is unavailable on this CPU!");
             }
         }
         
@@ -87,8 +100,12 @@ pub fn init_msr(){
                 klog!(Debug, FEATURE_FLAGS, "Enabling 1GiB Huge Page support.");
                 // Note: no flag to set here (it's set in the page entries)
             } else {
-                panic!("Compiled with 1GiB Huge Page support, but 1GiB Huge Pages are unavailable on this CPU!");
+                incompatible!(failed, fail_reasons, "Compiled with 1GiB Huge Page support, but 1GiB Huge Pages are unavailable on this CPU!");
             }
+        }
+        
+        if failed {
+            panic!("One or more incompatible features were enabled!\r\n{}", fail_reasons.join("\r\n"));
         }
         
         // Save flags

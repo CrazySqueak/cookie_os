@@ -3,7 +3,7 @@ export LD := x86_64-elf-ld
 export NASM := nasm -f elf64
 export QEMU := qemu-system-x86_64
 
-export KBUILDFEATURES ?= per_page_NXE_bit enable_amd64_TCE page_global_bit
+export KBUILDFEATURES ?= per_page_NXE_bit enable_amd64_TCE page_global_bit 1G_huge_pages
 export QEMUCPU ?= qemu64,+pdpe1gb,+smep,+tce
 
 export BUILDNAME := $(ARCH)

@@ -16,6 +16,10 @@ pub struct MLFFAllocator<ST: PageFrameAllocator, PT: IPageTable, const SUBTABLES
 
 impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAllocator<ST,PT,SUBTABLES,HUGEPAGES>
   where ST: PageFrameAllocator {
+    fn _logging_physaddr(&self) -> usize {
+        ptaddr_virt_to_phys(core::ptr::addr_of!(self.page_table) as usize)
+    }
+    
     fn get_subtable_always(&mut self, idx: usize) -> &mut Box<ST> {
         if let Some(ref mut subtable) = self.suballocators[idx] {
             return subtable;
@@ -186,7 +190,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         // We only support a non-page-sized remainder if we support sub-tables (as page frames cannot be divided)
         let pages = if SUBTABLES { size / Self::PAGE_SIZE } else { size.div_ceil(Self::PAGE_SIZE) };
         let remainder = if SUBTABLES { size % Self::PAGE_SIZE } else { 0 };
-        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "allocate: addr=ANY pages={} rem={} search=[0,{})", pages, remainder, Self::NPAGES-pages+1);
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "{:x}::allocate: addr=ANY pages={} rem={} search=[0,{})", self._logging_physaddr(), pages, remainder, Self::NPAGES-pages+1);
         
         // TODO: Replace with something that's not effectively O(n^2)
         for offset in 0..(Self::NPAGES-pages+1) {
@@ -247,7 +251,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         let remainder = if SUBTABLES { size % Self::PAGE_SIZE } else { 0 };
         let end = start_idx+pages;
         
-        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "allocate_at: offset=0x{:x} page_size=0x{:x} start={} pages={} rem={}", addr, Self::PAGE_SIZE, start_idx, pages, remainder);
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "{:x}::allocate_at: offset=0x{:x} page_size=0x{:x} start={} pages={} rem={}", self._logging_physaddr(), addr, Self::PAGE_SIZE, start_idx, pages, remainder);
         
         // Check that the main area is clear
         for i in start_idx..end {
@@ -278,6 +282,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
     }
     
     fn deallocate(&mut self, allocation: &PartialPageAllocation) {
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "{:x}::deallocate: alloc={:?}", self._logging_physaddr(), allocation);
         for item in allocation.entries() {
             match item {
                 &PAllocItem::Page { index, .. } => {

@@ -198,7 +198,7 @@ mod sealed {
                     }
                     suballoc @ &PAllocItem::SubTable{ index, offset, ref alloc } => {
                         // Clear ... state
-                        if doneellipsis { fmte(dbl, prefix, previndex[1], parentoffset+prevoff[1]); fmte(dbl, prefix, previndex[0], parentoffset+prevoff[0]); }
+                        if doneellipsis { doneellipsis = false; fmte(dbl, prefix, previndex[1], parentoffset+prevoff[1]); fmte(dbl, prefix, previndex[0], parentoffset+prevoff[0]); }
                         // Sub-allocation
                         alloc._fmt_inner(dbl, &alloc::format!("{}[{}]", prefix, index), parentoffset+offset);
                     }

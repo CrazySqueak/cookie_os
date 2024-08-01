@@ -47,9 +47,6 @@ pub unsafe fn _kinit() {
         let mut kallocator = memory::paging::global_pages::KERNEL_PTABLE.write_when_active();
         let (start, size) = (0, 1*1024*1024*1024);  // 1GiB - currently akin to the bootstrap page table
         
-        let mut b = memory::paging::global_pages::KERNEL_PTABLE.write_when_active();  // second lock
-        let _ = b.allocate_at(1,1);
-        
         // Null guard
         let nullguard = allocator.allocate_at(0, 1).expect("VMem Allocation Failed!");
         allocator.set_absent(&nullguard, 0x4E554C_505452);  // "NULPTR"
@@ -82,14 +79,14 @@ pub unsafe fn _kinit() {
     memory::kernel_heap::init_kheap_2();
     
     // test kernel heap rescue
-    //let mut i = 0;
-    //loop {
-    //    i+=1;
-    //    const L: alloc::alloc::Layout = unsafe{alloc::alloc::Layout::from_size_align_unchecked(69420,2)};
-    //    let p = alloc::alloc::alloc(L);
-    //    if p == core::ptr::null_mut() { alloc::alloc::handle_alloc_error(L); }
-    //    klog!(Info,ROOT,"{} {:p}",i,p);
-    //}
+    let mut i = 0;
+    loop {
+        i+=1;
+        const L: alloc::alloc::Layout = unsafe{alloc::alloc::Layout::from_size_align_unchecked(69420,2)};
+        let p = alloc::alloc::alloc(L);
+        if p == core::ptr::null_mut() { alloc::alloc::handle_alloc_error(L); }
+        klog!(Info,ROOT,"{} {:p}",i,p);
+    }
     
     
     // Grow kernel heap by 16+32MiB

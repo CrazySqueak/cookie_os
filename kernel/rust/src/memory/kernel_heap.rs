@@ -99,7 +99,7 @@ unsafe fn _reinit_rescue(rescue: &mut Option<RescueT>){
     let newrescue = (||{
         use super::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
         let pallocation = palloc(Layout::from_size_align(RESCUE_SIZE,1).unwrap())?;
-        let vallocation = kernel_table.allocate(pallocation.get_size())?;
+        let vallocation = kernel_table.allocate_at(KERNEL_PTABLE.get_vmem_offset()+pallocation.get_addr(), pallocation.get_size())?;
         kernel_table.set_base_addr(&vallocation, pallocation.get_addr(), PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::empty()));
         Some((pallocation, vallocation))
     })();

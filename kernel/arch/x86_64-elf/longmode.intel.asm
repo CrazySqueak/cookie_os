@@ -53,7 +53,7 @@ kstack_top:
 ; prior to getting a proper allocator for memory set up (which requires processing the ram map and many other things)
 align 4
 kheap_initial_start:
-resb 0x100_0000 ; 16MiB
+resb 0x80_0000 ; 8MiB - we can expand it as needed
 kheap_initial_end:
 
 ; multiboot info ptr

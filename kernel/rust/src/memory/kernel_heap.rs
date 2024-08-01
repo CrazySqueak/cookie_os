@@ -19,7 +19,7 @@ impl KernelHeap {
     }
     
     pub unsafe fn init(&self, addr: usize, size: usize){
-        self.heap.lock().init(addr, size)
+        crate::lowlevel::without_interrupts(||self.heap.lock().init(addr, size))
     }
 }
 unsafe impl core::alloc::GlobalAlloc for KernelHeap {
@@ -60,38 +60,45 @@ pub unsafe fn init_kheap_2(){
     _reinit_rescue(&mut rescue);
 }
 
-/*/* Allocate some extra physical memory to the kernel heap.
-//    (note: the kernel heap's PhysicalMemoryAllocations are currently not kept anywhere, so they cannot be freed again. Use this function with care.)
-//    Size is in bytes.
-//    Return value is the actual number of bytes added, or Err if it was unable to allocate the requested space.
-//    Note: The Kernel cannot reference memory outside of the first 1G unless you update the page table mappings. TODO: Replace this system with something more robust (necessary anyway once I add paging and multitasking)
-//    */
-//pub fn grow_kheap(amount: usize) -> Result<usize,()>{
-//    use super::physical::palloc;
-//    use core::mem::forget;
-//    use core::alloc::Layout;
-//    
-//    // TODO: Paging support
-//    let l = Layout::from_size_align(amount, 4096).unwrap();
-//    klog!(Debug, MEMORY_KHEAP, "Expanding kernel heap by {} bytes...", amount);
-//    let allocation = palloc(l).ok_or_else(||{
-//        klog!(Severe, MEMORY_KHEAP, "Unable to expand kernel heap! Requested {} bytes but allocation failed.", amount);
-//    })?;
-//    
-//    let bytes_added = allocation.get_size();
-//    klog!(Info, MEMORY_KHEAP, "Expanded kernel heap by {} bytes.", bytes_added);
-//    
-//    crate::lowlevel::without_interrupts(||{ unsafe {
-//        // Add allocation to heap
-//        KHEAP_ALLOCATOR.lock().init((allocation.get_ptr().as_ptr() as usize) + crate::lowlevel::HIGHER_HALF_OFFSET, bytes_added);
-//        // forget the allocation
-//        // (so that the destructor isn't called)
-//        // (as the destructor frees it)
-//        forget(allocation);
-//    }});
-//    
-//    Ok(bytes_added)
-//}*/
+/* Allocate some extra physical memory to the kernel heap.
+    (note: the kernel heap's PhysicalMemoryAllocations are currently not kept anywhere, so they cannot be freed again. Use this function with care.)
+    Size is in bytes.
+    Return value is the actual number of bytes added, or Err if it was unable to allocate the requested space.
+    */
+pub fn grow_kheap(amount: usize) -> Result<usize,()>{
+    use super::physical::palloc;
+    use core::mem::forget;
+    use core::alloc::Layout;
+    
+    // Step 1: allocate physical memory
+    let l = Layout::from_size_align(amount, 4096).unwrap();
+    klog!(Debug, MEMORY_KHEAP, "Expanding kernel heap by {} bytes...", amount);
+    let allocation = palloc(l).ok_or_else(||{
+        klog!(Severe, MEMORY_KHEAP, "Unable to expand kernel heap! Requested {} bytes but allocation failed.", amount);
+    })?;
+    let bytes_added = allocation.get_size();
+    
+    // Step 2: allocate virtual memory
+    use super::paging::global_pages::KERNEL_PTABLE;
+    use super::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
+    let valloc = KERNEL_PTABLE.allocate_at(KERNEL_PTABLE.get_vmem_offset()+allocation.get_addr(), bytes_added).ok_or_else(||{
+        klog!(Severe, MEMORY_KHEAP, "Unable to expand kernel heap! Received memory that is unable to be mapped?");  // This should only occur if somehow the page mappings have been fucked up (or i've added swapping support but didn't update this)
+    })?;
+    valloc.set_base_addr(allocation.get_addr(), PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::empty()));
+    
+    klog!(Info, MEMORY_KHEAP, "Expanded kernel heap by {} bytes.", bytes_added);
+    
+    unsafe {
+        // Add allocation to heap
+        KHEAP_ALLOCATOR.init(valloc.start(), bytes_added);
+        // forget the allocation
+        // (so that the destructor isn't called)
+        // (as the destructor frees it)
+        forget(allocation); forget(valloc);
+    }
+    
+    Ok(bytes_added)
+}
 
 // RESCUE
 use super::paging::global_pages::KERNEL_PTABLE;
@@ -140,7 +147,7 @@ unsafe fn _reinit_rescue(rescue: &mut Option<RescueT>){
         Some(nr) => {
             let paddr = nr.0.get_addr(); let vaddr = nr.1.start(); let vsize = nr.1.size();
             let _ = rescue.insert(nr);
-            klog!(Debug, MEMORY_KHEAP, "Allocated new rescue @ V={:x} size {} | P={:x}", vaddr, vsize, paddr);
+            klog!(Info, MEMORY_KHEAP, "Allocated new rescue @ V={:x} size {} | P={:x}", vaddr, vsize, paddr);
         },
         None => {
             klog!(Severe, MEMORY_KHEAP, "Unable to allocate new rescue! Next kernel OOM will crash!");

@@ -84,9 +84,9 @@ pub unsafe fn _kinit() {
     //}
     
     
-    // Grow kernel heap by 16+32MiB
-    //let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
-    //let _ = memory::kernel_heap::grow_kheap(32*1024*1024);
+    // Grow kernel heap by 16+8MiB for a total initial size of 32
+    let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
+    let _ = memory::kernel_heap::grow_kheap( 8*1024*1024);
 }
 
 #[no_mangle]

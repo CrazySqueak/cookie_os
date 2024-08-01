@@ -4,7 +4,7 @@ use alloc::vec;
 
 use lazy_static::lazy_static;
 use x86_64::instructions::port::Port;
-use spin::{Mutex,MutexGuard};
+use crate::sync::{Mutex,MutexGuard};
 use pc_keyboard::{DecodedKey,Keyboard,ScancodeSet1};
 
 const KB_IO_PORT: u16 = 0x60;

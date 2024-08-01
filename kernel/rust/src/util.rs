@@ -1,6 +1,6 @@
 pub trait LockedNoInterrupts {
     type Wraps;
-    fn with_lock<R,F: FnOnce(spin::MutexGuard<Self::Wraps>)->R>(&self, f: F) -> R;
+    fn with_lock<R,F: FnOnce(crate::sync::MutexGuard<Self::Wraps>)->R>(&self, f: F) -> R;
 }
 
 macro_rules! mutex_no_interrupts {
@@ -8,18 +8,18 @@ macro_rules! mutex_no_interrupts {
         use crate::util::LockedNoInterrupts;
         #[repr(transparent)]
         pub struct $name<$($lifes),*> {
-            inner: spin::Mutex<$wraps>
+            inner: crate::sync::Mutex<$wraps>
         }
         impl<$($lifes),*> $name<$($lifes),*>{
             pub const fn wraps(inner: $wraps) -> Self {
                 Self {
-                    inner: spin::Mutex::new(inner)
+                    inner: crate::sync::Mutex::new(inner)
                 }
             }
         }
         impl<$($lifes),*> LockedNoInterrupts for $name<$($lifes),*>{
             type Wraps = $wraps;
-            fn with_lock<R,F: FnOnce(spin::MutexGuard<Self::Wraps>)->R>(&self, f: F) -> R{
+            fn with_lock<R,F: FnOnce(crate::sync::MutexGuard<Self::Wraps>)->R>(&self, f: F) -> R{
                 crate::lowlevel::without_interrupts(||f(self.inner.lock()))
             }
         }

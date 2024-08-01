@@ -3,7 +3,7 @@ use alloc::format;
 use lazy_static::lazy_static;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use pic8259::ChainedPics;
-use spin::Mutex;
+use crate::sync::Mutex;
 
 use crate::util::LockedWrite;
 use crate::coredrivers::keyboard_ps2 as keyboard;

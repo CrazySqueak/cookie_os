@@ -65,7 +65,7 @@ use super::paging::PageAllocation;
 use super::physical::{palloc,PhysicalMemoryAllocation};
 use buddy_system_allocator::Heap;
 use core::alloc::Layout;
-use spin::Mutex;
+use crate::sync::Mutex;
 // As allocating new memory may require heap memory, we keep a 1MiB rescue section pre-allocated.
 const RESCUE_SIZE: usize = 1*1024*1024;  // 1MiB
 type RescueT = (PhysicalMemoryAllocation,PageAllocation);

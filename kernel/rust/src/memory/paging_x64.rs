@@ -107,6 +107,10 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
         klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping entry {:x}[{}] to N/A (data={:x})", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, data);
         unsafe { *((&mut self.0[idx] as *mut PageTableEntry) as *mut u64) = data as u64; }  // Update entry manually
     }
+    fn set_empty(&mut self, idx: usize){
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Clearing entry {:x}[{}]", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx);
+        self.0[idx].set_unused()
+    }
 }
 
 type X64Level1 = MLFFAllocator<NoDeeper , X64PageTable<1>, false, true >;  // Page Table

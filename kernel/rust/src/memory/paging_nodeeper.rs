@@ -21,7 +21,8 @@ impl PageFrameAllocatorImpl for NoDeeper {
     fn get_suballocator_mut(&mut self, index: usize) -> Option<&mut Self::SubAllocType> { nope!(); }
     fn allocate(&mut self, size: usize) -> Option<PartialPageAllocation> { nope!(); }
     fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PartialPageAllocation> { nope!(); }
-        fn split_page(&mut self, index: usize) -> Result<PartialPageAllocation,()> { nope!(); }
+    fn deallocate(&mut self, allocation: &PartialPageAllocation) { nope!(); }
+    fn split_page(&mut self, index: usize) -> Result<PartialPageAllocation,()> { nope!(); }
     unsafe fn put_global_table(&mut self, index: usize, phys_addr: usize, flags: PageFlags) { nope!(); }
 }
 impl IPageTableImpl for NoDeeper {
@@ -35,4 +36,5 @@ impl IPageTableImpl for NoDeeper {
     fn add_subtable_flags<const INCLUDE_NON_TRANSITIVE: bool>(&mut self, idx: usize, flags: &PageFlags) { nope!(); }
     fn set_huge_addr(&mut self, idx: usize, physaddr: usize, flags: PageFlags) { nope!(); }
     fn set_absent(&mut self, idx: usize, data: usize) { nope!(); }
+    fn set_empty(&mut self, idx: usize) { nope!(); }
 }

@@ -277,6 +277,31 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         Some(self._build_allocation(contig_result,remainder_allocated))
     }
     
+    fn deallocate(&mut self, allocation: &PartialPageAllocation) {
+        for item in allocation.entries() {
+            match item {
+                &PAllocItem::Page { index, .. } => {
+                    // clear the page
+                    self.get_page_table_mut().set_empty(index);
+                    self.refresh_availability(index);
+                },
+                &PAllocItem::SubTable { index, ref alloc, .. } => {
+                    let suballocator = self.get_suballocator_mut(index).unwrap();
+                    // deallocate the sub-allocation
+                    suballocator.deallocate(alloc);
+                    
+                    // Delete the suballocator if it's empty
+                    if suballocator.get_num_pages_used() == 0 {
+                        self.get_page_table_mut().set_empty(index);
+                        self.suballocators[index] = None;
+                    }
+                    // Referesh availability
+                    self.refresh_availability(index);
+                },
+            }
+        }
+    }
+    
     fn split_page(&mut self, index: usize) -> Result<PartialPageAllocation,()> {
         if (!SUBTABLES) || (!HUGEPAGES) { return Err(()); }  // not supported
         if self.get_availability(index) != 0b11u8 { return Err(()); }  // not a huge page

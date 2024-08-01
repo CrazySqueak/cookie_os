@@ -407,6 +407,13 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         )
     }
     
+    /* drop() only gives us a reference so we have to make do */
+    pub(self) fn dealloc(&mut self, allocation: &PageAllocation<PFA>){
+        allocation.assert_pt_tag(self);
+        klog!(Debug, MEMORY_PAGING_CONTEXT, "Deallocating {}", self._fmt_pa(allocation));
+        self.get_page_table().deallocate(&allocation.allocation);
+        if self.options.auto_flush_tlb { self.invalidate_tlb(allocation) };
+    }
     
     // Managing allocations
     /* Set the base physical address for the given allocation. This also sets the PRESENT flag automatically. */
@@ -448,11 +455,29 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     pub(super) fn invalidate_tlb(&mut self, allocation: &PageAllocation<PFA>){
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
         let vmem_offset = allocation.start();  // (vmem offset is now added by PageAllocation itself)
-        Self::_inval_tlb_inner(self.get_page_table(), allocation.into(), 0, vmem_offset);
+        Self::_inval_tlb_inner(allocation.into(), 0, vmem_offset);
     }
-    ppa_define_foreach!(: _inval_tlb_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, vmem_start: usize, {
-        inval_tlb_pg(vmem_start + offset)
-    }, {});
+    fn _inval_tlb_inner(allocation: &PartialPageAllocation, parentoffset: usize, vmem_start: usize){
+            // Call on current-level entries
+            for item in allocation.entries() {
+                match item {
+                    &PAllocItem::Page { index, offset } => {
+                        let offset = parentoffset+offset;
+                        inval_tlb_pg(vmem_start + offset)
+                    },
+                    &PAllocItem::SubTable { .. } => {},
+                }
+            }
+            // Recurse into sub-allocators
+            for item in allocation.entries() {
+                if let &PAllocItem::SubTable { offset, alloc: ref suballocation, .. } = item {
+                    Self::_inval_tlb_inner(suballocation, parentoffset+offset, vmem_start);
+                }
+            }
+        }
+    //ppa_define_foreach!(: _inval_tlb_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, vmem_start: usize, {
+    //    inval_tlb_pg(vmem_start + offset)
+    //}, {});
 }
 
 pub struct ForcedUpgradeGuard<'a, T> {
@@ -552,11 +577,17 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
 }
 impl<PFA:PageFrameAllocator> core::ops::Drop for PageAllocation<PFA> {
     fn drop(&mut self){
-        todo!()
+        self.allocator.write_when_active().dealloc(self);
     }
 }
 impl<'a,PFA:PageFrameAllocator> From<&'a PageAllocation<PFA>> for &'a PartialPageAllocation {
     fn from(value: &'a PageAllocation<PFA>) -> Self {
         &value.allocation
+    }
+}
+
+impl<PFA:PageFrameAllocator> core::fmt::Debug for PageAllocation<PFA> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PageAllocation").field("alloc", &self.allocation).finish()
     }
 }

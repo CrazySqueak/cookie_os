@@ -49,6 +49,8 @@ mod sealed {
         fn allocate(&mut self, size: usize) -> Option<PartialPageAllocation>;
         /* Allocate the requested amount of memory at the given virtual memory address (relative to the start of this table's jurisdiction). */
         fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PartialPageAllocation>;
+        /* Deallocate the given allocation. (note: please make sure to discard the allocation afterwards) */
+        fn deallocate(&mut self, allocation: &PartialPageAllocation);
         
         /* Split the given huge page into a sub-table, if possible. */
         fn split_page(&mut self, index: usize) -> Result<PartialPageAllocation,()>;
@@ -95,6 +97,8 @@ mod sealed {
         fn set_huge_addr(&mut self, idx: usize, physaddr: usize, flags: PageFlags);
         /* Set the given item as absent, and clear its present flag. */
         fn set_absent(&mut self, idx: usize, data: usize);
+        /* Clear the given entry, setting it to zero. */
+        fn set_empty(&mut self, idx: usize);
     }
     
     // (offset is the offset for the start of the frame/subpage in physmem, measured from the base physmem address)

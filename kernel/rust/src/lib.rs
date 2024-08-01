@@ -64,15 +64,24 @@ pub unsafe fn _kinit() {
     // Initialise kernel heap rescue
     memory::kernel_heap::init_kheap_2();
     
-    // test kernel heap rescue
-    let mut i = 0;
-    loop {
-        i+=1;
-        const L: alloc::alloc::Layout = unsafe{alloc::alloc::Layout::from_size_align_unchecked(69420,2)};
-        let p = alloc::alloc::alloc(L);
-        if p == core::ptr::null_mut() { alloc::alloc::handle_alloc_error(L); }
-        klog!(Info,ROOT,"{} {:p}",i,p);
-    }
+    // // test kernel heap rescue
+    // let mut i = 0;
+    // loop {
+    //     i+=1;
+    //     const L: alloc::alloc::Layout = unsafe{alloc::alloc::Layout::from_size_align_unchecked(69420,2)};
+    //     let p = alloc::alloc::alloc(L);
+    //     if p == core::ptr::null_mut() { alloc::alloc::handle_alloc_error(L); }
+    //     klog!(Info,ROOT,"{} {:p}",i,p);
+    // }
+    // test paging
+    //{
+    //    for i in 0..128 {
+    //        let alloc = pagetable.allocate(i*1024*1024);
+    //        let alloc2 = memory::paging::global_pages::KERNEL_PTABLE.allocate(i*2048);
+    //        klog!(Info,ROOT,"{:?}{:?}",alloc,alloc2);
+    //        drop(alloc);
+    //    }
+    //}
     
     
     // Grow kernel heap by 16+32MiB

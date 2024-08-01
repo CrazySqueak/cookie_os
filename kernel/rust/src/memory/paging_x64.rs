@@ -127,7 +127,7 @@ pub fn crop_addr(addr: usize) -> usize {
 }
 /* Convert a virtual address to a physical address, for use with pointing the CPU to page tables. */
 pub fn ptaddr_virt_to_phys(vaddr: usize) -> usize {
-    vaddr-crate::lowlevel::HIGHER_HALF_OFFSET // note: this will break if the area where the page table lives is not offset-mapped (or if the address has been cropped to hold all 0s for non-canonical bits)
+    vaddr-super::global_pages::KERNEL_PTABLE_VADDR // note: this will break if the area where the page table lives is not offset-mapped (or if the address has been cropped to hold all 0s for non-canonical bits)
 }
 
 /* Ensure a virtual address is canonical */

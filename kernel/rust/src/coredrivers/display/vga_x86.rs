@@ -88,7 +88,8 @@ impl VGABuffer {
 // We're mapped to the higher half, so we have to remember to OFFSET the memory-mapped I/O otherwise we get a page fault
 // which ends badly because the current page fault handler involves writing to the screen. oops
 pub const VGA_BUFFER_PHYSICAL: usize = 0xb8000;
-pub const VGA_BUFFER_ADDR: usize = crate::lowlevel::HIGHER_HALF_OFFSET + VGA_BUFFER_PHYSICAL;
+pub const VGA_BUFFER_ADDR: usize = crate::memory::paging::global_pages::KERNEL_PTABLE_VADDR + VGA_BUFFER_PHYSICAL;
+pub const VGA_BUFFER_SIZE: usize = VGA_HEIGHT * VGA_WIDTH * 2;
 
 fn get_standard_vga_buffer() -> &'static mut VGABuffer {
     return unsafe { &mut *(VGA_BUFFER_ADDR as *mut VGABuffer) };

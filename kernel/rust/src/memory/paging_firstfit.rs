@@ -249,7 +249,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         }
         // Check that the remainder is clear (if applicable)
         let remainder_allocated = 'allocrem: { if remainder != 0 && SUBTABLES {
-                if let Some(alloc) = self._alloc_rem(end, 0, remainder){
+                if let Some(alloc) = self._alloc_rem(end, 0+start_rem, remainder){
                     break 'allocrem Some((PAllocItem::SubTable{index:end,offset:pages*Self::PAGE_SIZE,alloc:alloc},0));
                 }
             // failed
@@ -280,19 +280,23 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         // Copy flags across
         let entry = self.page_table.get_entry(index);
         let subpt = suballoc.get_page_table_mut();
-        if let Ok((addr, flags)) = entry {
+        let stflags = if let Ok((addr, flags)) = entry {
             for i in 0..ST::NPAGES {
                 subpt.set_huge_addr(i, addr+(i*ST::PAGE_SIZE), flags);
             }
+            flags
         } else if let Err(data) = entry {
             for i in 0..ST::NPAGES {
                 subpt.set_absent(i, data);
             }
-        } else { unreachable!() }
+            PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty())
+        } else { unreachable!() };
         
         // Point to new subtable
         Self::__point_to_subtable(&mut self.page_table, index, suballoc);
         self.refresh_availability(index);
+        // SET FLAGS ON SUBTABLE YOU FUCKING IDIOT
+        self.page_table.add_subtable_flags::<false>(index, &stflags);
         
         // Et voila!
         Ok(allocation)

@@ -71,13 +71,13 @@ pub mod contexts {
     
     // Configure contexts in here! :)
     def_context!(MEMORY, ROOT);
-      def_context!(MEMORY_PAGING, MEMORY, Debug);
+      def_context!(MEMORY_PAGING, MEMORY, Info);
         def_context!(MEMORY_PAGING_CONTEXT, MEMORY_PAGING, Debug);
         def_context!(MEMORY_PAGING_GLOBALPAGES, MEMORY_PAGING);
         def_context!(MEMORY_PAGING_ALLOCATOR, MEMORY_PAGING);
           def_context!(MEMORY_PAGING_ALLOCATOR_MLFF, MEMORY_PAGING_ALLOCATOR);
         def_context!(MEMORY_PAGING_MAPPINGS, MEMORY_PAGING);
-        def_context!(MEMORY_PAGING_TLB, MEMORY_PAGING, Debug);
+        def_context!(MEMORY_PAGING_TLB, MEMORY_PAGING, Info);
       def_context!(MEMORY_KHEAP, MEMORY, Debug);
       def_context!(MEMORY_PHYSICAL, MEMORY);
         def_context!(MEMORY_PHYSICAL_BUDDIES, MEMORY_PHYSICAL, Warning);

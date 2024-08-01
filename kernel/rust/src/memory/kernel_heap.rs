@@ -105,7 +105,7 @@ unsafe fn _reinit_rescue(rescue: &mut Option<RescueT>){
     })();
     match newrescue {
         Some(nr) => {
-            let paddr = nr.0.get_addr(); let vaddr = KERNEL_PTABLE.get_vmem_offset()+nr.1.start(); let vsize = nr.1.size();
+            let paddr = nr.0.get_addr(); let vaddr = nr.1.start(); let vsize = nr.1.size();
             let _ = rescue.insert(nr);
             klog!(Debug, MEMORY_KHEAP, "Allocated new rescue @ V={:x} size {} | P={:x}", vaddr, vsize, paddr);
         },

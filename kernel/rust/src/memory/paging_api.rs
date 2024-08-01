@@ -307,9 +307,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     }
     pub fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PageAllocation> {
         // Convert the address
-        // 1. Convert from canonical vmem addr to 0-extended (so it can be converted to an index)
-        let addr = addr&0x0000ffff_ffffffff;
-        // 2. We subtract the offset from the vmem address (as we need it to be relative to the start of our table)
+        // Subtract the offset from the vmem address (as we need it to be relative to the start of our table)
         let rel_addr = addr.checked_sub(self.meta.offset).unwrap_or_else(||panic!("Cannot allocate memory before the start of the page! addr=0x{:x} page_start=0x{:x}",addr,self.meta.offset));
         
         // Allocate
@@ -323,12 +321,12 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
        Note: It is not guaranteed that the second allocation will not be empty. */
     pub fn split_allocation(&mut self, allocation: PageAllocation, mid: usize) -> (PageAllocation, PageAllocation) {
         allocation.assert_pt_tag(self);
-        let PageAllocation { allocation, pagetable_tag } = allocation;
+        let PageAllocation { allocation, pagetable_tag, metadata } = allocation;
         
         let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid);
         (
-            PageAllocation { pagetable_tag, allocation: lhs },
-            PageAllocation { pagetable_tag, allocation: rhs },
+            PageAllocation { pagetable_tag, allocation: lhs, metadata },
+            PageAllocation { pagetable_tag, allocation: rhs, metadata },
         )
     }
     pub fn _split_alloc_inner<SPF:PageFrameAllocator>(pfa: &mut SPF, allocation: PartialPageAllocation, mid: usize) -> (PartialPageAllocation, PartialPageAllocation) {
@@ -435,7 +433,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         Note: Using this method is unnecessary yourself. Usually it is provided by write_when_active or similar. */
     pub fn invalidate_tlb(&mut self, allocation: &PageAllocation){
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
-        let vmem_offset = self.meta.offset+allocation.start();
+        let vmem_offset = allocation.start();  // (vmem offset is now added by PageAllocation itself)
         Self::_inval_tlb_inner(self.get_page_table(), allocation.into(), 0, vmem_offset);
     }
     ppa_define_foreach!(: _inval_tlb_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, vmem_start: usize, {
@@ -486,12 +484,14 @@ pub struct PageAllocation {
     // Pagetable tag is used to check that the correct page table is used or something?
     pagetable_tag: usize,
     allocation: PartialPageAllocation,
+    metadata: LPAMetadata,
 }
 impl PageAllocation {
     pub(super) fn new<PFA:PageFrameAllocator>(allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>, allocation: PartialPageAllocation) -> Self {
         Self {
             pagetable_tag: allocator.get_page_table().get_page_table_ptr() as usize,
             allocation: allocation,
+            metadata: allocator.meta,
         }
     }
     
@@ -501,7 +501,7 @@ impl PageAllocation {
     
     /* Find the start address of this allocation in VMem */
     pub fn start(&self) -> usize {
-        self.allocation.start_addr()
+        canonical_addr(self.allocation.start_addr() + self.metadata.offset)
     }
     pub fn size(&self) -> usize {
         self.allocation.size()

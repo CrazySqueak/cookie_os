@@ -9,7 +9,7 @@ type GlobalPTType = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::Sub
 pub struct GlobalPageTable(LockedPageAllocator<GlobalPTType>,PageFlags);
 impl GlobalPageTable {
     fn new(vmemaddr: usize, flags: PageFlags) -> Self {
-        Self(LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: vmemaddr }), flags)
+        Self(LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: canonical_addr(vmemaddr) }), flags)
     }
     pub fn get_vmem_offset(&self) -> usize {
         self.0.metadata().offset
@@ -41,7 +41,7 @@ impl GlobalPageTable {
 pub const GLOBAL_PAGES_START_IDX: usize = GlobalPTType::NPAGES / 2;  // Index of the first globally mapped page
 
 pub const KERNEL_PTABLE_IDX  : usize = GLOBAL_PAGES_START_IDX+0;
-pub const KERNEL_PTABLE_VADDR: usize = KERNEL_PTABLE_IDX*TOPLEVEL_PAGE_SIZE;
+pub const KERNEL_PTABLE_VADDR: usize = canonical_addr(KERNEL_PTABLE_IDX*TOPLEVEL_PAGE_SIZE);
 
 pub const N_GLOBAL_TABLES: usize = 1;
 lazy_static! {
@@ -64,7 +64,7 @@ extern "C" { static kstack_guard_page: u8; }
 /* Map the kernel to the kernel table. Should be called on initialisation. */
 fn _map_kernel(_kernel_ptable: &GlobalPageTable){
     use crate::logging::klog;
-    klog!(Debug, MEMORY_PAGING_GLOBALPAGES, "Initialising KERNEL_PTABLE.");
+    klog!(Info, MEMORY_PAGING_GLOBALPAGES, "Initialising KERNEL_PTABLE.");
     let mut kernel_ptable = _kernel_ptable.write_when_active();
     
     let (kstart, kend) = crate::memory::physical::get_kernel_bounds();
@@ -77,8 +77,8 @@ fn _map_kernel(_kernel_ptable: &GlobalPageTable){
     kernel_ptable.set_base_addr(&allocation, kstart, PageFlags::new(TransitivePageFlags::EXECUTABLE, MappingSpecificPageFlags::PINNED));
     
     // Map guard page
-    let guard_vaddr = unsafe { core::ptr::addr_of!(kstack_guard_page) as usize } & 0x0000_FFFF_FFFF_FFFF;  // TODO: Handle virtual addresses properly
-    let guard_offset = guard_vaddr - (KERNEL_PTABLE_VADDR+allocation.start());
+    let guard_vaddr = unsafe { core::ptr::addr_of!(kstack_guard_page) as usize };
+    let guard_offset = guard_vaddr - allocation.start();
     klog!(Debug, MEMORY_PAGING_GLOBALPAGES, "Mapping stack guard page (vaddr={:x} offset={:x})", guard_vaddr, guard_offset);
     let (k1alloc, rem) = kernel_ptable.split_allocation(allocation, guard_offset);
     let (guard, k2alloc) = kernel_ptable.split_allocation(rem, 4096);  // guard page is 4096 bytes

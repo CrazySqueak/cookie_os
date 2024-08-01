@@ -130,6 +130,12 @@ pub fn ptaddr_virt_to_phys(vaddr: usize) -> usize {
     vaddr-crate::lowlevel::HIGHER_HALF_OFFSET // note: this will break if the area where the page table lives is not offset-mapped (or if the address has been cropped to hold all 0s for non-canonical bits)
 }
 
+/* Ensure a virtual address is canonical */
+#[inline(always)]
+pub const fn canonical_addr(vaddr: usize) -> usize {
+    x86_64::VirtAddr::new_truncate(vaddr as u64).as_u64() as usize
+}
+
 pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
     use x86_64::addr::PhysAddr;
     use x86_64::structures::paging::frame::PhysFrame;

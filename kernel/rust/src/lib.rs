@@ -22,6 +22,7 @@ use coredrivers::serial_uart::SERIAL1;
 use coredrivers::display_vga; use display_vga::VGA_WRITER;
 
 mod memory;
+mod scheduler;
 
 // arch-specific "lowlevel" module
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]

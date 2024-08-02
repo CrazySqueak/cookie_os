@@ -557,6 +557,10 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
     pub fn start(&self) -> usize {
         canonical_addr(self.allocation.start_addr() + self.metadata.offset)
     }
+    /* Find the end address of this allocation in VMem. (exclusive) */
+    pub fn end(&self) -> usize {
+        canonical_addr(self.allocation.end_addr() + self.metadata.offset)
+    }
     pub fn size(&self) -> usize {
         self.allocation.size()
     }
@@ -593,3 +597,5 @@ impl<PFA:PageFrameAllocator> core::fmt::Debug for PageAllocation<PFA> {
         f.debug_struct("PageAllocation").field("alloc", &self.allocation).finish()
     }
 }
+
+pub type TopLevelPageAllocation = PageAllocation<BaseTLPageAllocator>;

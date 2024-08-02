@@ -150,6 +150,14 @@ mod sealed {
                 &PAllocItem::SubTable { index, ref alloc, .. } => alloc.start_addr()+(index*self.page_size()),
             }
         }
+        /* The ending address of this allocation in VMem, relative to the corresponding page table. Exclusive. (0 if empty) */
+        pub fn end_addr(&self) -> usize {
+            if self.0.is_empty() { return 0; }
+            match &self.0[self.0.len()-1] {
+                &PAllocItem::Page { index, .. } => (index+1)*self.page_size(),  // we add one to include the size of the page
+                &PAllocItem::SubTable { index, ref alloc, .. } => alloc.end_addr()+(index*self.page_size()),  // we don't add one as the "exclusive" bound is already handled by the recursive end_addr() call
+            }
+        }
         /* The size of this allocation in VMem. */
         pub fn size(&self) -> usize {
             let mut size = 0;

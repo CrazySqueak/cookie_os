@@ -28,6 +28,8 @@ impl core::ops::Deref for GlobalPageTable {
     }
 }
 
+pub type GlobalPageAllocation = PageAllocation<GlobalPTType>;
+
 pub const GLOBAL_PAGES_START_IDX: usize = GlobalPTType::NPAGES / 2;  // Index of the first globally mapped page
 
 pub const KERNEL_PTABLE_IDX  : usize = GLOBAL_PAGES_START_IDX+0;

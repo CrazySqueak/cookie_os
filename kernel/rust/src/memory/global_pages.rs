@@ -27,7 +27,6 @@ impl core::ops::Deref for GlobalPageTable {
         &self.0
     }
 }
-// TODO
 
 pub const GLOBAL_PAGES_START_IDX: usize = GlobalPTType::NPAGES / 2;  // Index of the first globally mapped page
 

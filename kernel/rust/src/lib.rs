@@ -82,6 +82,19 @@ pub unsafe fn _kinit() {
     //        drop(alloc);
     //    }
     //}
+    // paging test #2
+    let a1 = pagetable.allocate(128*1024, memory::paging::ALLOCATION_USER_STACK);
+    let a2 = pagetable.allocate(128*1024, memory::paging::ALLOCATION_USER_STACK);
+    klog!(Info, ROOT, "us1={:?}", a1);
+    klog!(Info, ROOT, "us2={:?}", a2);
+    let a1 = pagetable.allocate(128*1024, memory::paging::ALLOCATION_USER_HEAP);
+    let a2 = pagetable.allocate(128*1024, memory::paging::ALLOCATION_USER_HEAP);
+    klog!(Info, ROOT, "uh1={:?}", a1);
+    klog!(Info, ROOT, "uh2={:?}", a2);
+    let a3 = memory::paging::global_pages::KERNEL_PTABLE.allocate(128*1024, memory::paging::KALLOCATION_KERNEL_STACK);
+    let a4 = memory::paging::global_pages::KERNEL_PTABLE.allocate(128*1024, memory::paging::KALLOCATION_KERNEL_STACK);
+    klog!(Info, ROOT, "kh1={:?}", a3);
+    klog!(Info, ROOT, "kh2={:?}", a4);
     
     
     // Grow kernel heap by 16+8MiB for a total initial size of 32

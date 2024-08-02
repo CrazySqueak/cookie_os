@@ -19,7 +19,7 @@ impl PageFrameAllocatorImpl for NoDeeper {
     fn get_page_table_ptr(&self) -> *const Self::PageTableType { nope!(); }
     fn get_page_table_mut(&mut self) -> &mut Self::PageTableType { nope!(); }
     fn get_suballocator_mut(&mut self, index: usize) -> Option<&mut Self::SubAllocType> { nope!(); }
-    fn allocate(&mut self, size: usize) -> Option<PartialPageAllocation> { nope!(); }
+    fn allocate(&mut self, size: usize, alloc_strat: PageAllocationStrategies) -> Option<PartialPageAllocation> { nope!(); }
     fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PartialPageAllocation> { nope!(); }
     fn deallocate(&mut self, allocation: &PartialPageAllocation) { nope!(); }
     fn split_page(&mut self, index: usize) -> Result<PartialPageAllocation,()> { nope!(); }

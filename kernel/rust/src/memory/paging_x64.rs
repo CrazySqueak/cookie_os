@@ -125,6 +125,15 @@ type X64Level4 = MLFFAllocator<X64Level3, X64PageTable<4>, true , false>;  // Pa
 
 pub(in super) type TopLevelPageAllocator = X64Level4;
 
+// Kernel Stack: In the kernel page
+pub const KALLOCATION_KERNEL_STACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true), PageAllocationStrategy::new_default().reverse_order(true).spread_mode(true), PageAllocationStrategy::new_default().reverse_order(true)];
+
+// User Stack: R2L before the kernel pages, spread mode
+pub const ALLOCATION_USER_STACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true).max_page(255), PageAllocationStrategy::new_default().reverse_order(true).spread_mode(true), PageAllocationStrategy::new_default().reverse_order(true)];
+// User Heap: Start 1G inwards
+pub const ALLOCATION_USER_HEAP: PageAllocationStrategies = &[PageAllocationStrategy::new_default(), PageAllocationStrategy::new_default().min_page(1), PageAllocationStrategy::new_default()];
+
+// methods
 /* Discard the upper 16 bits of an address (for 48-bit vmem) */
 pub fn crop_addr(addr: usize) -> usize {
     addr & 0x0000_ffff_ffff_ffff

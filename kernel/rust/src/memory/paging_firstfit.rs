@@ -91,7 +91,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
             } else if SUBTABLES {
                 // Sub-tables
                 let subtable = self.get_subtable_always(idx);
-                if let Some(allocation) = subtable.allocate(Self::PAGE_SIZE) {
+                if let Some(allocation) = subtable.allocate(Self::PAGE_SIZE, ALLOCATION_DEFAULT) {
                     // Add allocation to list
                     allocs.push(PAllocItem::SubTable { index: idx, offset: (idx-start)*Self::PAGE_SIZE, alloc: allocation });
                 } else {
@@ -117,11 +117,11 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
         };
         None
     }
-    fn _alloc_inside(&mut self, idx: usize, size: usize) -> Option<PartialPageAllocation> {
+    fn _alloc_inside(&mut self, idx: usize, size: usize, strategy: PageAllocationStrategies) -> Option<PartialPageAllocation> {
         assert!(SUBTABLES);
         if idx < Self::NPAGES && self.get_availability(idx) < 0b11u8 {
             klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Attempting smaller allocation @ idx={}, size={:x}", idx, size);
-            if let Some(allocation) = self.get_subtable_always(idx).allocate(size) {
+            if let Some(allocation) = self.get_subtable_always(idx).allocate(size, pas_next_level_down(strategy)) {
                 self.refresh_availability(idx);
                 return Some(allocation);
             }
@@ -186,19 +186,42 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         self.suballocators[index].as_deref_mut()
     }
     
-    fn allocate(&mut self, size: usize) -> Option<PartialPageAllocation> {
+    fn allocate(&mut self, size: usize, alloc_strat: PageAllocationStrategies) -> Option<PartialPageAllocation> {
+        let strategy = pas_current(alloc_strat);
         // We only support a non-page-sized remainder if we support sub-tables (as page frames cannot be divided)
         let pages = if SUBTABLES { size / Self::PAGE_SIZE } else { size.div_ceil(Self::PAGE_SIZE) };
         let remainder = if SUBTABLES { size % Self::PAGE_SIZE } else { 0 };
-        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "{:x}::allocate: addr=ANY pages={} rem={} search=[0,{})", self._logging_physaddr(), pages, remainder, Self::NPAGES-pages+1);
+        
+        let search_npages = pages + if remainder > 0 { 1 } else { 0 };
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "{:x}::allocate: addr=ANY pages={} rem={} search=[0,{}) strat={:?}", self._logging_physaddr(), pages, remainder, Self::NPAGES-search_npages+1, strategy);
         
         // TODO: Replace with something that's not effectively O(n^2)
-        for offset in 0..(Self::NPAGES-pages+1) {
+        
+        // alloc_strat: override min and max if needed
+        let mut min_page = 0; let mut max_page = Self::NPAGES-search_npages+1;
+        if let Some(x) = strategy.min_page { min_page = min_page.max(x) }
+        if let Some(x) = strategy.max_page { max_page = max_page.min((x+1)-search_npages+1) } // try not to overrun the strategy-provided max page
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Strategy: selected min={} max={}", min_page, max_page);
+        
+        // alloc_strat: reverse if requested
+        let search_iter = min_page..max_page;
+        let search_iter = if strategy.reverse_order { either::Either::Right(search_iter.rev()) } else { either::Either::Left(search_iter) };
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Strategy: selected search_iter={:?}", search_iter);
+        
+        // alloc_strat: spread_mode
+        let spread_mode_itr = if strategy.spread_mode { [true, false].iter() } else { [false].iter() };
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Strategy: selected spread_mode={:?}", spread_mode_itr);
+        
+        // now go find a free spot
+        for spread_mode in spread_mode_itr { let srcitr = search_iter.clone(); for offset in srcitr {
             'check: {
                 if SUBTABLES && pages < 1 {  // No whole pages needed. We don't need this complex sh*t. Just pass it down to a suballocator who is better equipped to deal with this
                     let i = offset;
                     
-                    let result = if let Some(alloc) = self._alloc_inside(i, remainder) {
+                    klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "{}", i);
+                    if strategy.spread_mode && self.get_availability(i) != 0b00u8 { break 'check; }
+                    
+                    let result = if let Some(alloc) = self._alloc_inside(i, remainder, alloc_strat) {
                         PAllocItem::SubTable { index: i, offset: 0, alloc: alloc }
                     } else { break 'check; };
                     
@@ -237,7 +260,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
                     return Some(self._build_allocation(contig_result,remainder_allocated));
                 }
             };
-        }
+        }}
         // If we get here then sadly we've failed
         None
     }
@@ -314,7 +337,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         
         // Create new allocation
         let suballoc = self.suballocators[index].insert(Self::__inst_subtable());
-        let allocation = suballoc.allocate(Self::PAGE_SIZE).unwrap();
+        let allocation = suballoc.allocate(Self::PAGE_SIZE, ALLOCATION_DEFAULT).unwrap();
         
         // Copy flags across
         let entry = self.page_table.get_entry(index);

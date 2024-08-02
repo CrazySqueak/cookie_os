@@ -9,6 +9,7 @@ use super::*;
 type BaseTLPageAllocator = arch::TopLevelPageAllocator;
 use arch::{set_active_page_table,inval_tlb_pg};
 
+// FLAGS & STUFF
 #[derive(Debug,Clone,Copy)]
 pub struct PageFlags {
     pub tflags: TransitivePageFlags,
@@ -46,6 +47,7 @@ bitflags::bitflags! {
     }
 }
 
+// LOCKED PAGE ALLOCATOR
 #[derive(Debug,Clone,Copy)]
 pub struct LPAMetadata {
     // Offset in VMEM for the start of the page table's jurisdiction. For top-level tables this is 0. For tables nested inside of other tables, this might not be 0
@@ -173,8 +175,8 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         }
     }
     
-    pub fn allocate(&self, size: usize) -> Option<PageAllocation<PFA>> {
-        self.write_when_active().allocate(size)
+    pub fn allocate(&self, size: usize, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
+        self.write_when_active().allocate(size, alloc_strat)
     }
     pub fn allocate_at(&self, addr: usize, size: usize) -> Option<PageAllocation<PFA>> {
         self.write_when_active().allocate_at(addr, size)
@@ -314,9 +316,9 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     
     // Allocating
     // (we don't need to flush the TLB for allocation as the page has gone from NOT PRESENT -> NOT PRESENT - instead we flush it when it's mapped to an address)
-    pub(super) fn allocate(&mut self, size: usize) -> Option<PageAllocation<PFA>> {
+    pub(super) fn allocate(&mut self, size: usize, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
         let allocator = self.get_page_table();
-        let allocation = allocator.allocate(size)?;
+        let allocation = allocator.allocate(size, alloc_strat)?;
         Some(PageAllocation::new(LockedPageAllocator::clone_ref(&self.allocator), allocation))
     }
     pub(super) fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PageAllocation<PFA>> {

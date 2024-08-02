@@ -66,9 +66,16 @@ pub unsafe fn _kinit() {
     memory::kernel_heap::init_kheap_2();
     
     // paging test #3
-    let mut arr = alloc::vec![crate::scheduler::ktask::allocate_ktask_stack().unwrap()];
-    for i in 0..16 { arr.push(crate::scheduler::ktask::allocate_ktask_stack().unwrap()) }
+    let mut arr = alloc::vec![crate::scheduler::allocation::allocate_ktask_stack().unwrap()];
+    for i in 0..16 { arr.push(crate::scheduler::allocation::allocate_ktask_stack().unwrap()) }
     klog!(Info,ROOT,"Got {:?}",arr);
+    
+    let mut a = arr.swap_remove(0); drop(arr);
+    a.expand(3*4096);
+    klog!(Info,ROOT,"Got {:?}",a);
+    a.expand(2*1024*1024);
+    klog!(Info,ROOT,"Got {:?}",a);
+    
     
     // Grow kernel heap by 16+8MiB for a total initial size of 32
     let _ = memory::kernel_heap::grow_kheap(16*1024*1024);

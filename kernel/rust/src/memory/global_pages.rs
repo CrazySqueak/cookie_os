@@ -6,6 +6,7 @@ use super::arch;
 
 const TOPLEVEL_PAGE_SIZE: usize = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::PAGE_SIZE;
 pub type GlobalPTType = <arch::TopLevelPageAllocator as PageFrameAllocatorImpl>::SubAllocType;
+pub type GPageFrameAllocator = GlobalPTType;
 pub struct GlobalPageTable(LockedPageAllocator<GlobalPTType>,PageFlags);
 impl GlobalPageTable {
     fn new(vmemaddr: usize, flags: PageFlags) -> Self {

@@ -599,3 +599,4 @@ impl<PFA:PageFrameAllocator> core::fmt::Debug for PageAllocation<PFA> {
 }
 
 pub type TopLevelPageAllocation = PageAllocation<BaseTLPageAllocator>;
+pub type TLPageFrameAllocator = BaseTLPageAllocator;

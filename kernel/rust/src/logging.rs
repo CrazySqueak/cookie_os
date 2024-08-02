@@ -84,4 +84,6 @@ pub mod contexts {
         def_context!(MEMORY_PHYSICAL_RAMMAP, MEMORY_PHYSICAL);
         def_context!(MEMORY_PHYSICAL_ALLOCATOR, MEMORY_PHYSICAL);
     def_context!(FEATURE_FLAGS, ROOT, Info);
+    def_context!(SCHEDULER, ROOT, Debug);
+      def_context!(SCHEDULER_KTASK, SCHEDULER);
 }

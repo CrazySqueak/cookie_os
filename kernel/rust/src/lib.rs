@@ -65,38 +65,10 @@ pub unsafe fn _kinit() {
     // Initialise kernel heap rescue
     memory::kernel_heap::init_kheap_2();
     
-    // // test kernel heap rescue
-    // let mut i = 0;
-    // loop {
-    //     i+=1;
-    //     const L: alloc::alloc::Layout = unsafe{alloc::alloc::Layout::from_size_align_unchecked(69420,2)};
-    //     let p = alloc::alloc::alloc(L);
-    //     if p == core::ptr::null_mut() { alloc::alloc::handle_alloc_error(L); }
-    //     klog!(Info,ROOT,"{} {:p}",i,p);
-    // }
-    // test paging
-    //{
-    //    for i in 0..128 {
-    //        let alloc = pagetable.allocate(i*1024*1024);
-    //        let alloc2 = memory::paging::global_pages::KERNEL_PTABLE.allocate(i*2048);
-    //        klog!(Info,ROOT,"{:?}{:?}",alloc,alloc2);
-    //        drop(alloc);
-    //    }
-    //}
-    // paging test #2
-    let a1 = pagetable.allocate(128*1024, memory::paging::ALLOCATION_USER_STACK);
-    let a2 = pagetable.allocate(128*1024, memory::paging::ALLOCATION_USER_STACK);
-    klog!(Info, ROOT, "us1={:?}", a1);
-    klog!(Info, ROOT, "us2={:?}", a2);
-    let a1 = pagetable.allocate(128*1024, memory::paging::ALLOCATION_USER_HEAP);
-    let a2 = pagetable.allocate(128*1024, memory::paging::ALLOCATION_USER_HEAP);
-    klog!(Info, ROOT, "uh1={:?}", a1);
-    klog!(Info, ROOT, "uh2={:?}", a2);
-    let a3 = memory::paging::global_pages::KERNEL_PTABLE.allocate(128*1024, memory::paging::KALLOCATION_KERNEL_STACK);
-    let a4 = memory::paging::global_pages::KERNEL_PTABLE.allocate(128*1024, memory::paging::KALLOCATION_KERNEL_STACK);
-    klog!(Info, ROOT, "kh1={:?}", a3);
-    klog!(Info, ROOT, "kh2={:?}", a4);
-    
+    // paging test #3
+    let mut arr = alloc::vec![crate::scheduler::ktask::allocate_ktask_stack().unwrap()];
+    for i in 0..16 { arr.push(crate::scheduler::ktask::allocate_ktask_stack().unwrap()) }
+    klog!(Info,ROOT,"Got {:?}",arr);
     
     // Grow kernel heap by 16+8MiB for a total initial size of 32
     let _ = memory::kernel_heap::grow_kheap(16*1024*1024);

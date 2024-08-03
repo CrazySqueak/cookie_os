@@ -22,7 +22,6 @@ use coredrivers::serial_uart::SERIAL1;
 use coredrivers::display_vga; use display_vga::VGA_WRITER;
 
 mod memory;
-mod scheduler;
 
 // arch-specific "lowlevel" module
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
@@ -66,8 +65,8 @@ pub unsafe fn _kinit() {
     memory::kernel_heap::init_kheap_2();
     
     // paging test #3
-    let mut arr = alloc::vec![crate::scheduler::allocation::allocate_ktask_stack().unwrap()];
-    for i in 0..16 { arr.push(crate::scheduler::allocation::allocate_ktask_stack().unwrap()) }
+    let mut arr = alloc::vec![memory::alloc_util::AllocatedStack::allocate_ktask().unwrap()];
+    for i in 0..16 { arr.push(memory::alloc_util::AllocatedStack::allocate_ktask().unwrap()) }
     klog!(Info,ROOT,"Got {:?}",arr);
     
     let mut a = arr.swap_remove(0); drop(arr);
@@ -76,6 +75,12 @@ pub unsafe fn _kinit() {
     a.expand(2*1024*1024);
     klog!(Info,ROOT,"Got {:?}",a);
     
+    let mut b = memory::alloc_util::AllocatedStack::allocate_user(&pagetable).unwrap();
+    klog!(Info,ROOT,"Got {:?}",b);
+    for i in 0..3 {
+        b.expand((i+1)*1024*1024);
+        klog!(Info,ROOT,"Got {:?}",b);
+    }
     
     // Grow kernel heap by 16+8MiB for a total initial size of 32
     let _ = memory::kernel_heap::grow_kheap(16*1024*1024);

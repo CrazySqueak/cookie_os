@@ -41,15 +41,10 @@ pub unsafe fn _kinit() {
     // Initialise paging (bunch of testing code)
     use alloc::boxed::Box;
     use memory::paging::{PagingContext,PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
-    let pagetable = PagingContext::new();
+    let pagetable = memory::alloc_util::new_user_paging_context();
     {
         let allocator = &pagetable;
         let kallocator = &memory::paging::global_pages::KERNEL_PTABLE;
-        
-        // Null guard
-        let nullguard = allocator.allocate_at(0, 1).expect("VMem Allocation Failed!");
-        nullguard.set_absent(0x4E554C_505452);  // "NULPTR"
-        nullguard.leak();
         
         // VGA Buffer memory-mapped IO
         let vgabuf = kallocator.allocate_at(display_vga::VGA_BUFFER_ADDR, display_vga::VGA_BUFFER_SIZE).expect("Unable to map VGA buffer");

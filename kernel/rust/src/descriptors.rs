@@ -1,9 +1,8 @@
 use core::sync::atomic::{AtomicU16,AtomicU64,Ordering,AtomicPtr};
 use alloc::sync::Arc;
 use core::ops::Drop;
-use core::ptr::{null_mut,drop_in_place,write};
-use alloc::alloc::{alloc,dealloc,Layout};
-use core::mem::forget;
+use core::cell::SyncUnsafeCell;
+use core::mem::{forget};
 
 /** Descriptors are objects with are opened and stored in a descriptor table.
     These are a lot of kernel managed objects, including things such as processes, open files, and more.
@@ -30,49 +29,40 @@ pub struct Descriptor<T,A,B> {
     // Sections
     // Null pointers mean the value there has been dropped
     slot_t: T,
-    slot_a: AtomicPtr<A>,
-    slot_b: AtomicPtr<B>,
+    slot_a: SyncUnsafeCell<Option<A>>,
+    slot_b: SyncUnsafeCell<Option<B>>,
 }
 impl<T,A,B> Descriptor<T,A,B> {
     /* Drop the slot_a value if non-null, then decrement rc_a to 0, marking this descriptor as free to be overwritten.
-        SAFETY: rc_a should be 1. This must be the only thread trying to access this descriptor (enforced by rc_a being 1).
-                rc_b must be 0 and slot_b must be freed. slot_t must not be in use (lifetimes should be pinned to the reference, so they do not outlive rc_a being >=2).
+        SAFETY: rc_a should be 1. This MUST be the only thread trying to access this descriptor (enforced by rc_a being 1).
+                rc_b must be 0 and slot_b must be freed. slot_t must not be in use (lifetimes should be pinned to the reference, so they do not outlive their A-references).
                 When clearing the entire descriptor, you should clear slot B (_clear_slot_b) first, then call _clear. */
     unsafe fn _clear(&self){
-        // If the pointer is null, then the value is not present
-        // Otherwise, we overwrite the value with a null pointer (thus taking it for ourselves), and drop then free it.
-        let a_ptr = self.slot_a.swap(null_mut(), Ordering::SeqCst);
-        if a_ptr != null_mut() {
-            drop_in_place(a_ptr);
-            dealloc(a_ptr as *mut u8, Layout::new::<A>());
-        }
+        // Drop slot_a if initialised
+        let slot_a = &mut *self.slot_a.get();
+        slot_a.take();  // sets slot_a to None and drops the previous value
         
         // Now that slot_a is cleared, we decrement rc_a to 0. The descriptor is now free to be overwritten.
         self.rc_a.store(0, Ordering::Release);
     }
     /* Drop the slot_b value if non-null.
-        SAFETY: rc_b should be 0. This must be the only thread trying to access this descriptor (enforced by rc_a being 1). */
+        SAFETY: rc_b should be 0. This MaybeUninit be the only thread trying to access this descriptor (enforced by rc_a being 1). */
     unsafe fn _clear_slot_b(&self){
-        // If the pointer is null, then the value is not present
-        // Otherwise, we overwrite the value with a null pointer (thus taking it for ourselves), and drop then free it.
-        let b_ptr = self.slot_b.swap(null_mut(), Ordering::SeqCst);
-        if b_ptr == null_mut() { return; }
-        drop_in_place(b_ptr);
-        dealloc(b_ptr as *mut u8, Layout::new::<B>());
+        // Drop slot_b if initialised
+        let slot_b = &mut *self.slot_b.get();
+        slot_b.take();  // sets slot_b to None and drops the previous value
     }
     
     /* Put the given two values into slots A and B.
-       SAFETY: Slots A and B must currently be empty (null). rc_a should be 1 and rc_b should be 0.
-                This should be the only reference to the descriptor.*/
+       SAFETY: rc_a should be 1 and rc_b should be 0.
+                This MUST be the only thread trying to access this descriptor.*/
     unsafe fn _init_slots(&self, a_value: A, b_value: B){
         // Init slot A
-        let a_ptr = alloc(Layout::new::<A>()) as *mut A;
-        write(a_ptr, a_value);
-        self.slot_a.store(a_ptr, Ordering::Release);
+        let slot_a = &mut *self.slot_a.get();
+        let _=slot_a.insert(a_value);
         // Init slot B
-        let b_ptr = alloc(Layout::new::<B>()) as *mut B;
-        write(b_ptr, b_value);
-        self.slot_b.store(b_ptr, Ordering::Release);
+        let slot_b = &mut *self.slot_b.get();
+        let _=slot_b.insert(b_value);
         // Done :)
     }
     

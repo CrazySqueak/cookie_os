@@ -1,6 +1,7 @@
 #![no_std]
 #![feature(abi_x86_interrupt)]
 #![feature(negative_impls)]
+#![feature(sync_unsafe_cell)]
 
 // i'm  exhausted by these warnings jeez
 #![allow(unused_imports)]

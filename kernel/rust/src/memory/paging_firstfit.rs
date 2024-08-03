@@ -108,7 +108,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
         assert!(SUBTABLES);
         let required_availability: u8 = if size >= Self::PAGE_SIZE/2 { 0b01u8 } else { 0b10u8 };  // Only test half-full ones if our remainder is small enough
         if idx < Self::NPAGES && self.get_availability(idx) <= required_availability {
-            klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Attempting remainder allocation @ index={}, size={:x}, inner_offset={:x}", idx, size, inner_offset);
+            klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Attempting remainder allocation @ index={}, size={}, inner_offset={:x}", idx, size, inner_offset);
             // allocate remainder
             if let Some(allocation) = self.get_subtable_always(idx).allocate_at(inner_offset, size) {
                 self.refresh_availability(idx);
@@ -129,23 +129,25 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> MLFFAlloc
         None
     }
     
-    fn _build_allocation(&self, mut contig_result: Vec<PAllocItem>, rem_result: Option<(PAllocItem,usize)>) -> PartialPageAllocation {
+    fn _build_allocation(&self, mut contig_result: Vec<PAllocItem>, rem_results: alloc::vec::Vec<Option<(PAllocItem,usize)>>) -> PartialPageAllocation {
         //let (mut huge_allocs, mut sub_allocs) = contig_result;
         
         // Offset if needed (and add remainder to sub allocs)
-        if let Some((rem_alloc,offset_by)) = rem_result {
-            // Increase offsets (if applicable)
-            if offset_by != 0 {
-                for item in contig_result.iter_mut() {
-                    let offset = item.offset_mut();
-                    *offset += offset_by;
+        for rem_result in rem_results {
+            if let Some((rem_alloc,offset_by)) = rem_result {
+                // Increase offsets (if applicable)
+                if offset_by != 0 {
+                    for item in contig_result.iter_mut() {
+                        let offset = item.offset_mut();
+                        *offset += offset_by;
+                    }
                 }
+                // Push remainder
+                contig_result.push(rem_alloc);
             }
-            // Push remainder
-            contig_result.push(rem_alloc);
-            // Ensure result is sorted
-            contig_result.sort_by_key(|i| i.offset());
         }
+        // Ensure result is sorted
+        contig_result.sort_by_key(|i| i.offset());
         
         PartialPageAllocation::new(contig_result, Self::PAGE_SIZE)
     }
@@ -257,7 +259,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
                     
                     // Return allocation
                     klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Allocated {} pages (page_size=0x{:x}) + {} bytes @ start={}", pages, Self::PAGE_SIZE, remainder, offset);
-                    return Some(self._build_allocation(contig_result,remainder_allocated));
+                    return Some(self._build_allocation(contig_result,alloc::vec![remainder_allocated]));
                 }
             };
         }}
@@ -269,12 +271,17 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         let addr = crop_addr(addr);  // discard upper bits so that index is correct
         // We can't have remainders less than PAGE_SIZE if we don't support subtables, so we round down and add to the size to make up the difference.
         let start_idx = addr / Self::PAGE_SIZE;
-        let (start_rem, size) = if SUBTABLES { (addr % Self::PAGE_SIZE, size) } else { (0, size + (addr % Self::PAGE_SIZE)) };
+        let (start_rem_at, size) = if SUBTABLES { (addr % Self::PAGE_SIZE, size) } else { (0, size + (addr % Self::PAGE_SIZE)) };
+        // If start_rem_at is non-zero, it should be allocated separately to the contiguous part to avoid other bugs
+        // therefore, we increment start_idx and subtract start_rem_size from size
+        let start_rem_size = Self::PAGE_SIZE - start_rem_at;
+        let (start_idx, size, start_rem_size) = if start_rem_at != 0 { (start_idx+1, size.saturating_sub(start_rem_size), start_rem_size.min(size)) } else { (start_idx, size, 0) };
+        
         let pages = if SUBTABLES { size / Self::PAGE_SIZE } else { size.div_ceil(Self::PAGE_SIZE) };
         let remainder = if SUBTABLES { size % Self::PAGE_SIZE } else { 0 };
         let end = start_idx+pages;
         
-        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "{:x}::allocate_at: offset=0x{:x} page_size=0x{:x} start={} pages={} rem={}", self._logging_physaddr(), addr, Self::PAGE_SIZE, start_idx, pages, remainder);
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "{:x}::allocate_at: offset=0x{:x} page_size=0x{:x} start={} pages={} rem={} startrem={}@{:x}", self._logging_physaddr(), addr, Self::PAGE_SIZE, start_idx, pages, remainder, start_rem_size,start_rem_at);
         
         // Check that the main area is clear
         for i in start_idx..end {
@@ -282,10 +289,7 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
         }
         // Check that the remainder is clear (if applicable)
         let remainder_allocated = 'allocrem: { if remainder != 0 && SUBTABLES {
-                //klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "remainder @{},{:x},{:x}? availability={}",end,0+start_rem,remainder, self.get_availability(end));
-                //{ klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "{:?}", self.suballocators[end].as_ref().map(|a| a.get_num_pages_used())); }
-                
-                if let Some(alloc) = self._alloc_rem(end, 0+start_rem, remainder){
+                if let Some(alloc) = self._alloc_rem(end, 0, remainder){
                     break 'allocrem Some((PAllocItem::SubTable{index:end,offset:pages*Self::PAGE_SIZE,alloc:alloc},0));
                 }
             // failed
@@ -295,13 +299,29 @@ impl<ST, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> PageFrame
             // no remainder
             None
         };
+        // allocate start rem if relevant
+        let startrem_allocated = 'sra : { if start_rem_at != 0 && SUBTABLES {
+                if let Some(alloc) = self._alloc_rem(start_idx-1, start_rem_at, start_rem_size) {
+                    break 'sra Some((PAllocItem::SubTable{index:start_idx-1,offset:0,alloc:alloc},start_rem_size));
+                }
+                // failed!!
+                klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Unable to allocate start={} pages={}: failed to allocate starting remainder.", start_idx, pages);
+                // de-allocate other remainder (if applicable)
+                if let Some((PAllocItem::SubTable { alloc, index, .. }, _)) = remainder_allocated {
+                    self.get_suballocator_mut(index).unwrap().deallocate(&alloc)
+                }
+                // return
+                return None;
+            }
+            None  // no start remainder
+        };
         
-        // Allocate main section
-        let contig_result = self._alloc_contiguous(start_idx, end);
+        // Allocate main section (if we have any to allocate)
+        let contig_result = if pages != 0 { self._alloc_contiguous(start_idx, end) } else { alloc::vec::Vec::new() };
         
         // And return
-        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Allocated {} pages (page_size=0x{:x}) + {} bytes.", pages, Self::PAGE_SIZE, remainder);
-        Some(self._build_allocation(contig_result,remainder_allocated))
+        klog!(Debug, MEMORY_PAGING_ALLOCATOR_MLFF, "Allocated {} pages (page_size=0x{:x}) + {} bytes.", pages, Self::PAGE_SIZE, remainder+start_rem_size);
+        Some(self._build_allocation(contig_result,alloc::vec![remainder_allocated,startrem_allocated]))
     }
     
     fn deallocate(&mut self, allocation: &PartialPageAllocation) {

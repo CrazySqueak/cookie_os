@@ -82,7 +82,7 @@ pub mod contexts {
       def_context!(MEMORY_PHYSICAL, MEMORY);
         def_context!(MEMORY_PHYSICAL_BUDDIES, MEMORY_PHYSICAL, Warning);
         def_context!(MEMORY_PHYSICAL_RAMMAP, MEMORY_PHYSICAL);
-        def_context!(MEMORY_PHYSICAL_ALLOCATOR, MEMORY_PHYSICAL);
+        def_context!(MEMORY_PHYSICAL_ALLOCATOR, MEMORY_PHYSICAL, Warning);
       def_context!(MEMORY_ALLOCUTIL, MEMORY, Debug);
     def_context!(FEATURE_FLAGS, ROOT, Info);
 }

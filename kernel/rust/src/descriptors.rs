@@ -46,7 +46,7 @@ impl<T,A,B> Descriptor<T,A,B> {
         self.rc_a.store(0, Ordering::Release);
     }
     /* Drop the slot_b value if non-null.
-        SAFETY: rc_b should be 0. This MaybeUninit be the only thread trying to access this descriptor (enforced by rc_a being 1). */
+        SAFETY: rc_b should be 0. This MUST be the only thread trying to access this descriptor (enforced by rc_a being 1). */
     unsafe fn _clear_slot_b(&self){
         // Drop slot_b if initialised
         let slot_b = &mut *self.slot_b.get();

@@ -1,12 +1,15 @@
-all: iso
+all: iso-grub iso-limine
 
 export ARCH ?= x86_64-elf
 export LD := x86_64-elf-ld
 export NASM := nasm -f elf64
 export QEMU := qemu-system-x86_64
 
+export GRUB_MKRESCUE := grub-mkrescue
+export LIMINE := limine
+
 export KBUILDFEATURES ?= per_page_NXE_bit enable_amd64_TCE page_global_bit 1G_huge_pages
-export QEMUCPU ?= qemu64,+pdpe1gb,+smep,+tce
+QEMUCPU ?= qemu64,+pdpe1gb,+smep,+tce
 
 export BUILDNAME := $(ARCH)
 
@@ -32,9 +35,15 @@ endif
 export BUILDROOT := build
 export BUILDDIR := $(BUILDROOT)/$(BUILDNAME)
 export DISTROOT := dist
+export KBINNAME := $(DISTROOT)/kernel-$(BUILDNAME).bin
 
-export SYSROOT := $(abspath $(BUILDDIR)/sysroot)
-export KERNEL_BIN := kernel/$(DISTROOT)/kernel-$(BUILDNAME).bin
+SYSROOT := $(abspath $(BUILDDIR)/sysroot)
+
+## Sub-modules
+# kernel
+KERNEL_BIN := kernel/$(KBINNAME)
+$(KERNEL_BIN): FORCE
+	$(MAKE) -C kernel
 
 # QEMU config
 export QLOGSDIR := logs
@@ -43,44 +52,87 @@ QLOGNAME := $(QLOGSDIR)/$(shell date +"%Y-%m-%dT%Hh%Mm%S")-$(BUILDNAME)-serial.l
 QLOGARGSRUN := -serial stdio
 QLOGARGSDBG := -serial file:$(QLOGNAME)
 
+## GRUB
 # GRUB ISO file (CD)
-export ISOROOT := $(abspath $(BUILDDIR)/grubiso)
-export ISONAME := $(DISTROOT)/boot-$(BUILDNAME).iso
+GISOROOT := $(abspath $(BUILDDIR)/grubiso)
+GISONAME := $(DISTROOT)/boot-$(BUILDNAME)-grub.iso
 
-$(ISONAME): $(ISOROOT)/boot/kernel.bin $(ISOROOT)/boot/grub/grub.cfg
+$(GISONAME): $(GISOROOT)/boot/kernel.bin $(GISOROOT)/boot/grub/grub.cfg
 	@mkdir -p $(dir $@)
-	grub-mkrescue -o $@ $(ISOROOT)
+	grub-mkrescue -o $@ $(GISOROOT)
 
-$(ISOROOT)/boot/grub/grub.cfg: grub.cfg
+$(GISOROOT)/boot/grub/grub.cfg: grub.cfg
 	@mkdir -p $(dir $@)
-	cp $^ $@
+	cp -u $^ $@
 
-$(ISOROOT)/boot/kernel.bin: FORCE
+$(GISOROOT)/boot/kernel.bin: $(KERNEL_BIN)
 	@mkdir -p $(dir $@)
-	$(MAKE) -C kernel
 	cp -u $(KERNEL_BIN) $@
 
+## LIMINE
+# Limine ISO file (CD)
+LISOROOT := $(abspath $(BUILDDIR)/limineiso)
+LISONAME := $(DISTROOT)/boot-$(BUILDNAME)-limine.iso
+
+LIMINEDATADIR := $(shell $(LIMINE) --print-datadir)
+LIMINE_BIOS_FILES := $(addprefix $(LISOROOT)/boot/limine/,limine-bios.sys limine-bios-cd.bin limine-uefi-cd.bin)
+LIMINE_UEFI_FILES := $(addprefix $(LISOROOT)/EFI/BOOT/,BOOTX64.EFI BOOTIA32.EFI)
+
+$(LISONAME): $(LISOROOT)/boot/kernel.bin $(LISOROOT)/boot/limine/limine.conf $(LIMINE_BIOS_FILES) $(LIMINE_UEFI_FILES)
+	@mkdir -p $(dir $@)
+	@# Make the ISO
+	xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table \
+	--efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label \
+	$(LISOROOT) -o $@
+	@# Install legacy BIOS boot
+	$(LIMINE) bios-install $@
+
+$(LISOROOT)/boot/limine/limine.conf: limine.conf
+	@mkdir -p $(dir $@)
+	cp -u $^ $@
+
+$(LISOROOT)/boot/kernel.bin: $(KERNEL_BIN)
+	@mkdir -p $(dir $@)
+	cp -u $(KERNEL_BIN) $@
+
+$(LIMINE_BIOS_FILES): $(LISOROOT)/boot/limine/%: $(LIMINEDATADIR)/%
+	@mkdir -p $(dir $@)
+	cp -u $^ $@
+
+$(LIMINE_UEFI_FILES): $(LISOROOT)/EFI/BOOT/%: $(LIMINEDATADIR)/%
+	@mkdir -p $(dir $@)
+	cp -u $^ $@
+
+## Targets
 # clean targets
 clean:
 	-rm -r $(BUILDROOT)
 	-rm -r $(DISTROOT)
 	-rm -r $(QLOGSDIR)
+
+clean-all: clean
 	$(MAKE) -C kernel clean
 
 # build targets 
-iso: $(ISONAME)
+iso-grub: $(GISONAME)
+# TODO
+iso-limine: $(LISONAME)
 
 # run targets
-run: $(ISONAME)
+RUNISONAME ?= $(GISONAME)
+run: $(RUNISONAME)
 	@mkdir -p $(dir $(QLOGNAME))
-	$(QEMU) --cdrom $(ISONAME) -cpu $(QEMUCPU) $(QLOGARGSRUN) $(QEMUARGS) | tee $(QLOGNAME)
-debug: $(ISONAME) $(KERNEL_BIN)
+	$(QEMU) --cdrom $(RUNISONAME) -cpu $(QEMUCPU) $(QLOGARGSRUN) $(QEMUARGS) | tee $(QLOGNAME)
+debug: $(RUNISONAME) $(KERNEL_BIN)
 	@if [ "$$INCLUDE_DEBUG_SYMBOLS" != "1" ]; then\
 		echo -e "\033[0;33mWARNING: Debug symbols were not included in this build! Set $$INCLUDE_DEBUG_SYMBOLS to 1 to include them!\033[0m";\
 		sleep 1;\
 	fi
-	$(QEMU) --cdrom $(ISONAME) -cpu $(QEMUCPU) $(QLOGARGSDBG) $(QEMUARGS) -s -S >/dev/null &
+	$(QEMU) --cdrom $(RUNISONAME) -cpu $(QEMUCPU) $(QLOGARGSDBG) $(QEMUARGS) -s -S >/dev/null &
 	@echo "Serial log can be found at: $(QLOGNAME)"
 	gdb -q --symbols=$(KERNEL_BIN) -ex "target remote localhost:1234"
 
+# special targets
 FORCE:
+
+.PHONY: all clean clean-all iso-grub iso-limine run debug

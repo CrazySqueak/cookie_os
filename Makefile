@@ -119,20 +119,38 @@ iso-grub: $(GISONAME)
 iso-limine: $(LISONAME)
 
 # run targets
-RUNISONAME ?= $(GISONAME)
-run: $(RUNISONAME)
+QEMU_RUN_MODE ?= grub-cd
+
+QEMURM-deps-grub-cd := iso-grub
+QEMURM-args-grub-cd := --cdrom $(GISONAME)
+
+QEMURM-deps-limine-cd := iso-limine
+QEMURM-args-limine-cd := --cdrom $(LISONAME)
+
+QEMUTARGETDEPS := $(QEMURM-deps-$(QEMU_RUN_MODE))
+QEMUTARGETARGS := $(QEMURM-args-$(QEMU_RUN_MODE))
+
+check-qemu-var:
+	@if [ -z "$(QEMUTARGETDEPS)" ]; then \
+		echo "ERROR: QEMU_RUN_MODE was set to an invalid value: $$QEMU_RUN_MODE";\
+		echo "Valid Modes: grub-cd limine-cd";\
+		echo "Or unset it to use the default value (grub-cd).";\
+		exit 1;\
+	fi
+
+run: check-qemu-var $(QEMUTARGETDEPS)
 	@mkdir -p $(dir $(QLOGNAME))
-	$(QEMU) --cdrom $(RUNISONAME) -cpu $(QEMUCPU) $(QLOGARGSRUN) $(QEMUARGS) | tee $(QLOGNAME)
-debug: $(RUNISONAME) $(KERNEL_BIN)
+	$(QEMU) $(QEMUTARGETARGS) -cpu $(QEMUCPU) $(QLOGARGSRUN) $(QEMUARGS) | tee $(QLOGNAME)
+debug: check-qemu-var $(QEMUTARGETDEPS) $(KERNEL_BIN)
 	@if [ "$$INCLUDE_DEBUG_SYMBOLS" != "1" ]; then\
 		echo -e "\033[0;33mWARNING: Debug symbols were not included in this build! Set $$INCLUDE_DEBUG_SYMBOLS to 1 to include them!\033[0m";\
 		sleep 1;\
 	fi
-	$(QEMU) --cdrom $(RUNISONAME) -cpu $(QEMUCPU) $(QLOGARGSDBG) $(QEMUARGS) -s -S >/dev/null &
+	$(QEMU) $(QEMUTARGETARGS) -cpu $(QEMUCPU) $(QLOGARGSDBG) $(QEMUARGS) -s -S >/dev/null &
 	@echo "Serial log can be found at: $(QLOGNAME)"
 	gdb -q --symbols=$(KERNEL_BIN) -ex "target remote localhost:1234"
 
 # special targets
 FORCE:
 
-.PHONY: all clean clean-all iso-grub iso-limine run debug
+.PHONY: all clean clean-all iso-grub iso-limine run debug check-qemu-var

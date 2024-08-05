@@ -27,7 +27,7 @@ pub enum DescriptorAcquireError {
     
     The rc_a count may be one of the following values: 0 - free, 1 - reserved (no other references may be taken), 2+ - initialised
     The rc_b value is either 0 - deallocated, or 1+ - allocated. This is because there is no need for a "free" value in rc_b to signify that the descriptor is no longer in use, as that responsibility is handled by rc_a.
-    TODO: determine how re-opening a b reference works (if possible)
+    Note: Once all B references are dropped, no more can be created.
 */
 pub struct Descriptor<T,A,B> {
     // Ref counts
@@ -194,6 +194,22 @@ impl<'r,T,A,B,const IS_B_REF: bool> DescriptorRef<'r,T,A,B,IS_B_REF> {
         let cellref = unsafe { &*self.0.slot_a.get() };
         cellref.as_ref().unwrap()
     }
+    
+    /* Create another A-reference using this reference.
+        Since an existing reference is present and in-scope, this operation is guaranteed to succeed (and is quicker than acquire_ref as it can skip several checks). */
+    pub fn clone_a_ref(&self) -> DescriptorARef<'r,T,A,B> {
+        // Increment ref count
+        self.0.rc_a.fetch_add(1, Ordering::Acquire);
+        // Create reference
+        DescriptorRef(self.0)
+    }
+}
+impl<'r,T,A,B> DescriptorARef<'r,T,A,B> {
+    /* Attempt to upgrade this A-reference to a B-reference. */
+    pub fn upgrade(self) -> Result<DescriptorBRef<'r,T,A,B>,DescriptorAcquireError> {
+        // Currently this just calls .acquire_ref, but in theory it could be replaced with a more optimised version that takes advantage of the fact that a ref already exists
+        self.0.acquire_ref::<true>()
+    }
 }
 impl<'r,T,A,B> DescriptorBRef<'r,T,A,B> {
     /* Get a reference to the B-slot in the descriptor.
@@ -203,6 +219,22 @@ impl<'r,T,A,B> DescriptorBRef<'r,T,A,B> {
         //          Since rc_b is >= 2, B will not be borrowed mutably by the destructor/initialiser (and it cannot be borrowed mutably in any other way).
         let cellref = unsafe { &*self.0.slot_b.get() };
         cellref.as_ref().unwrap()
+    }
+    
+    /* Create another B-reference using this reference.
+        Since an existing B-reference is present and in-scope, this operation is guaranteed to succeed (and is quicker than acquire_ref as it can skip several checks). */
+    pub fn clone_b_ref(&self) -> DescriptorBRef<'r,T,A,B> {
+        // Increment ref counts
+        self.0.rc_a.fetch_add(1, Ordering::Acquire);
+        self.0.rc_b.fetch_add(1, Ordering::Acquire);
+        // Create reference
+        DescriptorRef(self.0)
+    }
+    
+    /* Attempt to downgrade this B-reference to an A-reference. */
+    pub fn downgrade(self) -> Result<DescriptorARef<'r,T,A,B>,DescriptorAcquireError> {
+        // Currently this just calls .acquire_ref, but in theory it could be replaced with a more optimised version that takes advantage of the fact that a ref already exists
+        self.0.acquire_ref::<false>()
     }
 }
 

@@ -7,6 +7,13 @@ use core::mem::{forget};
 pub type DescriptorID = u64;
 pub type AtomicDescriptorID = AtomicU64;
 
+pub enum DescriptorAcquireError {
+    /// Descriptor is reserved, either being constructed or destructed
+    DescriptorReserved,
+    /// A B-Reference cannot be acquired because the b-slot is not active (rc_b is 0)
+    BSlotNotAvailable,
+}
+
 /** Descriptors are objects with are opened and stored in a descriptor table.
     These are a lot of kernel managed objects, including things such as processes, open files, and more.
     This struct also represents the "slot" itself in the table, and may be cleared and then re-used for any number of descriptors as applicable.
@@ -102,9 +109,9 @@ impl<T,A,B> Descriptor<T,A,B> {
     }
     
     /* Acquire a new reference to the descriptor, if possible. */
-    fn acquire_ref<const IS_B_REF: bool>(&self) -> Result<DescriptorRef<T,A,B,IS_B_REF>,()> {
+    fn acquire_ref<const IS_B_REF: bool>(&self) -> Result<DescriptorRef<T,A,B,IS_B_REF>,DescriptorAcquireError> {
         let rca_result = self.rc_a.fetch_update(Ordering::Acquire, Ordering::Acquire, |rca| if rca >= 2 { Some(rca+1) } else { None });  // If rc_a >= 2, increment rc and continue. Otherwise, fail (cannot reference 1 as initialising, cannot reference 0 as not present).
-        if let Err(_) = rca_result { return Err(()) };
+        if let Err(_) = rca_result { return Err(DescriptorAcquireError::DescriptorReserved) };
         
         if IS_B_REF {
             let rcb_result = self.rc_b.fetch_update(Ordering::Acquire, Ordering::Acquire, |rcb| if rcb >= 1 { Some(rcb+1) } else { None });
@@ -113,7 +120,7 @@ impl<T,A,B> Descriptor<T,A,B> {
                 // We must first decrement rc_a as we had incremented it previously
                 unsafe { self._decrement_rc_a() };
                 // And then return an error
-                return Err(());
+                return Err(DescriptorAcquireError::BSlotNotAvailable);
             }
         }
         

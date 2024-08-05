@@ -57,6 +57,24 @@ impl<T,A,B> Descriptor<T,A,B> {
         slot_b.take();  // sets slot_b to None and drops the previous value
     }
     
+    /* Decrement rc_a, and perform destruction if applicable. */
+    unsafe fn _decrement_rc_a(&self){
+        let prev_a = self.rc_a.fetch_sub(1, Ordering::SeqCst);
+        if prev_a == 2 {
+            // rc_a is now 1. Therefore, we are responsible for destroying slot A and clearing the descriptor
+            self._clear();
+        }
+    }
+    /* Decrement rc_b, and perform destruction if applicable.
+        If decrementing both, then this must be called before decrement_rc_a. */
+    unsafe fn _decrement_rc_b(&self){
+        let prev_b = self.rc_b.fetch_sub(1, Ordering::SeqCst);
+        if prev_b == 1 {
+            // rc_b is now 0. Therefore, we are responsible for destroying slot B
+            self._clear_slot_b();
+        }
+    }
+    
     /* Put the given two values into slots A and B.
        SAFETY: rc_a should be 1 and rc_b should be 0.
                 This MUST be the only thread trying to access this descriptor.*/
@@ -81,6 +99,27 @@ impl<T,A,B> Descriptor<T,A,B> {
         self.id.store(id, Ordering::Relaxed);  // save the descriptor ID
         // rc_a is now equal to 1 (reserved). This therefore signifies that we are the only one currently using it, as all attempts to use it will now fail.
         Some(DescriptorInitialiser(self))
+    }
+    
+    /* Acquire a new reference to the descriptor, if possible. */
+    fn acquire_ref<const IS_B_REF: bool>(&self) -> Result<DescriptorRef<T,A,B,IS_B_REF>,()> {
+        let rca_result = self.rc_a.fetch_update(Ordering::Acquire, Ordering::Acquire, |rca| if rca >= 2 { Some(rca+1) } else { None });  // If rc_a >= 2, increment rc and continue. Otherwise, fail (cannot reference 1 as initialising, cannot reference 0 as not present).
+        if let Err(_) = rca_result { return Err(()) };
+        
+        if IS_B_REF {
+            let rcb_result = self.rc_b.fetch_update(Ordering::Acquire, Ordering::Acquire, |rcb| if rcb >= 1 { Some(rcb+1) } else { None });
+            if let Err(_) = rcb_result {
+                // Failed: rc_b is 0 (so b is unavailable)
+                // We must first decrement rc_a as we had incremented it previously
+                unsafe { self._decrement_rc_a() };
+                // And then return an error
+                return Err(());
+            }
+        }
+        
+        // We have now incremented rc_a, as well as rc_b (if applicable).
+        // Return a reference
+        Ok(DescriptorRef(self))
     }
 }
 
@@ -165,19 +204,9 @@ impl<T,A,B,const IS_B_REF: bool> Drop for DescriptorRef<'_,T,A,B,IS_B_REF> {
         let descriptor = self.0;
         // Drop B reference
         if IS_B_REF {
-            let prev_b = descriptor.rc_b.fetch_sub(1, Ordering::SeqCst);
-            if prev_b == 1 {
-                // rc_b is now 0. Therefore, we are responsible for destroying slot B
-                unsafe { descriptor._clear_slot_b(); }
-            }
+            unsafe { descriptor._decrement_rc_b(); }
         }
         // Drop A reference
-        let prev_a = descriptor.rc_a.fetch_sub(1, Ordering::SeqCst);
-        if prev_a == 2 {
-            // rc_a is now 1. Therefore, we are responsible for destroying slot A and clearing the descriptor
-            unsafe { descriptor._clear(); }
-            // rc_a is now 0. the descriptor is cleared, and must no longer be accessed via this reference
-            return;
-        }
+        unsafe { descriptor._decrement_rc_a(); }
     }
 }

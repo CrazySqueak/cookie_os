@@ -149,8 +149,10 @@ debug: check-qemu-var $(QEMUTARGETDEPS) $(KERNEL_BIN)
 	$(QEMU) $(QEMUTARGETARGS) -cpu $(QEMUCPU) $(QLOGARGSDBG) $(QEMUARGS) -s -S >/dev/null &
 	@echo "Serial log can be found at: $(QLOGNAME)"
 	gdb -q --symbols=$(KERNEL_BIN) -ex "target remote localhost:1234"
+# Check that everything compiles for the qemu target, but don't actually launch qemu even on success
+check: check-qemu-var $(QEMUTARGETDEPS)
 
 # special targets
 FORCE:
 
-.PHONY: all clean clean-all iso-grub iso-limine run debug check-qemu-var
+.PHONY: all clean clean-all iso-grub iso-limine run debug check check-qemu-var

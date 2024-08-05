@@ -2,6 +2,7 @@
 #![feature(abi_x86_interrupt)]
 #![feature(negative_impls)]
 #![feature(sync_unsafe_cell)]
+#![feature(box_into_inner)]
 
 // i'm  exhausted by these warnings jeez
 #![allow(unused_imports)]
@@ -24,6 +25,7 @@ use coredrivers::display_vga; use display_vga::VGA_WRITER;
 
 mod memory;
 mod descriptors;
+mod scheduler;
 
 // arch-specific "lowlevel" module
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
@@ -95,15 +97,10 @@ pub extern "C" fn _kmain() -> ! {
     let s = format!("\n\nKernel bounds: {:x?}", memory::physical::get_kernel_bounds());
     VGA_WRITER.write_string(&s);
     
-    unsafe { lowlevel::context_switch::_cs_push(test); }
+    //unsafe { lowlevel::context_switch::_cs_push(test); }
     
     // TODO
     loop{}//lowlevel::halt();
-}
-
-extern "sysv64" fn test(rsp: *const u8) -> ! {
-    klog!(Info, ROOT, "RSP: {:p}", rsp);
-    unsafe { lowlevel::context_switch::_cs_pop(rsp); }
 }
 
 /// This function is called on panic.

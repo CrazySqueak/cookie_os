@@ -4,12 +4,13 @@ bits 64
 ; Note: Switching address spaces is the responsibility of the Rust code as there's a bunch of extra state involved to satisfy RAII instincts
 ; This simply saves the current state, calling a callback with the stack pointer, and then allows us to load the state (given the appropriate stack pointer).
 
-; extern "sysv64" _cs_push(scheduler: extern "sysv64" fn(rsp: *const u8)->!) -> ();
+; extern "sysv64" _cs_push() -> ();
 ; Save the state, and call the scheduler with the stack pointer as an argument. The scheduler is responsible for saving that stack pointer somewhere, so it can be loaded again when it's time to resume.
 ; This will return when a corresponding call to _cs_pop(...) is made with the stack pointer as an argument.
 ; Until then, the computer will be executing other code.
 ; This is the basic foundation of modern multitasking.
 global _cs_push
+extern contextswitch_scheduler_cb
 _cs_push:
     ; Prologue
     ; RIP is saved on the stack for us, and the stack is 8-byte aligned (not 16-byte)
@@ -35,11 +36,11 @@ _cs_push:
     ; Then pass stack pointer as argument
     ; The value saved here is 16-byte aligned, with the top two being TOS -> RBP, RIP
     ; Thus meaning that when _cs_pop is called with the value, it can simply do the normal function epilogue and return to us
-    mov RSI, RDI  ; Move our first argument (scheduler fn pointer) into RSI
-    mov RDI, RSP  ; Move the stack pointer into RDI, so it becomes the first argument to the scheduler
+    ; Keep our first parameter, the command, (RDI) in RDI
+    mov RSI, RSP  ; Move the stack pointer into RSI, so it becomes the first argument to the scheduler
     
     ; Call scheduler
-    call RSI
+    call contextswitch_scheduler_cb
     ; ^ before suspending ^
     ; ========== ==========
     ; V  after  resuming  V

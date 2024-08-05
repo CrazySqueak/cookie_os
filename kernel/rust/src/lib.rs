@@ -97,7 +97,10 @@ pub extern "C" fn _kmain() -> ! {
     let s = format!("\n\nKernel bounds: {:x?}", memory::physical::get_kernel_bounds());
     VGA_WRITER.write_string(&s);
     
-    //unsafe { lowlevel::context_switch::_cs_push(test); }
+    for i in 0..3 {
+        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
+    }
+    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     
     // TODO
     loop{}//lowlevel::halt();

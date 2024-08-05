@@ -19,5 +19,13 @@ pub enum SchedulerCommand {
     This function happens after the previous context is saved, but before the next one is loaded. It's this function's job to determine what to run next (and then run it). */
 #[inline]
 pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
-    todo!()
+    // For now, just print and then resume (testing)
+    crate::logging::klog!(Info,ROOT,"Rsp:{:p}",rsp);
+    match command {
+        SchedulerCommand::PushBack => unsafe{resume_context(rsp)},
+        SchedulerCommand::Terminate => {
+            crate::logging::klog!(Info,ROOT,"Beep boop halting");
+            crate::lowlevel::halt();
+        },
+    }
 }

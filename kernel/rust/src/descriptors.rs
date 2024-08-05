@@ -2,7 +2,9 @@ use core::sync::atomic::{AtomicU16,AtomicU64,Ordering,AtomicPtr};
 use alloc::sync::Arc;
 use core::ops::Drop;
 use core::cell::SyncUnsafeCell;
-use core::mem::{forget};
+use core::{mem,ptr};
+use core::default::Default;
+use alloc::boxed::Box;
 
 pub type DescriptorID = u64;
 pub type AtomicDescriptorID = AtomicU64;
@@ -12,6 +14,8 @@ pub enum DescriptorAcquireError {
     DescriptorReserved,
     /// A B-Reference cannot be acquired because the b-slot is not active (rc_b is 0)
     BSlotNotAvailable,
+    /// Descriptor was not found
+    NotFound,
 }
 
 /** Descriptors are objects with are opened and stored in a descriptor table.
@@ -29,7 +33,7 @@ pub enum DescriptorAcquireError {
     The rc_b value is either 0 - deallocated, or 1+ - allocated. This is because there is no need for a "free" value in rc_b to signify that the descriptor is no longer in use, as that responsibility is handled by rc_a.
     Note: Once all B references are dropped, no more can be created.
 */
-pub struct Descriptor<T,A,B> {
+pub struct Descriptor<T,A,B> where T: Default {
     // Ref counts
     rc_a: AtomicU16,
     rc_b: AtomicU16,
@@ -43,11 +47,12 @@ pub struct Descriptor<T,A,B> {
     slot_a: SyncUnsafeCell<Option<A>>,
     slot_b: SyncUnsafeCell<Option<B>>,
 }
-impl<T,A,B> Descriptor<T,A,B> {
+impl<T,A,B> Descriptor<T,A,B> where T: Default {
     /* Drop the slot_a value if non-null, then decrement rc_a to 0, marking this descriptor as free to be overwritten.
         SAFETY: rc_a should be 1. This MUST be the only thread trying to access this descriptor (enforced by rc_a being 1).
                 rc_b must be 0 and slot_b must be freed. slot_t must not be in use (lifetimes should be pinned to the reference, so they do not outlive their A-references).
                 When clearing the entire descriptor, you should clear slot B (_clear_slot_b) first, then call _clear. */
+    #[inline]
     unsafe fn _clear(&self){
         // Drop slot_a if initialised
         let slot_a = &mut *self.slot_a.get();
@@ -58,6 +63,7 @@ impl<T,A,B> Descriptor<T,A,B> {
     }
     /* Drop the slot_b value if non-null.
         SAFETY: rc_b should be 0. This MUST be the only thread trying to access this descriptor (enforced by rc_a being 1). */
+    #[inline]
     unsafe fn _clear_slot_b(&self){
         // Drop slot_b if initialised
         let slot_b = &mut *self.slot_b.get();
@@ -65,6 +71,7 @@ impl<T,A,B> Descriptor<T,A,B> {
     }
     
     /* Decrement rc_a, and perform destruction if applicable. */
+    #[inline]
     unsafe fn _decrement_rc_a(&self){
         let prev_a = self.rc_a.fetch_sub(1, Ordering::SeqCst);
         if prev_a == 2 {
@@ -74,6 +81,7 @@ impl<T,A,B> Descriptor<T,A,B> {
     }
     /* Decrement rc_b, and perform destruction if applicable.
         If decrementing both, then this must be called before decrement_rc_a. */
+    #[inline]
     unsafe fn _decrement_rc_b(&self){
         let prev_b = self.rc_b.fetch_sub(1, Ordering::SeqCst);
         if prev_b == 1 {
@@ -95,9 +103,24 @@ impl<T,A,B> Descriptor<T,A,B> {
         // Done :)
     }
     
+    /* Create a new empty descriptor */
+    fn new_empty() -> Self {
+        Self {
+            rc_a: AtomicU16::new(0),
+            rc_b: AtomicU16::new(0),
+            
+            id: AtomicDescriptorID::new(0),
+            
+            slot_t: T::default(),
+            slot_a: SyncUnsafeCell::new(None),
+            slot_b: SyncUnsafeCell::new(None),
+        }
+    }
+    
     /* Reserve the descriptor for use.
        This will increment rc_a from 0 (free) to 1 (reserved).
        Returns None if the operation failed (e.g. because the descriptor is already in use). */
+    #[inline]
     fn reserve(&self, id: DescriptorID) -> Option<DescriptorInitialiser<T,A,B>> {
         // Attempt to begin initialisation by compare_exchange-ing the rc_a value.
         let r = self.rc_a.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed);
@@ -133,9 +156,11 @@ impl<T,A,B> Descriptor<T,A,B> {
 /* An RAII guard used for initialising a descriptor.
     If commit() is called, the descriptor's rc_a will be incremented to 2, and its descriptor will become ready for use.
     If this is otherwise dropped, the descriptor will be cleared and have its rc_a decremented back to 0 (free). */
-pub struct DescriptorInitialiser<'r,T,A,B>(&'r Descriptor<T,A,B>);
-impl<'r,T,A,B> DescriptorInitialiser<'r,T,A,B> {
+pub struct DescriptorInitialiser<'r,T,A,B>(&'r Descriptor<T,A,B>) where T: Default;
+impl<'r,T,A,B> DescriptorInitialiser<'r,T,A,B> where T: Default {
+    #[inline]
     pub fn id(&self) -> u64 { self.0.id.load(Ordering::Relaxed) }
+    #[inline]
     pub fn slot_t<'a>(&'a self) -> &'a T { &self.0.slot_t }
     
     /* Finish the initialisation of the descriptor, putting a_value into slot a, b_value into slot b, and eventually incrementing its rc_a count to 2, its rc_b count to 1, and returning a B-reference.
@@ -147,14 +172,14 @@ impl<'r,T,A,B> DescriptorInitialiser<'r,T,A,B> {
         unsafe { descriptor._init_slots(a_value, b_value); }
         
         // Forget ourselves so that our drop() does not run (as our drop() attempts to free the descriptor)
-        forget(self);
+        mem::forget(self);
         // Create reference
         descriptor.rc_b.fetch_add(1, Ordering::Acquire);
         descriptor.rc_a.fetch_add(1, Ordering::Acquire);
         DescriptorRef(descriptor)
     }
 }
-impl<T,A,B> Drop for DescriptorInitialiser<'_,T,A,B> {
+impl<T,A,B> Drop for DescriptorInitialiser<'_,T,A,B> where T: Default {
     fn drop(&mut self){
         // SAFETY: As we are the only reference to this descriptor (during initialisation), we can be sure
         // that rc_a is 1, and that no other references have been taken (as rc_a is 1).
@@ -166,11 +191,12 @@ impl<T,A,B> Drop for DescriptorInitialiser<'_,T,A,B> {
     }
 }
 
-pub struct DescriptorRef<'r,T,A,B,const IS_B_REF: bool>(&'r Descriptor<T,A,B>);
+pub struct DescriptorRef<'r,T,A,B,const IS_B_REF: bool>(&'r Descriptor<T,A,B>) where T: Default;
 pub type DescriptorARef<'r,T,A,B> = DescriptorRef<'r,T,A,B,false>;
 pub type DescriptorBRef<'r,T,A,B> = DescriptorRef<'r,T,A,B,true>;
-impl<'r,T,A,B,const IS_B_REF: bool> DescriptorRef<'r,T,A,B,IS_B_REF> {
+impl<'r,T,A,B,const IS_B_REF: bool> DescriptorRef<'r,T,A,B,IS_B_REF> where T: Default {
     /* Get the ID of the descriptor. */
+    #[inline]
     pub fn get_id(&self) -> DescriptorID {
         self.0.id.load(Ordering::Relaxed)
     }
@@ -178,16 +204,19 @@ impl<'r,T,A,B,const IS_B_REF: bool> DescriptorRef<'r,T,A,B,IS_B_REF> {
     /* Get a reference to the slot_t data for this descriptor.
         This is bound by the lifetime of the DescriptorRef so that it only applies to the requested descriptor.
         If you want one that lives as long as the table itself (instead of only the given allocation of the slot), use get_t_forever. */
+    #[inline]
     pub fn get_t<'a>(&'a self) -> &'a T {
         &self.0.slot_t
     }
     /* This reference to T will live as long as the slot itself, even if it is freed and then re-used for a different descriptor. */
+    #[inline]
     pub fn get_t_forever(&self) -> &'r T {
         &self.0.slot_t
     }
     
     /* Get a reference to the A-slot in the descriptor.
         Note: it is impossible to mutate the A-slot itself in this state. Please use interior mutability if mutation is required. */
+    #[inline]
     pub fn get_a<'a>(&'a self) -> &'a A {
         // SAFETY: Since this A-ref exists, rc_a is >= 2 and will not decrease below that as long as this A-ref is not dropped
         //          Since rc_a is >= 2, A will not be borrowed mutably by the destructor/initialiser (and it cannot be borrowed mutably in any other way).
@@ -204,16 +233,17 @@ impl<'r,T,A,B,const IS_B_REF: bool> DescriptorRef<'r,T,A,B,IS_B_REF> {
         DescriptorRef(self.0)
     }
 }
-impl<'r,T,A,B> DescriptorARef<'r,T,A,B> {
+impl<'r,T,A,B> DescriptorARef<'r,T,A,B> where T: Default {
     /* Attempt to upgrade this A-reference to a B-reference. */
     pub fn upgrade(self) -> Result<DescriptorBRef<'r,T,A,B>,DescriptorAcquireError> {
         // Currently this just calls .acquire_ref, but in theory it could be replaced with a more optimised version that takes advantage of the fact that a ref already exists
         self.0.acquire_ref::<true>()
     }
 }
-impl<'r,T,A,B> DescriptorBRef<'r,T,A,B> {
+impl<'r,T,A,B> DescriptorBRef<'r,T,A,B> where T: Default {
     /* Get a reference to the B-slot in the descriptor.
         Note: it is impossible to mutate the B-slot itself in this state. Please use interior mutability if mutation is required. */
+    #[inline]
     pub fn get_b<'a>(&'a self) -> &'a B {
         // SAFETY: Since this B-ref exists, rc_b is >= 1 and will not decrease below that as long as this B-ref is not dropped
         //          Since rc_b is >= 2, B will not be borrowed mutably by the destructor/initialiser (and it cannot be borrowed mutably in any other way).
@@ -238,7 +268,7 @@ impl<'r,T,A,B> DescriptorBRef<'r,T,A,B> {
     }
 }
 
-impl<T,A,B,const IS_B_REF: bool> Drop for DescriptorRef<'_,T,A,B,IS_B_REF> {
+impl<T,A,B,const IS_B_REF: bool> Drop for DescriptorRef<'_,T,A,B,IS_B_REF> where T: Default {
     fn drop(&mut self){
         let descriptor = self.0;
         // Drop B reference
@@ -247,5 +277,140 @@ impl<T,A,B,const IS_B_REF: bool> Drop for DescriptorRef<'_,T,A,B,IS_B_REF> {
         }
         // Drop A reference
         unsafe { descriptor._decrement_rc_a(); }
+    }
+}
+
+/* A table of descriptors. N = number per table, M = number of different sub-tables (see below)
+
+Sub Tables:
+When the current table runs out of space, it will allocate one or more sub-tables (should be power of two for best performance).
+To avoid linked-list level performance, the subtable of index ID%M is used. (if that subtable is full, then index (ID/M)%M is used, and so on.
+Sub-tables may not be dropped unless their parent is also dropped, as it is expected that a subtable, once allocated, will remain allocated.
+N and M are "voodoo constants", whose values are chosen by luck and intuition. */
+pub struct DescriptorTable<T,A,B, const N: usize, const M: usize> where T: Default {
+    next_id: AtomicDescriptorID,
+    table: DescriptorTableInner<T,A,B,N,M>,
+}
+impl<T,A,B, const N: usize, const M: usize> DescriptorTable<T,A,B,N,M> where T: Default {
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            next_id: AtomicDescriptorID::new(1),  // ID 0 is not used as it would confuse people
+            table: DescriptorTableInner::new(),
+        }
+    }
+    
+    /* Get a reference to the descriptor with the given ID, or an error if it could not be done. */
+    pub fn acquire<const IS_B_REF: bool>(&self, id: DescriptorID) -> Result<DescriptorRef<T,A,B,IS_B_REF>,DescriptorAcquireError> {
+        self.table.acquire::<IS_B_REF>(id)
+    }
+    /* Create a new descriptor, and return the initialiser, allowing you to initialise slots T, A, and B as necessary before commit()-ing it and opening the descriptor for regular use. */
+    pub fn create_new_descriptor(&self) -> DescriptorInitialiser<T,A,B> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.table.allocate_empty(id)
+    }
+}
+
+/* Descriptor tables are multi-level, however some extra stuff has to be stored with the root. This is the multi-level insides or whatever. You know what i mean */
+pub struct DescriptorTableInner<T,A,B, const N: usize, const M: usize> where T: Default {
+    descriptors: [Descriptor<T,A,B>; N],
+    subtables: [AtomicPtr<Self>; M],
+}
+impl<T,A,B, const N: usize, const M: usize> DescriptorTableInner<T,A,B,N,M> where T: Default {
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            descriptors: core::array::from_fn(|i| Descriptor::new_empty()),
+            subtables: [const { AtomicPtr::new(ptr::null_mut()) }; M],
+        }
+    }
+    
+    /* Return the subtable in that slot, or create a new one if one is not already there. */
+    #[inline]
+    fn _get_or_create_sub_table(&self, idx: usize) -> &Self {
+        // Optimisation: Only allocate a new subtable if there isn't a sub-table already there
+        // we still have to do a compare_exchange if there isn't as otherwise a sub-table could be put there while our back is turned,
+        // but it means we don't have to allocate and de-allocate a boxed subtable for every single subtable lookup.
+        let st_pointer = if self.subtables[idx].load(Ordering::Relaxed) == ptr::null_mut() {
+            let new_subtable_ptr = Box::into_raw(Box::new(Self::new()));
+            match self.subtables[idx].compare_exchange(ptr::null_mut(), new_subtable_ptr, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => new_subtable_ptr,  // All ok
+                Err(existing_ptr) => {
+                    // Something is already there!
+                    // Drop our original subtable as it's no longer needed
+                    drop(unsafe{ Box::from_raw(new_subtable_ptr) });
+                    // And return the existing one
+                    existing_ptr
+                }
+            }
+        } else { self.subtables[idx].load(Ordering::Relaxed) };
+        
+        // Borrow an immutable reference to the chosen subtable
+        // SAFETY: We've already checked for null pointers above (technically twice - once to skip allocating if not needed, and a second time to assign the new table)
+        //          st_pointer MUST always be valid, and subtables MUST NOT be freed. If it wasn't for the atomicity required, I'd be using a regular Box<>.
+        //          So, treat it like a Box<> which is owned by this table and you can't really go wrong.
+        unsafe { &*st_pointer }
+    }
+    
+    // a version of _get_or_create_sub_table that returns None if none was found instead of creating a new one
+    #[inline]
+    fn _get_sub_table_or_none(&self, idx: usize) -> Option<&Self> {
+        let ptr = self.subtables[idx].load(Ordering::Relaxed);
+        if ptr == ptr::null_mut() { None }
+        else { Some(unsafe { &*ptr }) }
+    }
+    
+    /* Find the descriptor with the given ID.
+        No guarantee is made that the descriptor will still be extant and correct when you go to use it.
+        The only guarantee is that the descriptor was there at some point (as descriptor IDs are not re-used and descriptors cannot be moved, the descriptor being non-extant or overwritten implies that it is gone forever. */
+    fn _search(&self, id: DescriptorID, st_indexer: usize) -> Option<&Descriptor<T,A,B>> {
+        // Find descriptor
+        for descriptor in &self.descriptors {
+            if descriptor.id.load(Ordering::Acquire) == id { return Some(descriptor); }
+        }
+        // Find sub-table
+        let st_index = st_indexer%M;
+        if let Some(subtable) = self._get_sub_table_or_none(st_index) {
+            subtable._search(id, st_indexer/M)
+        } else { None }
+    }
+    /* Get a reference to the descriptor with the given ID, or an error if it could not be done. */
+    #[inline]
+    pub fn acquire<const IS_B_REF: bool>(&self, id: DescriptorID) -> Result<DescriptorRef<T,A,B,IS_B_REF>,DescriptorAcquireError> {
+        // Locate the descriptor and acquire a reference
+        let descriptor = self._search(id, id.try_into().unwrap()).ok_or(DescriptorAcquireError::NotFound)?;
+        let desc_ref = descriptor.acquire_ref::<IS_B_REF>()?;
+        
+        // Now that we have a reference, the descriptor will not be erased or replaced
+        // Check the ID to ensure it wasn't overwritten between finding the descriptor and acquiring the reference
+        if desc_ref.get_id() != id { return Err(DescriptorAcquireError::NotFound); }  // overwritten
+        // All ok
+        Ok(desc_ref)
+    }
+    
+    fn _allocate_empty(&self, id: DescriptorID, st_indexer: usize) -> DescriptorInitialiser<T,A,B> {
+        // Find an empty slot
+        for descriptor in &self.descriptors {
+            if let Some(desc) = descriptor.reserve(id) { return desc; }  // we got it!
+        }
+        // Find a sub-table and reserve in there
+        let st_index = st_indexer%M;
+        self._get_or_create_sub_table(st_index)._allocate_empty(id, st_indexer/M)
+    }
+    /* Allocate an empty slot for a new descriptor with the given ID, returning the initialiser which can be used to initialise it.
+        Warning: If a descriptor with that ID already exists in the table, then it is undefined which one is returned by methods such as acquire. */
+    #[inline]
+    pub fn allocate_empty(&self, id: DescriptorID) -> DescriptorInitialiser<T,A,B> {
+        self._allocate_empty(id, id.try_into().unwrap())
+    }
+}
+impl<T,A,B, const N: usize, const M: usize> Drop for DescriptorTableInner<T,A,B,N,M> where T: Default {
+    fn drop(&mut self){
+        // Drop sub-tables (as they're stored as pointers and wouldn't be dropped otherwise)
+        for st_ptr in &mut self.subtables {
+            let ptr = st_ptr.get_mut();
+            let st = *ptr; *ptr = ptr::null_mut();
+            if st != ptr::null_mut() { drop(unsafe{ Box::from_raw(st) }) };
+        }
     }
 }

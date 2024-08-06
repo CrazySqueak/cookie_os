@@ -2,6 +2,8 @@
 use crate::lowlevel::context_switch as cswitch_impl;
 use super::{Task,TaskType};
 use crate::sync::{Mutex,AlwaysPanic};
+use alloc::collections::VecDeque;
+use crate::logging::klog;
 
 pub type StackPointer = cswitch_impl::StackPointer;
 pub use cswitch_impl::yield_to_scheduler;
@@ -23,14 +25,35 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
     let mut current_task = get_current_task().take().expect("schedule() called but no task currently active?");
     current_task.set_rsp(rsp);
     
-    // For now, just print and then resume (testing)
-    crate::logging::klog!(Info,ROOT,"Rsp:{:p}",rsp);
-    match command {
-        SchedulerCommand::PushBack => resume_context(current_task),
+    // Push previous task back onto the run queue
+    match &command {
         SchedulerCommand::Terminate => {
-            crate::logging::klog!(Info,ROOT,"Beep boop halting");
-            crate::lowlevel::halt();
-        },
+            // Terminate the task
+            klog!(Debug, SCHEDULER, "Terminating task: {}", current_task.task_id);
+            drop(current_task)
+        }
+        
+        _ => {
+            // Push back onto run queue
+            klog!(Debug, SCHEDULER, "Suspending task: {}", current_task.task_id);
+            get_run_queue().push_back(current_task);
+        }
+    }
+    
+    // Pick the next task off of the run queue
+    loop {
+        let next_task: Option<Task>;
+        match &command {
+            _ => {
+                // Take next task
+                next_task = get_run_queue().pop_front();
+            }
+        }
+        
+        if let Some(next_task) = next_task {
+            klog!(Debug, SCHEDULER, "Resuming task: {}", next_task.task_id);
+            resume_context(next_task)
+        }
     }
 }
 
@@ -51,18 +74,33 @@ pub fn resume_context(task: Task) -> !{
     Once this has been called, it is ok to call yield_to_scheduler.
     (calling this again will discard a large amount of the scheduler's state for the current CPU, so uh, don't)*/
 pub fn init_scheduler(){
-    // initialise run queue TODO
+    // initialise run queue? (idk TODO)
     
     // Initialise task
     // Note: resuming the task is undefined (however that is the same for all "currently active tasks" - as they must be paused first)
     let task = unsafe { Task::new_with_rsp(TaskType::KernelTask, core::ptr::null_mut()) };
+    let task_id = task.task_id;
+    // Set current task
     *get_current_task() = Some(task);
     
     // All gucci :)
+    // log message
+    klog!(Info, SCHEDULER, "Initialised scheduler on CPU {}. Bootstrapper task has become task {}.", 0, task_id);
+    // Signal that scheduler is online
+    super::BSP_SCHEDULER_READY.store(true,core::sync::atomic::Ordering::Release);
 }
 
-// Currently active task
+/* Push a new task to the current scheduler's run queue. */
+pub fn push_task(task: Task){
+    klog!(Debug, SCHEDULER, "Pushing new task: {}", task.task_id);
+    get_run_queue().push_back(task);
+}
+
+// Currently active task & run queue
 static _CURRENT_TASK: Mutex<Option<Task>, AlwaysPanic> = Mutex::new(None);
+static _RUN_QUEUE: Mutex<VecDeque<Task>, AlwaysPanic> = Mutex::new(VecDeque::new());  // TODO replace with a better run queue system
 
 #[inline(always)]
 pub(super) fn get_current_task() -> crate::sync::MutexGuard<'static, Option<Task>> { _CURRENT_TASK.lock() }
+#[inline(always)]
+pub(super) fn get_run_queue() -> crate::sync::MutexGuard<'static, VecDeque<Task>> { _RUN_QUEUE.lock() }

@@ -83,13 +83,19 @@ pub extern "C" fn _kmain() -> ! {
     VGA_WRITER.write_string(&s);
     
     // test
-    //let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
-    //let rsp = unsafe { lowlevel::context_switch::_cs_new(test, kstack.bottom_vaddr() as *const u8) };
-    //klog!(Info,ROOT,"newtask RSP={:p}", rsp);
-    //unsafe { lowlevel::context_switch::_cs_pop(rsp) };
-    
     for i in 0..3 {
+        let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
+        let rsp = unsafe { lowlevel::context_switch::_cs_new(test, kstack.bottom_vaddr() as *const u8) };
+        klog!(Info,ROOT,"newtask RSP={:p}", rsp);
+        let task = unsafe { scheduler::Task::new_with_rsp(scheduler::TaskType::KernelTask, rsp) };
+        scheduler::context_switch::push_task(task);
+        
         scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
+        
+        // ALSO FOR THE LOVE OF GOD
+        // DON'T DROP() THE STACK WHILE YOU'RE STILL USING IT
+        // DUMBASS
+        core::mem::forget(kstack);
     }
     scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     
@@ -98,7 +104,12 @@ pub extern "C" fn _kmain() -> ! {
 }
 
 extern "sysv64" fn test() -> ! {
-    todo!()
+    for i in 0..5 {
+        klog!(Info,ROOT,"{}", i);
+        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
+    }
+    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
+    unreachable!();
 }
 
 /// This function is called on panic.

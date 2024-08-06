@@ -10,7 +10,7 @@ extern "sysv64" {
     fn _cs_pop(rsp: *const u8) -> !;
     /* Initialise a new stack at the given address, which calls the given entry point.
         For the entry point: The stack starts empty. Callee-saved registers (RBX,R12-15) are zeroed. The value of caller-saved registers are undefined. */
-    fn _cs_new(entrypoint: extern "sysv64" fn() -> !, stack: *const u8) -> *const u8;
+    pub fn _cs_new(entrypoint: extern "sysv64" fn() -> !, stack: *const u8) -> *const u8;
 }
 
 pub type StackPointer = *const u8;

@@ -20,18 +20,16 @@ _cs_push:
     ; Save Registers (https://wiki.osdev.org/System_V_ABI#x86-64)
     ; Caller Saved Registers: RAX,RDI,RSI,RDX,RCX,R8,R9,R10,R11 : We don't need to worry about them, as we do not use them (they're already saved by the caller)
     ; Callee Saved Registers: RBX,R12,R13,R14,R15       : We need to save them here.
-    ; RSP,RBP,RIP - handled by the prologue/calling convention
+    ; caller's RSP,RBP,RIP - handled by the prologue/calling convention
     push RBX
     push R12
     push R13
     push R14
     push R15
     
-    ; Push "return address" and RBP for when _cs_pop is called
-    ; This is done as if we had "called" _cs_pop ourselves, so the return epilogue works correctly
-    ; Note: stack is 16-byte aligned after this push V - also we don't need to push .resume as it's always the same label, so jmp is used instead of ret.
+    ; Save our own RBP as it's also the caller's RSP
     push RBP            ; our base pointer (as if in the function prologue). This is loaded as RSP in the epilogue (prior to returning)
-    ; We don't need to preserve prologue:RBP=RSP (besides as the argument to the scheduler) as _cs_pop doesn't use RBP
+    ; Our RSP is saved by passing it as an argument to the scheduler
     
     ; Then pass stack pointer as argument
     ; The value saved here is 16-byte aligned, with the top two being TOS -> RBP, RIP
@@ -46,6 +44,7 @@ _cs_push:
     ; V  after  resuming  V
 .resume:
     ; Load Registers
+    ; our RBP was already loaded by _cs_pop
     pop R15
     pop R14
     pop R13
@@ -67,3 +66,39 @@ _cs_pop:
     ; TOS -> RBP, RIP, [data for _cs_push.resume]
     pop RBP  ; Load the previous RBP
     jmp _cs_push.resume  ; Resume (effectively a "return" but always to the same place so we don't need to waste stack space)
+
+
+; extern "sysv64" _cs_new(entrypoint: extern "sysv64" fn() -> !, stack: *const u8) -> *const u8 (rsp)
+global _cs_new
+_cs_new:
+    ; prologue
+    push RBP
+    mov RBP, RSP
+    
+    ; parameters
+    ; rdi = entry point
+    ; rsi = new stack
+    ; locals
+    ; rbp (base pointer) = caller stack
+    
+    ; switch to new stack
+    mov RSP, RSI
+    
+    ; Initialise stack - this is an analogue of _cs_push, but pushes new values instead of current ones
+    push RDI  ; entry point as caller return address
+    push RSI  ; stack base as caller's RBP
+    mov RSI, RSP  ; save stack pointer - pushed later so _cs_push.resume's RBP -> caller RBP
+    push 0 ; RBX
+    push 0 ; R12
+    push 0 ; R13
+    push 0 ; R14
+    push 0 ; R15
+    push RSI  ; stack base as caller's RSP / _cs_push.resume's RBP
+    
+    ; save new stack's RSP as return value
+    mov RAX,RSP
+    
+    ; epilogue - we don't need to store RSP as a local because we don't clobber RBP, therefore the caller's RSP is kept safe
+    mov RSP,RBP
+    pop RBP
+    ret

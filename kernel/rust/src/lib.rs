@@ -63,24 +63,6 @@ pub unsafe fn _kinit() {
     // Initialise kernel heap rescue
     memory::kernel_heap::init_kheap_2();
     
-    // paging test #3
-    let mut arr = alloc::vec![memory::alloc_util::AllocatedStack::allocate_ktask().unwrap()];
-    for i in 0..16 { arr.push(memory::alloc_util::AllocatedStack::allocate_ktask().unwrap()) }
-    klog!(Info,ROOT,"Got {:?}",arr);
-    
-    let mut a = arr.swap_remove(0); drop(arr);
-    a.expand(3*4096);
-    klog!(Info,ROOT,"Got {:?}",a);
-    a.expand(2*1024*1024);
-    klog!(Info,ROOT,"Got {:?}",a);
-    
-    let mut b = memory::alloc_util::AllocatedStack::allocate_user(&pagetable).unwrap();
-    klog!(Info,ROOT,"Got {:?}",b);
-    for i in 0..3 {
-        b.expand((i+1)*1024*1024);
-        klog!(Info,ROOT,"Got {:?}",b);
-    }
-    
     // Grow kernel heap by 16+8MiB for a total initial size of 32
     let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
     let _ = memory::kernel_heap::grow_kheap( 8*1024*1024);
@@ -97,13 +79,23 @@ pub extern "C" fn _kmain() -> ! {
     let s = format!("\n\nKernel bounds: {:x?}", memory::physical::get_kernel_bounds());
     VGA_WRITER.write_string(&s);
     
-    for i in 0..3 {
-        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
-    }
-    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
+    // test
+    let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
+    let rsp = unsafe { lowlevel::context_switch::_cs_new(test, kstack.bottom_vaddr() as *const u8) };
+    klog!(Info,ROOT,"newtask RSP={:p}", rsp);
+    unsafe { lowlevel::context_switch::_cs_pop(rsp) };
+    
+    //for i in 0..3 {
+    //    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
+    //}
+    //scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     
     // TODO
     loop{}//lowlevel::halt();
+}
+
+extern "sysv64" fn test() -> ! {
+    todo!()
 }
 
 /// This function is called on panic.

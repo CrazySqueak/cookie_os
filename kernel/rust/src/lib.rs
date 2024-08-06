@@ -107,22 +107,35 @@ extern "sysv64" fn test() -> ! {
     for i in 0..5 {
         klog!(Info,ROOT,"{}", i);
         scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
+        todo!();
     }
     scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     unreachable!();
 }
 
 /// This function is called on panic.
+/// If the task that triggers a panic is not a bootstrap or scheduler task, then the task terminates and a log message is printed. (this is still a serious issue, however, as a kernel-level panic at the wrong time could lock up the system - kernel panics should represent errors that present immediate threat to the operating system e.g. where locking up the whole system would be a viable handling strategy)
+/// Otherwise, a kernel panic occurs and the whole thing goes tits-up
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    klog!(Fatal, ROOT, "KERNEL PANIC: {}", _info);
-    
-    // Forcefully acquire a reference to the current writer, bypassing the lock (which may have been locked at the time of the panic and will not unlock as we don't have stack unwinding)
-    let mut writer = unsafe{let wm=core::mem::transmute::<&display_vga::LockedVGAConsoleWriter,&crate::sync::Mutex<display_vga::VGAConsoleWriter>>(&*VGA_WRITER);wm.force_unlock();wm.lock()};
-    writer.set_colour(display_vga::VGAColour::new(display_vga::BaseColour::LightGray,display_vga::BaseColour::Red,true,false));
-    
-    // Write message and location
-    let _ = writer.write_string(&format!("\n\n\n\n\nKERNEL PANICKED: {}", _info));
-    
-    lowlevel::halt();
+    let panic_header = format!("KERNEL PANIC on CPU {} in task {}", lowlevel::get_cpu_id(), scheduler::context_switch::get_task_id());
+    if scheduler::is_scheduler_ready() {
+        // Terminate current task
+        // This is still a serious issue - as we do not unwind the stack, the whole system could lock up
+        // Additionally, such an issue could hint at underlying bugs or system instability
+        klog!(Severe, ROOT, "{} (task terminated): {}", panic_header, _info);
+        scheduler::terminate_current_task();
+    } else {
+        // Kernel panic
+        klog!(Fatal, ROOT, "{} (unrecoverable): {}", panic_header, _info);
+        
+        // Forcefully acquire a reference to the current writer, bypassing the lock (which may have been locked at the time of the panic and will not unlock as we don't have stack unwinding)
+        let mut writer = unsafe{let wm=core::mem::transmute::<&display_vga::LockedVGAConsoleWriter,&crate::sync::Mutex<display_vga::VGAConsoleWriter>>(&*VGA_WRITER);wm.force_unlock();wm.lock()};
+        writer.set_colour(display_vga::VGAColour::new(display_vga::BaseColour::LightGray,display_vga::BaseColour::Red,true,false));
+        
+        // Write message and location
+        let _ = writer.write_string(&format!("\n\n\n\n\nKERNEL PANICKED (CPU {}): {}", lowlevel::get_cpu_id(), _info));
+        
+        lowlevel::halt();
+    }
 }

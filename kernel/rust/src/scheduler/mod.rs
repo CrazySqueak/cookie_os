@@ -4,7 +4,7 @@ use core::sync::atomic::Ordering;
 pub mod task;
 pub mod context_switch;
 
-pub use context_switch::{yield_to_scheduler,SchedulerCommand};
+pub use context_switch::{yield_to_scheduler,terminate_current_task,SchedulerCommand};
 pub use task::{Task,TaskType};
 
 static BSP_SCHEDULER_READY: AtomicBool = AtomicBool::new(false);
@@ -24,5 +24,5 @@ pub fn is_bsp_scheduler_initialised() -> bool {
 */
 #[inline]
 pub fn is_scheduler_ready() -> bool {
-    return context_switch::get_current_task().is_some()
+    return is_bsp_scheduler_initialised() && context_switch::get_current_task().is_some()
 }

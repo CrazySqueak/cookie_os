@@ -1,12 +1,19 @@
 /* This module is heavily coupled with lowlevel::context_switch, as this is the one that actually contains the scheduler. */
-use crate::lowlevel::context_switch as cswitch_impl;
+use crate::lowlevel::{context_switch as cswitch_impl, get_cpu_id};
 use super::{Task,TaskType};
 use crate::sync::{Mutex,AlwaysPanic};
 use alloc::collections::VecDeque;
 use crate::logging::klog;
 
 pub type StackPointer = cswitch_impl::StackPointer;
+
 pub use cswitch_impl::yield_to_scheduler;
+/* Terminate the current task. This is akin to calling yield_to_scheduler(Terminate), but returns the "!" type to hint that it cannot resume afterwards. */
+#[inline]
+pub fn terminate_current_task() -> ! {
+    yield_to_scheduler(SchedulerCommand::Terminate);
+    unreachable!();  // the scheduler will drop the task when yield is called with the Terminate command
+}
 
 /* The scheduler command given to _cs_push is then passed over to the scheduler.
     It is used to tell the scheduler what to do with the task that just finished. */
@@ -85,7 +92,7 @@ pub fn init_scheduler(){
     
     // All gucci :)
     // log message
-    klog!(Info, SCHEDULER, "Initialised scheduler on CPU {}. Bootstrapper task has become task {}.", 0, task_id);
+    klog!(Info, SCHEDULER, "Initialised scheduler on CPU {}. Bootstrapper task has become task {}.", get_cpu_id(), task_id);
     // Signal that scheduler is online
     super::BSP_SCHEDULER_READY.store(true,core::sync::atomic::Ordering::Release);
 }
@@ -104,3 +111,7 @@ static _RUN_QUEUE: Mutex<VecDeque<Task>, AlwaysPanic> = Mutex::new(VecDeque::new
 pub(super) fn get_current_task() -> crate::sync::MutexGuard<'static, Option<Task>> { _CURRENT_TASK.lock() }
 #[inline(always)]
 pub(super) fn get_run_queue() -> crate::sync::MutexGuard<'static, VecDeque<Task>> { _RUN_QUEUE.lock() }
+
+/* Get the ID of the current task. */
+#[inline(always)]
+pub fn get_task_id() -> isize { get_current_task().as_ref().map(|t|t.task_id as isize).unwrap_or(-((get_cpu_id()+1) as isize)) }

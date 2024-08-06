@@ -1,7 +1,7 @@
 
 use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
-use crate::sync::{RwLock,RwLockReadGuard,RwLockWriteGuard,RwLockUpgradableGuard};
+use crate::sync::{RwLock,RwLockReadGuard,RwLockWriteGuard,RwLockUpgradableGuard,AlwaysPanic};
 use crate::sync::Mutex;
 
 use super::*;
@@ -514,7 +514,7 @@ impl<T> core::ops::DerefMut for ForcedUpgradeGuard<'_, T>{
 
 // = ACTIVE OR SMTH? =
 // the currently active page table
-static _ACTIVE_PAGE_TABLE: Mutex<Option<PagingContext>> = Mutex::new(None);
+static _ACTIVE_PAGE_TABLE: Mutex<Option<PagingContext>, AlwaysPanic> = Mutex::new(None);
 
 // = ALLOCATIONS =
 // Note: Allocations must be allocated/deallocated manually

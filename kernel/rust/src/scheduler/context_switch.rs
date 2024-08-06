@@ -1,7 +1,7 @@
 /* This module is heavily coupled with lowlevel::context_switch, as this is the one that actually contains the scheduler. */
 use crate::lowlevel::context_switch as cswitch_impl;
 use super::{Task,TaskType};
-use crate::sync::Mutex;
+use crate::sync::{Mutex,AlwaysPanic};
 
 pub type StackPointer = cswitch_impl::StackPointer;
 pub use cswitch_impl::yield_to_scheduler;
@@ -47,4 +47,4 @@ pub fn resume_context(task: Task) -> !{
 }
 
 // Currently active task
-static _CURRENT_TASK: Mutex<Option<Task>> = Mutex::new(None);
+static _CURRENT_TASK: Mutex<Option<Task>, AlwaysPanic> = Mutex::new(None);

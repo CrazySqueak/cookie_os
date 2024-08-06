@@ -1,15 +1,18 @@
-use spin::relax::RelaxStrategy;
-use core::sync::atomic::AtomicBool;
-use core::sync::atomic::Ordering;
-
-static SCHEDULER_READY: AtomicBool = AtomicBool::new(false);
+use spin::relax::{RelaxStrategy,Spin};
+use crate::scheduler::{is_bsp_scheduler_initialised,is_local_scheduler_ready,yield_to_scheduler,SchedulerCommand};
 
 pub struct SchedulerYield;
 impl RelaxStrategy for SchedulerYield {
     #[inline(always)]
     fn relax(){
-        if SCHEDULER_READY.load(Ordering::SeqCst) {
-            todo!();  // yield
+        if is_bsp_scheduler_initialised() {
+            if is_local_scheduler_ready() {
+                // Yield
+                yield_to_scheduler(SchedulerCommand::PushBack)
+            } else {
+                // Our scheduler is not yet ready, so this CPU is probably trampolining and should wait for the other CPU(s) to let it have access to the resource
+                Spin::relax();
+            }
         } else {
             panic!("Waiting for lock but scheduler not configured yet! Possible deadlock?");
         }

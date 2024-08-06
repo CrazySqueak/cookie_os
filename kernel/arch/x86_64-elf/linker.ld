@@ -6,11 +6,23 @@ higher_half_offset = 0xFFFF800000000000;
 /* Physical addresses so the protected mode boot program can access labels that will be used in the higher half. */
 multiboot_info_ptr_P = multiboot_info_ptr - higher_half_offset;
 kstack_guard_page_P = kstack_guard_page - higher_half_offset;
+processors_started_P = processors_started - higher_half_offset;
 
 /* Tell where the various sections of the object files will be put in the final
    kernel image. */
 SECTIONS
 {
+    /* LOW LOW HALF (REAL MODE TRAMPOLINE) */
+    . = 0x8000;
+    
+    .trampoline.text BLOCK(4K) : ALIGN(4K) {
+        */realmode.o(.text)
+    }
+    .trampoline.data BLOCK(4K) : ALIGN(4K) {
+        */realmode.o(.data)
+    }
+    
+    /* LOWER HALF (BOOTSTRAP) */
 	/* It used to be universally recommended to use 1M as a start offset,
 	   as it was effectively guaranteed to be available under BIOS systems.
 	   However, UEFI has made things more complicated, and experimental data
@@ -26,7 +38,6 @@ SECTIONS
     
     kernel_phys_start = .;
     
-    /* LOWER HALF (BOOTSTRAP) */
     /* Remember to give these sections different names than the higher half as otherwise you will get 100 confusing error messages that give no explanation. hours_wasted += 3. noise_complaints_from_neighbours += 1. */
 	/* First put the multiboot header, as it is required to be put very early
 	   in the image or the bootloader won't recognize the file format.

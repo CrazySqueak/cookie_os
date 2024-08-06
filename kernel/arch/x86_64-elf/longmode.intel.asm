@@ -62,6 +62,13 @@ align 8
 multiboot_info_ptr:
     resb 8
 
+section .data
+; number of processors initialised (u16)
+; note: this starts at one as the BSP code does not contain an INC instruction
+global processors_started
+processors_started:
+    dw 1
+
 section .rodata
 ; kernel heap initial size
 global kheap_initial_addr

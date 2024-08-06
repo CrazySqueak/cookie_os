@@ -15,7 +15,8 @@ header_start:
     dd 8    ; size
 header_end:
 
-global start
+global start  ; entry point for bootstrap processor
+global ap_start  ; entry point for application processors
 
 ; big thanks to https://os.phil-opp.com/entering-longmode/
 section .text
@@ -41,7 +42,13 @@ start:
     lgdt [gdt64.pointer]
     ; And far jump to start
     jmp gdt64.kcode:long_mode_bridge
-    
+
+; start position for Application Processors (non-bootstrap processors)
+extern processors_started_P
+ap_start:
+    lock inc word [processors_started_P]  ; signal that we've started
+    hlt  ; TODO
+
 ; CHECKS
 check_multiboot:
     cmp eax, 0x36d76289

@@ -66,6 +66,7 @@ section .data
 ; number of processors initialised (u16)
 ; note: this starts at one as the BSP code does not contain an INC instruction
 global processors_started
+align 2
 processors_started:
     dw 1
 

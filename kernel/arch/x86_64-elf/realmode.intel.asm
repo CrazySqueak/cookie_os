@@ -1,6 +1,7 @@
 
 section .text
 bits 16  ; real mode :-(
+align 4096
 global ap_trampoline_realmode
 ap_trampoline_realmode:
     cli

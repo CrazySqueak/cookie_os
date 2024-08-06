@@ -42,7 +42,7 @@ pub unsafe fn _kinit() {
     // Initialise physical memory
     memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
     
-    // Initialise paging (bunch of testing code)
+    // Initialise paging
     use alloc::boxed::Box;
     use memory::paging::{PagingContext,PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
     let pagetable = memory::alloc_util::new_user_paging_context();
@@ -55,6 +55,12 @@ pub unsafe fn _kinit() {
         vgabuf.set_base_addr(display_vga::VGA_BUFFER_PHYSICAL, PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::PINNED));
         vgabuf.leak();
         
+        // APIC memory-mapped registers
+        // TODO: put this somewhere proper
+        let apic_buf = kallocator.allocate_at(0xFEE00_000 + kallocator.metadata().offset, 0x1000).expect("Unable to map APIC!");
+        apic_buf.set_base_addr(0xFEE00_000, PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::PINNED));
+        apic_buf.leak();
+        
         // Guess who doesn't have to manually map the kernel in lib.rs anymore because it's done in global_pages.rs!!!
     }
     // Activate context
@@ -66,6 +72,10 @@ pub unsafe fn _kinit() {
     // Grow kernel heap by 16+8MiB for a total initial size of 32
     let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
     let _ = memory::kernel_heap::grow_kheap( 8*1024*1024);
+    
+    // Configure CPUs for multiprocessing
+    // TODO; put somewhere proper
+    lowlevel::smp::init_multiprocessing();
     
     // Initialise scheduler
     scheduler::context_switch::init_scheduler();
@@ -97,6 +107,12 @@ pub extern "C" fn _kmain() -> ! {
         // DUMBASS
         core::mem::forget(kstack);
     }
+    
+    // testing
+    unsafe {
+        lowlevel::smp::init_processor(0);
+        lowlevel::smp::init_processor(1);
+    }
     scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     
     // TODO
@@ -107,7 +123,6 @@ extern "sysv64" fn test() -> ! {
     for i in 0..5 {
         klog!(Info,ROOT,"{}", i);
         scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
-        todo!();
     }
     scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     unreachable!();

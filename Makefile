@@ -152,7 +152,10 @@ debug: check-qemu-var $(QEMUTARGETDEPS) $(KERNEL_BIN)
 # Check that everything compiles for the qemu target, but don't actually launch qemu even on success
 check: check-qemu-var $(QEMUTARGETDEPS)
 
+# Check that everything compiles correctly, but doesn't build the final ISO
+compile: $(KERNEL_BIN)
+
 # special targets
 FORCE:
 
-.PHONY: all clean clean-all iso-grub iso-limine run debug check check-qemu-var
+.PHONY: all clean clean-all iso-grub iso-limine run debug check compile check-qemu-var

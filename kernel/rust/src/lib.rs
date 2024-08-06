@@ -66,6 +66,9 @@ pub unsafe fn _kinit() {
     // Grow kernel heap by 16+8MiB for a total initial size of 32
     let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
     let _ = memory::kernel_heap::grow_kheap( 8*1024*1024);
+    
+    // Initialise scheduler
+    scheduler::context_switch::init_scheduler();
 }
 
 #[no_mangle]
@@ -80,15 +83,15 @@ pub extern "C" fn _kmain() -> ! {
     VGA_WRITER.write_string(&s);
     
     // test
-    let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
-    let rsp = unsafe { lowlevel::context_switch::_cs_new(test, kstack.bottom_vaddr() as *const u8) };
-    klog!(Info,ROOT,"newtask RSP={:p}", rsp);
-    unsafe { lowlevel::context_switch::_cs_pop(rsp) };
+    //let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
+    //let rsp = unsafe { lowlevel::context_switch::_cs_new(test, kstack.bottom_vaddr() as *const u8) };
+    //klog!(Info,ROOT,"newtask RSP={:p}", rsp);
+    //unsafe { lowlevel::context_switch::_cs_pop(rsp) };
     
-    //for i in 0..3 {
-    //    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
-    //}
-    //scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
+    for i in 0..3 {
+        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
+    }
+    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     
     // TODO
     loop{}//lowlevel::halt();

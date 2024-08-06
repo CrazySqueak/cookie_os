@@ -11,6 +11,13 @@ pub struct Task {
     rsp: usize,
 }
 impl Task {
+    pub unsafe fn new_with_rsp(task_type: TaskType, rsp: StackPointer) -> Self {
+        Self {
+            task_type,
+            rsp: rsp as usize,
+        }
+    }
+    
     #[inline]
     pub(super) fn set_rsp(&mut self, rsp: StackPointer){
         self.rsp = rsp as usize

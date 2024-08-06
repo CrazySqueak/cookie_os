@@ -34,6 +34,7 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
     }
 }
 
+/* Resume the requested task, discarding the current one (if any). */
 #[inline]
 pub fn resume_context(task: Task) -> !{
     let rsp = task.get_rsp();
@@ -44,6 +45,20 @@ pub fn resume_context(task: Task) -> !{
     *_CURRENT_TASK.lock() = Some(task);
     // resume task
     unsafe { cswitch_impl::resume_context(rsp) };
+}
+
+/* Initialise the scheduler for the current CPU, before creating a kernel task to represent the current stack.
+    Once this has been called, it is ok to call yield_to_scheduler.
+    (calling this again will discard a large amount of the scheduler's state for the current CPU, so uh, don't)*/
+pub fn init_scheduler(){
+    // initialise run queue TODO
+    
+    // Initialise task
+    // Note: resuming the task is undefined (however that is the same for all "currently active tasks" - as they must be paused first)
+    let task = unsafe { Task::new_with_rsp(TaskType::KernelTask, core::ptr::null_mut()) };
+    *_CURRENT_TASK.lock() = Some(task);
+    
+    // All gucci :)
 }
 
 // Currently active task

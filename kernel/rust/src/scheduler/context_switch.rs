@@ -20,7 +20,7 @@ pub enum SchedulerCommand {
 #[inline]
 pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
     // Update current task
-    let mut current_task = _CURRENT_TASK.lock().take().expect("schedule() called but no task currently active?");
+    let mut current_task = get_current_task().take().expect("schedule() called but no task currently active?");
     current_task.set_rsp(rsp);
     
     // For now, just print and then resume (testing)
@@ -42,7 +42,7 @@ pub fn resume_context(task: Task) -> !{
     // set paging context and stuff if applicable
     
     // set active task
-    *_CURRENT_TASK.lock() = Some(task);
+    *get_current_task() = Some(task);
     // resume task
     unsafe { cswitch_impl::resume_context(rsp) };
 }
@@ -56,10 +56,13 @@ pub fn init_scheduler(){
     // Initialise task
     // Note: resuming the task is undefined (however that is the same for all "currently active tasks" - as they must be paused first)
     let task = unsafe { Task::new_with_rsp(TaskType::KernelTask, core::ptr::null_mut()) };
-    *_CURRENT_TASK.lock() = Some(task);
+    *get_current_task() = Some(task);
     
     // All gucci :)
 }
 
 // Currently active task
 static _CURRENT_TASK: Mutex<Option<Task>, AlwaysPanic> = Mutex::new(None);
+
+#[inline(always)]
+pub(super) fn get_current_task() -> crate::sync::MutexGuard<'static, Option<Task>> { _CURRENT_TASK.lock() }

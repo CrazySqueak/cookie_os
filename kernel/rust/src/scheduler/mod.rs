@@ -15,8 +15,14 @@ pub fn is_bsp_scheduler_initialised() -> bool {
     BSP_SCHEDULER_READY.load(Ordering::Relaxed)
 }
 
-/// Returns true if the scheduler is initialised on the current processor
+/** Returns true if the scheduler on the current processor is ready for you to yield.
+    This being false does not mean that your scheduler is not initialised, just that it won't accept a yield at this point.
+    For example, code running as part of the scheduler in-between tasks will see this as false instead of true.
+    Conversely, code running as part of a job will likely never see this return false.
+    Code that is written to be used by both the scheduler and by jobs should make sure to check this function's return value before yielding,
+        as yielding when this function returns false will panic (i mean, if the scheduler tries to yield to itself what else are you supposed to do? cause a deadlock?).
+*/
 #[inline]
-pub fn is_local_scheduler_ready() -> bool {
-    todo!()
+pub fn is_scheduler_ready() -> bool {
+    return context_switch::get_current_task().is_some()
 }

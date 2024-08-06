@@ -22,16 +22,17 @@ pub enum DescriptorAcquireError {
     These are a lot of kernel managed objects, including things such as processes, open files, and more.
     This struct also represents the "slot" itself in the table, and may be cleared and then re-used for any number of descriptors as applicable.
     
-    There are two types of references that may be opened: A-references and B-references. A-references only count for rc_a, whereas B-references count for both rc_a and rc_b.
-    The difference between the two depends on the descriptor.
+    A "handle" is a counted reference to a descriptor.
+    There are two types of handles that may be opened: A-handles and B-handles. A-handles only count for rc_a, whereas B-handles count for both rc_a and rc_b.
+    The semantic difference between the two depends on the descriptor, though A-handles can only access slots T and A, whereas B-handles can access slots T, A, and B.
     
     Each descriptor contains three descriptor-specific sections: the table section, the A section, and the B section.
-    Once no more B-references exist, the B section is dropped. Once no more A-references exist, the A section is dropped.
+    Once no more B-handles exist, the B section is dropped. Once no more handles exist, the A section is also dropped.
     The table section is never "dropped", but is overwritten when a new descriptor is assigned to that slot in the table.
     
-    The rc_a count may be one of the following values: 0 - free, 1 - reserved (no other references may be taken), 2+ - initialised
+    The rc_a count may be one of the following values: 0 - free, 1 - reserved (no other handles may be taken), 2+ - initialised
     The rc_b value is either 0 - deallocated, or 1+ - allocated. This is because there is no need for a "free" value in rc_b to signify that the descriptor is no longer in use, as that responsibility is handled by rc_a.
-    Note: Once all B references are dropped, no more can be created.
+    Note: Once all B-handles are dropped, no more can be created.
 */
 pub struct Descriptor<T,A,B> where T: Default {
     // Ref counts
@@ -50,7 +51,7 @@ pub struct Descriptor<T,A,B> where T: Default {
 impl<T,A,B> Descriptor<T,A,B> where T: Default {
     /* Drop the slot_a value if non-null, then decrement rc_a to 0, marking this descriptor as free to be overwritten.
         SAFETY: rc_a should be 1. This MUST be the only thread trying to access this descriptor (enforced by rc_a being 1).
-                rc_b must be 0 and slot_b must be freed. slot_t must not be in use (lifetimes should be pinned to the reference, so they do not outlive their A-references).
+                rc_b must be 0 and slot_b must be freed. slot_t must not be in use (lifetimes should be pinned to the handle, so they do not outlive their A-handles).
                 When clearing the entire descriptor, you should clear slot B (_clear_slot_b) first, then call _clear. */
     #[inline]
     unsafe fn _clear(&self){
@@ -131,9 +132,9 @@ impl<T,A,B> Descriptor<T,A,B> where T: Default {
         Some(DescriptorInitialiser(self))
     }
     
-    /* Acquire a new reference to the descriptor, if possible. */
-    fn acquire_ref<const IS_B_REF: bool>(&self) -> Result<DescriptorRef<T,A,B,IS_B_REF>,DescriptorAcquireError> {
-        let rca_result = self.rc_a.fetch_update(Ordering::Acquire, Ordering::Acquire, |rca| if rca >= 2 { Some(rca+1) } else { None });  // If rc_a >= 2, increment rc and continue. Otherwise, fail (cannot reference 1 as initialising, cannot reference 0 as not present).
+    /* Acquire a new handle to the descriptor, if possible. */
+    fn acquire_ref<const IS_B_REF: bool>(&self) -> Result<DescriptorHandle<T,A,B,IS_B_REF>,DescriptorAcquireError> {
+        let rca_result = self.rc_a.fetch_update(Ordering::Acquire, Ordering::Acquire, |rca| if rca >= 2 { Some(rca+1) } else { None });  // If rc_a >= 2, increment rc and continue. Otherwise, fail (cannot reference 1 as it's initialising, cannot reference 0 as it's not present).
         if let Err(_) = rca_result { return Err(DescriptorAcquireError::DescriptorReserved) };
         
         if IS_B_REF {
@@ -148,8 +149,8 @@ impl<T,A,B> Descriptor<T,A,B> where T: Default {
         }
         
         // We have now incremented rc_a, as well as rc_b (if applicable).
-        // Return a reference
-        Ok(DescriptorRef(self))
+        // Return a handle
+        Ok(DescriptorHandle(self))
     }
 }
 
@@ -163,25 +164,25 @@ impl<'r,T,A,B> DescriptorInitialiser<'r,T,A,B> where T: Default {
     #[inline]
     pub fn slot_t<'a>(&'a self) -> &'a T { &self.0.slot_t }
     
-    /* Finish the initialisation of the descriptor, putting a_value into slot a, b_value into slot b, and eventually incrementing its rc_a count to 2, its rc_b count to 1, and returning a B-reference.
+    /* Finish the initialisation of the descriptor, putting a_value into slot a, b_value into slot b, and eventually incrementing its rc_a count to 2, its rc_b count to 1, and returning a B-handle.
         Once this method is run, the descriptor may have any number of references taken in the future, and we no longer exclusively own it. */
-    pub fn commit(self, a_value: A, b_value: B) -> DescriptorBRef<'r,T,A,B> {
+    pub fn commit(self, a_value: A, b_value: B) -> DescriptorHandleB<'r,T,A,B> {
         let descriptor = self.0;
-        // SAFETY: As we are the only reference to the descriptor (it is still being initialised), we can ensure that
+        // SAFETY: As we are the only handle to the descriptor (it is still being initialised), we can ensure that
         // the required safety invariants are met.
         unsafe { descriptor._init_slots(a_value, b_value); }
         
         // Forget ourselves so that our drop() does not run (as our drop() attempts to free the descriptor)
         mem::forget(self);
-        // Create reference
+        // Create handle
         descriptor.rc_b.fetch_add(1, Ordering::Acquire);
         descriptor.rc_a.fetch_add(1, Ordering::Acquire);
-        DescriptorRef(descriptor)
+        DescriptorHandle(descriptor)
     }
 }
 impl<T,A,B> Drop for DescriptorInitialiser<'_,T,A,B> where T: Default {
     fn drop(&mut self){
-        // SAFETY: As we are the only reference to this descriptor (during initialisation), we can be sure
+        // SAFETY: As we are the only handle to this descriptor (during initialisation), we can be sure
         // that rc_a is 1, and that no other references have been taken (as rc_a is 1).
         unsafe {
             // Clear slot B first, as 
@@ -191,10 +192,10 @@ impl<T,A,B> Drop for DescriptorInitialiser<'_,T,A,B> where T: Default {
     }
 }
 
-pub struct DescriptorRef<'r,T,A,B,const IS_B_REF: bool>(&'r Descriptor<T,A,B>) where T: Default;
-pub type DescriptorARef<'r,T,A,B> = DescriptorRef<'r,T,A,B,false>;
-pub type DescriptorBRef<'r,T,A,B> = DescriptorRef<'r,T,A,B,true>;
-impl<'r,T,A,B,const IS_B_REF: bool> DescriptorRef<'r,T,A,B,IS_B_REF> where T: Default {
+pub struct DescriptorHandle<'r,T,A,B,const IS_B_REF: bool>(&'r Descriptor<T,A,B>) where T: Default;
+pub type DescriptorHandleA<'r,T,A,B> = DescriptorHandle<'r,T,A,B,false>;
+pub type DescriptorHandleB<'r,T,A,B> = DescriptorHandle<'r,T,A,B,true>;
+impl<'r,T,A,B,const IS_B_REF: bool> DescriptorHandle<'r,T,A,B,IS_B_REF> where T: Default {
     /* Get the ID of the descriptor. */
     #[inline]
     pub fn get_id(&self) -> DescriptorID {
@@ -202,7 +203,7 @@ impl<'r,T,A,B,const IS_B_REF: bool> DescriptorRef<'r,T,A,B,IS_B_REF> where T: De
     }
     
     /* Get a reference to the slot_t data for this descriptor.
-        This is bound by the lifetime of the DescriptorRef so that it only applies to the requested descriptor.
+        This is bound by the lifetime of the DescriptorHandle so that it only applies to the requested descriptor.
         If you want one that lives as long as the table itself (instead of only the given allocation of the slot), use get_t_forever. */
     #[inline]
     pub fn get_t<'a>(&'a self) -> &'a T {
@@ -224,23 +225,23 @@ impl<'r,T,A,B,const IS_B_REF: bool> DescriptorRef<'r,T,A,B,IS_B_REF> where T: De
         cellref.as_ref().unwrap()
     }
     
-    /* Create another A-reference using this reference.
-        Since an existing reference is present and in-scope, this operation is guaranteed to succeed (and is quicker than acquire_ref as it can skip several checks). */
-    pub fn clone_a_ref(&self) -> DescriptorARef<'r,T,A,B> {
+    /* Create another A-handle using this handle.
+        Since an existing handle is present and in-scope, this operation is guaranteed to succeed (and is quicker than acquire_ref as it can skip several checks). */
+    pub fn clone_a_ref(&self) -> DescriptorHandleA<'r,T,A,B> {
         // Increment ref count
         self.0.rc_a.fetch_add(1, Ordering::Acquire);
         // Create reference
-        DescriptorRef(self.0)
+        DescriptorHandle(self.0)
     }
 }
-impl<'r,T,A,B> DescriptorARef<'r,T,A,B> where T: Default {
-    /* Attempt to upgrade this A-reference to a B-reference. */
-    pub fn upgrade(self) -> Result<DescriptorBRef<'r,T,A,B>,DescriptorAcquireError> {
+impl<'r,T,A,B> DescriptorHandleA<'r,T,A,B> where T: Default {
+    /* Attempt to upgrade this A-handle to a B-handle. */
+    pub fn upgrade(self) -> Result<DescriptorHandleB<'r,T,A,B>,DescriptorAcquireError> {
         // Currently this just calls .acquire_ref, but in theory it could be replaced with a more optimised version that takes advantage of the fact that a ref already exists
         self.0.acquire_ref::<true>()
     }
 }
-impl<'r,T,A,B> DescriptorBRef<'r,T,A,B> where T: Default {
+impl<'r,T,A,B> DescriptorHandleB<'r,T,A,B> where T: Default {
     /* Get a reference to the B-slot in the descriptor.
         Note: it is impossible to mutate the B-slot itself in this state. Please use interior mutability if mutation is required. */
     #[inline]
@@ -251,24 +252,24 @@ impl<'r,T,A,B> DescriptorBRef<'r,T,A,B> where T: Default {
         cellref.as_ref().unwrap()
     }
     
-    /* Create another B-reference using this reference.
-        Since an existing B-reference is present and in-scope, this operation is guaranteed to succeed (and is quicker than acquire_ref as it can skip several checks). */
-    pub fn clone_b_ref(&self) -> DescriptorBRef<'r,T,A,B> {
+    /* Create another B-handle using this handle.
+        Since an existing B-handle is present and in-scope, this operation is guaranteed to succeed (and is quicker than acquire_ref as it can skip several checks). */
+    pub fn clone_b_ref(&self) -> DescriptorHandleB<'r,T,A,B> {
         // Increment ref counts
         self.0.rc_a.fetch_add(1, Ordering::Acquire);
         self.0.rc_b.fetch_add(1, Ordering::Acquire);
-        // Create reference
-        DescriptorRef(self.0)
+        // Create handle
+        DescriptorHandle(self.0)
     }
     
-    /* Attempt to downgrade this B-reference to an A-reference. */
-    pub fn downgrade(self) -> Result<DescriptorARef<'r,T,A,B>,DescriptorAcquireError> {
+    /* Attempt to downgrade this B-handle to an A-handle. */
+    pub fn downgrade(self) -> Result<DescriptorHandleA<'r,T,A,B>,DescriptorAcquireError> {
         // Currently this just calls .acquire_ref, but in theory it could be replaced with a more optimised version that takes advantage of the fact that a ref already exists
         self.0.acquire_ref::<false>()
     }
 }
 
-impl<T,A,B,const IS_B_REF: bool> Drop for DescriptorRef<'_,T,A,B,IS_B_REF> where T: Default {
+impl<T,A,B,const IS_B_REF: bool> Drop for DescriptorHandle<'_,T,A,B,IS_B_REF> where T: Default {
     fn drop(&mut self){
         let descriptor = self.0;
         // Drop B reference
@@ -300,8 +301,8 @@ impl<T,A,B, const N: usize, const M: usize> DescriptorTable<T,A,B,N,M> where T: 
         }
     }
     
-    /* Get a reference to the descriptor with the given ID, or an error if it could not be done. */
-    pub fn acquire<const IS_B_REF: bool>(&self, id: DescriptorID) -> Result<DescriptorRef<T,A,B,IS_B_REF>,DescriptorAcquireError> {
+    /* Get a handle to the descriptor with the given ID, or an error if it could not be done. */
+    pub fn acquire<const IS_B_REF: bool>(&self, id: DescriptorID) -> Result<DescriptorHandle<T,A,B,IS_B_REF>,DescriptorAcquireError> {
         self.table.acquire::<IS_B_REF>(id)
     }
     /* Create a new descriptor, and return the initialiser, allowing you to initialise slots T, A, and B as necessary before commit()-ing it and opening the descriptor for regular use. */
@@ -374,15 +375,15 @@ impl<T,A,B, const N: usize, const M: usize> DescriptorTableInner<T,A,B,N,M> wher
             subtable._search(id, st_indexer/M)
         } else { None }
     }
-    /* Get a reference to the descriptor with the given ID, or an error if it could not be done. */
+    /* Get a handle to the descriptor with the given ID, or an error if it could not be done. */
     #[inline]
-    pub fn acquire<const IS_B_REF: bool>(&self, id: DescriptorID) -> Result<DescriptorRef<T,A,B,IS_B_REF>,DescriptorAcquireError> {
-        // Locate the descriptor and acquire a reference
+    pub fn acquire<const IS_B_REF: bool>(&self, id: DescriptorID) -> Result<DescriptorHandle<T,A,B,IS_B_REF>,DescriptorAcquireError> {
+        // Locate the descriptor and acquire a handle
         let descriptor = self._search(id, id.try_into().unwrap()).ok_or(DescriptorAcquireError::NotFound)?;
         let desc_ref = descriptor.acquire_ref::<IS_B_REF>()?;
         
-        // Now that we have a reference, the descriptor will not be erased or replaced
-        // Check the ID to ensure it wasn't overwritten between finding the descriptor and acquiring the reference
+        // Now that we have a handle, the descriptor will not be erased or replaced
+        // Check the ID to ensure it wasn't overwritten between finding the descriptor and acquiring the handle
         if desc_ref.get_id() != id { return Err(DescriptorAcquireError::NotFound); }  // overwritten
         // All ok
         Ok(desc_ref)

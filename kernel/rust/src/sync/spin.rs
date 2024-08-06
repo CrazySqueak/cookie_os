@@ -1,16 +1,16 @@
 use spin::relax::{RelaxStrategy,Spin};
-use crate::scheduler::{is_bsp_scheduler_initialised,is_local_scheduler_ready,yield_to_scheduler,SchedulerCommand};
+use crate::scheduler::{is_bsp_scheduler_initialised,is_scheduler_ready,yield_to_scheduler,SchedulerCommand};
 
 pub struct SchedulerYield;
 impl RelaxStrategy for SchedulerYield {
     #[inline(always)]
     fn relax(){
         if is_bsp_scheduler_initialised() {
-            if is_local_scheduler_ready() {
+            if is_scheduler_ready() {
                 // Yield
                 yield_to_scheduler(SchedulerCommand::PushBack)
             } else {
-                // Our scheduler is not yet ready, so this CPU is probably trampolining and should wait for the other CPU(s) to let it have access to the resource
+                // Our scheduler is not yet ready, so this CPU is either trampolining or running scheduler code (and contending with other CPUs in the process)
                 Spin::relax();
             }
         } else {

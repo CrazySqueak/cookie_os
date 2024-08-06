@@ -47,7 +47,9 @@ start:
 extern processors_started_P
 ap_start:
     lock inc word [processors_started_P]  ; signal that we've started
+    .halt:
     hlt  ; TODO
+    jmp .halt
 
 ; CHECKS
 check_multiboot:

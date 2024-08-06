@@ -329,7 +329,9 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         // Allocate
         let allocator = self.get_page_table();
         let allocation = allocator.allocate_at(rel_addr, size)?;
-        Some(PageAllocation::new(LockedPageAllocator::clone_ref(&self.allocator), allocation))
+        let mut palloc = PageAllocation::new(LockedPageAllocator::clone_ref(&self.allocator), allocation);
+        palloc.baseaddr_offset = addr - palloc.start();  // Figure out the offset between the requested address and the actual start of the allocation, if required
+        Some(palloc)
     }
     
     /* Split the allocation into two separate allocations. The first one will contain bytes [0,n) (rounding up if not page aligned), and the second one will contain the rest.
@@ -337,12 +339,13 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
        Note: It is not guaranteed that the second allocation will not be empty. */
     pub(super) fn split_allocation(&mut self, allocation: PageAllocation<PFA>, mid: usize) -> (PageAllocation<PFA>, PageAllocation<PFA>) {
         allocation.assert_pt_tag(self);
+        let baseaddr_offset = allocation.baseaddr_offset;
         let (allocation, allocator, metadata) = allocation.leak();
         
         let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid);
         (
-            PageAllocation { allocator: LockedPageAllocator::clone_ref(&allocator), allocation: lhs, metadata },
-            PageAllocation { allocator:                                 allocator , allocation: rhs, metadata },
+            PageAllocation { allocator: LockedPageAllocator::clone_ref(&allocator), allocation: lhs, metadata, baseaddr_offset },
+            PageAllocation { allocator:                                 allocator , allocation: rhs, metadata, baseaddr_offset },
         )
     }
     fn _split_alloc_inner<SPF:PageFrameAllocator>(pfa: &mut SPF, allocation: PartialPageAllocation, mid: usize) -> (PartialPageAllocation, PartialPageAllocation) {
@@ -524,6 +527,10 @@ pub struct PageAllocation<PFA: PageFrameAllocator> {
     allocator: LockedPageAllocator<PFA>,
     allocation: PartialPageAllocation,
     metadata: LPAMetadata,
+    
+    // baseaddr_offset is used in the event that an address passed to allocate_at is not page-aligned
+    // the high-level API will handle the difference automatically
+    baseaddr_offset: usize,
 }
 impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
     pub(super) fn new(allocator: LockedPageAllocator<PFA>, allocation: PartialPageAllocation) -> Self {
@@ -531,6 +538,7 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
             metadata: *allocator.metadata(),
             allocator: allocator,
             allocation: allocation,
+            baseaddr_offset: 0,
         }
     }
     fn assert_pt_tag(&self, allocator: &mut LockedPageAllocatorWriteGuard<PFA,impl core::ops::Deref<Target=PFA>+core::ops::DerefMut<Target=PFA>>){
@@ -566,7 +574,7 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
     }
     
     pub fn set_base_addr(&self, base_addr: usize, flags: PageFlags){
-        self.allocator.write_when_active().set_base_addr(self, base_addr, flags)
+        self.allocator.write_when_active().set_base_addr(self, base_addr-self.baseaddr_offset, flags)
     }
     pub fn set_absent(&self, data: usize){
         self.allocator.write_when_active().set_absent(self, data)

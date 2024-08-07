@@ -22,30 +22,40 @@ pub enum SchedulerCommand {
     PushBack,
     /// Discard the current task - it has terminated
     Terminate,
+    /// Sleep until the next clock tick - used internally for small delays (e.g. during I/O)
+    SleepOneTick,
 }
 
 /* Do not call this function yourself! (unless you know what you're doing). Use yield_to_scheduler instead!
     This function happens after the previous context is saved, but before the next one is loaded. It's this function's job to determine what to run next (and then run it). */
 #[inline]
 pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
-    // Update current task
-    let mut current_task = get_current_task().take().expect("schedule() called but no task currently active?");
-    current_task.set_rsp(rsp);
-    
-    // Push previous task back onto the run queue
-    match &command {
-        SchedulerCommand::Terminate => {
-            // Terminate the task
-            klog!(Debug, SCHEDULER, "Terminating task: {}", current_task.task_id);
-            drop(current_task)
-        }
+    crate::lowlevel::without_interrupts(||{
+        // Update current task
+        let mut current_task = get_current_task().take().expect("schedule() called but no task currently active?");
+        current_task.set_rsp(rsp);
         
-        _ => {
-            // Push back onto run queue
-            klog!(Debug, SCHEDULER, "Suspending task: {}", current_task.task_id);
-            get_run_queue().push_back(current_task);
+        // Push previous task back onto the run queue
+        match &command {
+            SchedulerCommand::Terminate => {
+                // Terminate the task
+                klog!(Debug, SCHEDULER, "Terminating task: {}", current_task.task_id);
+                drop(current_task)
+            }
+            
+            SchedulerCommand::SleepOneTick => {
+                // Push back onto sleep queue
+                klog!(Debug, SCHEDULER, "Task sleeping: {}", current_task.task_id);
+                get_clock_blocked().push_back(current_task);
+            }
+            
+            _ => {
+                // Push back onto run queue
+                klog!(Debug, SCHEDULER, "Suspending task: {}", current_task.task_id);
+                get_run_queue().push_back(current_task);
+            }
         }
-    }
+    });
     
     // Pick the next task off of the run queue
     loop {
@@ -53,7 +63,7 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
         match &command {
             _ => {
                 // Take next task
-                next_task = get_run_queue().pop_front();
+                next_task = crate::lowlevel::without_interrupts(||get_run_queue().pop_front());
             }
         }
         
@@ -62,6 +72,14 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
             resume_context(next_task)
         }
     }
+}
+
+/* Called when a "clock tick" occurs. Should be called once every ~1ms.
+Not recommended to call this yourself. */
+pub fn on_clock_tick(){
+    // (we pop from the back of clock_blocked and push to the front, so that tasks that have slept for a tick get handled first)
+    // todo: replace with an actual scheduling algorithm lmao
+    crate::lowlevel::without_interrupts(||while let Some(task) = get_clock_blocked().pop_back() { get_run_queue().push_front(task) });
 }
 
 /* Resume the requested task, discarding the current one (if any). */
@@ -106,11 +124,14 @@ pub fn push_task(task: Task){
 // Currently active task & run queue
 static _CURRENT_TASK: Mutex<Option<Task>, AlwaysPanic> = Mutex::new(None);
 static _RUN_QUEUE: Mutex<VecDeque<Task>, AlwaysPanic> = Mutex::new(VecDeque::new());  // TODO replace with a better run queue system
+static _CT_BLOCKED: Mutex<VecDeque<Task>, AlwaysPanic> = Mutex::new(VecDeque::new());  // items which are waiting for the next clock tick
 
 #[inline(always)]
 pub(super) fn get_current_task() -> crate::sync::MutexGuard<'static, Option<Task>> { _CURRENT_TASK.lock() }
 #[inline(always)]
 pub(super) fn get_run_queue() -> crate::sync::MutexGuard<'static, VecDeque<Task>> { _RUN_QUEUE.lock() }
+#[inline(always)]
+pub(super) fn get_clock_blocked() -> crate::sync::MutexGuard<'static, VecDeque<Task>> { _CT_BLOCKED.lock() }
 
 /* Get the ID of the current task. */
 #[inline(always)]

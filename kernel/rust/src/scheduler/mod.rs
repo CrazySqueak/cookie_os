@@ -5,7 +5,7 @@ pub mod task;
 pub mod context_switch;
 pub mod multicore;
 
-pub use context_switch::{yield_to_scheduler,terminate_current_task,SchedulerCommand};
+pub use context_switch::{yield_to_scheduler,terminate_current_task,SchedulerCommand,on_clock_tick};
 pub use task::{Task,TaskType};
 
 static BSP_SCHEDULER_READY: AtomicBool = AtomicBool::new(false);

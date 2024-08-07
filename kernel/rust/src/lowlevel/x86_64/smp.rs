@@ -1,10 +1,11 @@
 use core::sync::atomic::{AtomicU16,Ordering,AtomicBool};
-use crate::sync::{SchedulerYield,Mutex}; use spin::RelaxStrategy;
 use x86_64::registers::model_specific::Msr;
 use core::ptr::write_volatile;
 use crate::memory::paging::global_pages::{KERNEL_PTABLE,KERNEL_PTABLE_VADDR};
 use crate::memory::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
 use crate::logging::klog;
+
+use crate::scheduler::{yield_to_scheduler,SchedulerCommand};
 
 use super::apic::{send_icr,LocalID};
 
@@ -24,7 +25,7 @@ unsafe fn send_ipi(apic_id: u8, ipi: u8, vector: u8){
     ipi_value |= (0b01_0_00u64  ) << 11;  // reserved bits + destination mode = physical
     ipi_value |= (ipi as u64    ) << 8;
     ipi_value |=  vector as u64  ;
-    send_icr::<SchedulerYield>(ipi_value);
+    send_icr(ipi_value);
 }
 unsafe fn send_init(apic_id: u8){
     send_ipi(apic_id, IPI_INIT, 0);
@@ -39,13 +40,23 @@ unsafe fn send_sipi(apic_id: u8, vector: u8){
 pub unsafe fn init_processor(apic_id: u8){
     klog!(Info, PROCESSOR_MANAGEMENT_SMP, "Starting AP CPU {}", apic_id);
     send_init(apic_id);
+    // Wait a short while for the processor to wake up
+    yield_to_scheduler(SchedulerCommand::SleepOneTick);
     
     let current_processors_started: u16 = processors_started.load(Ordering::SeqCst);
     let target: u8 = ((ap_trampoline_realmode as usize) / 4096).try_into().expect("SIPI Target out-of-bounds");
-    // TODO: do this properly
-    send_sipi(apic_id, target);
-    send_sipi(apic_id, target);
-    while processors_started.load(Ordering::Relaxed) < current_processors_started+1 { SchedulerYield::relax() }
+    // Send up to 3 SIPIs (usually takes 2 or sometimes 1) to see if/when the processor starts executing code
+    let mut i = 0;
+    while processors_started.load(Ordering::Relaxed) < current_processors_started+1 {
+        i += 1;
+        if i > 3 {
+            klog!(Warning, PROCESSOR_MANAGEMENT_SMP, "Failed to wake AP CPU {}", apic_id);
+            return;
+        }
+        
+        send_sipi(apic_id, target);
+        yield_to_scheduler(SchedulerCommand::SleepOneTick);
+    }
 }
 
 static MULTIPROCESSING_READY: AtomicBool = AtomicBool::new(false);

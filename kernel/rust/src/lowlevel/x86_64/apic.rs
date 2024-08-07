@@ -3,7 +3,7 @@ use core::ptr::write_volatile;
 
 use crate::memory::paging::global_pages::{KERNEL_PTABLE,KERNEL_PTABLE_VADDR};
 use crate::memory::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
-use crate::sync::SchedulerYield; use spin::RelaxStrategy;
+use crate::scheduler::{yield_to_scheduler,SchedulerCommand};
 
 pub const APIC_MAPPED_PADDR: usize = 0xFEE00_000;
 pub const APIC_MAPPED_VADDR: usize = 0xFEE00_000 + KERNEL_PTABLE_VADDR;
@@ -54,12 +54,12 @@ macro_rules! write64 {
     }
 }
 
-pub unsafe fn send_icr<R: RelaxStrategy>(icr_value: u64){
+pub unsafe fn send_icr(icr_value: u64){
     write64!(IcrLO,IcrHI,icr_value);
     // Small delay for APIC to register the command
-    R::relax();
+    yield_to_scheduler(SchedulerCommand::SleepOneTick);
     // Wait until the Delivery Status becomes Idle
-    while IcrLO::read()&0x1000 != 0 { R::relax(); }
+    while IcrLO::read()&0x1000 != 0 { yield_to_scheduler(SchedulerCommand::SleepOneTick); }
 }
 
 /* Map the Local APIC into the page table as MMIO. 

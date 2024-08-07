@@ -32,7 +32,6 @@ pub struct ExecutionContext {
     pub cpu_id: usize,
     pub task_id: Option<usize>,
     pub scheduler_clock_ticks: usize,
-    pub flc: Option<(alloc::string::String, u32, u32)>,
 }
 impl ExecutionContext {
     #[inline]
@@ -41,14 +40,7 @@ impl ExecutionContext {
             cpu_id: 0,  // TODO
             task_id: scheduler::get_executing_task_id(),
             scheduler_clock_ticks: 0,  // TODO
-            flc: None,
         }
-    }
-    #[inline]
-    pub fn current_at(file: &str, line: u32, column: u32) -> Self {
-        let mut c = Self::current();
-        c.flc = Some((alloc::string::String::from(file),line,column));
-        c
     }
 }
 use core::fmt;
@@ -60,21 +52,9 @@ impl fmt::Display for ExecutionContext {
         if let Some(task) = self.task_id {
             write!(f, " TASK {}", task)?;
         } else {
-            write!(f, " SCHEDULER")?;
-        }
-        
-        if let Some((ref file, line, col)) = self.flc {
-            write!(f, " {}:{}:{}", file,line,col)?;
+            write!(f, " SCHED")?;
         }
         
         Ok(())
     }
 }
-
-#[allow(unused_macros)]
-macro_rules! current_task_context {
-    () => {
-        crate::multitasking::ExecutionContext::current_at(file!(), line!(), column!())
-    }
-}
-pub(crate) use current_task_context;

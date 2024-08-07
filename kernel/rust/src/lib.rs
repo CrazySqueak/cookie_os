@@ -31,6 +31,10 @@ mod multitasking;
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
 mod lowlevel;
 
+#[used]
+#[no_mangle]
+static next_processor_stack: u8 = 0;  // TODO
+
 // Like all init functions, this must be called ONCE. No more. No less.
 pub unsafe fn _kinit() {
     // Create initial heap
@@ -126,9 +130,7 @@ extern "sysv64" fn test() -> ! {
 /// Otherwise, a kernel panic occurs and the whole thing goes tits-up
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    let context = if let Some(loc) = _info.location() {
-        multitasking::ExecutionContext::current_at(loc.file(), loc.line(), loc.column())
-    } else { multitasking::ExecutionContext::current() };
+    let context = multitasking::ExecutionContext::current();
     let panic_header = format!("KERNEL PANIC at {}", context);
     if multitasking::is_executing_task() {
         // Terminate current task

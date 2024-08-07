@@ -33,8 +33,8 @@ impl LogLevel {
 
 use crate::coredrivers::serial_uart::SERIAL1;
 use crate::util::LockedWrite;
-pub fn _kernel_log(level: LogLevel, component: &str, msg: &str){
-    let msg = format!("{}: [{}] {} - {}\r\n", 0, level.name(), component, msg);
+pub fn _kernel_log(level: LogLevel, component: &str, msg: &str, context: crate::multitasking::ExecutionContext, file: &str, line: u32, column: u32){
+    let msg = format!("[{}] {}: {} - {} ({}:{}:{})\r\n", level.name(), context, component, msg, file, line, column);
     
     let _ = SERIAL1.write_str(&msg);
 }
@@ -48,7 +48,8 @@ macro_rules! klog {
         {
             use crate::logging::LogLevel::*;
             use crate::logging::contexts::*;
-            if const { ($level as u8) >= ($component as u8) } { crate::logging::_kernel_log($level, stringify!($component), $msg) };
+            use crate::multitasking::ExecutionContext;
+            if const { ($level as u8) >= ($component as u8) } { crate::logging::_kernel_log($level, stringify!($component), $msg, ExecutionContext::current(), file!(), line!(), column!()) };
         }
     };
 }

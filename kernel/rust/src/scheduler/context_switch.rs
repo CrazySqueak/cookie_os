@@ -80,6 +80,9 @@ pub fn on_clock_tick(){
     // (we pop from the back of clock_blocked and push to the front, so that tasks that have slept for a tick get handled first)
     // todo: replace with an actual scheduling algorithm lmao
     crate::lowlevel::without_interrupts(||while let Some(task) = get_clock_blocked().pop_back() { get_run_queue().push_front(task) });
+    
+    // If a task is running, preempt it
+    if get_current_task().is_some() { yield_to_scheduler(SchedulerCommand::PushBack); }
 }
 
 /* Resume the requested task, discarding the current one (if any). */

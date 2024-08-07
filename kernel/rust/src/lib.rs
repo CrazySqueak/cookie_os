@@ -25,7 +25,7 @@ use coredrivers::display_vga; use display_vga::VGA_WRITER;
 
 mod memory;
 mod descriptors;
-mod scheduler;
+mod multitasking;
 
 // arch-specific "lowlevel" module
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
@@ -68,7 +68,7 @@ pub unsafe fn _kinit() {
     let _ = memory::kernel_heap::grow_kheap( 8*1024*1024);
     
     // Initialise scheduler
-    scheduler::context_switch::init_scheduler();
+    multitasking::scheduler::init_scheduler();
 }
 
 #[no_mangle]
@@ -87,10 +87,10 @@ pub extern "sysv64" fn _kmain() -> ! {
         let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
         let rsp = unsafe { lowlevel::context_switch::_cs_new(test, kstack.bottom_vaddr() as *const u8) };
         klog!(Info,ROOT,"newtask RSP={:p}", rsp);
-        let task = unsafe { scheduler::Task::new_with_rsp(scheduler::TaskType::KernelTask, rsp) };
-        scheduler::context_switch::push_task(task);
+        let task = unsafe { multitasking::Task::new_with_rsp(multitasking::TaskType::KernelTask, rsp) };
+        multitasking::scheduler::push_task(task);
         
-        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
+        multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
         
         // ALSO FOR THE LOVE OF GOD
         // DON'T DROP() THE STACK WHILE YOU'RE STILL USING IT
@@ -106,19 +106,19 @@ use core::sync::atomic::{AtomicPtr,Ordering};
 #[no_mangle]
 pub extern "sysv64" fn _kapstart() -> ! {
     // Signal that we've started
-    scheduler::multicore::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
+    todo!();//multitasking::scheduler::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
     
     // TODO: Init CPU?
-    klog!(Info,ROOT,"Hello :)");
-    loop{};
+    //klog!(Info,ROOT,"Hello :)");
+    //loop{};
 }
 
 extern "sysv64" fn test() -> ! {
     for i in 0..5 {
         klog!(Info,ROOT,"{}", i);
-        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
+        multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
     }
-    scheduler::terminate_current_task();
+    multitasking::terminate_current_task();
 }
 
 /// This function is called on panic.
@@ -126,13 +126,16 @@ extern "sysv64" fn test() -> ! {
 /// Otherwise, a kernel panic occurs and the whole thing goes tits-up
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    let panic_header = format!("KERNEL PANIC on CPU {} in task {}", lowlevel::get_cpu_id(), scheduler::context_switch::get_task_id());
-    if scheduler::is_scheduler_ready() {
+    let context = if let Some(loc) = _info.location() {
+        multitasking::ExecutionContext::current_at(loc.file(), loc.line(), loc.column())
+    } else { multitasking::ExecutionContext::current() };
+    let panic_header = format!("KERNEL PANIC at {}", context);
+    if multitasking::is_executing_task() {
         // Terminate current task
         // This is still a serious issue - as we do not unwind the stack, the whole system could lock up
         // Additionally, such an issue could hint at underlying bugs or system instability
         klog!(Severe, ROOT, "{} (task terminated): {}", panic_header, _info);
-        scheduler::terminate_current_task();
+        multitasking::terminate_current_task();
     } else {
         // Kernel panic
         klog!(Fatal, ROOT, "{} (unrecoverable): {}", panic_header, _info);
@@ -142,7 +145,7 @@ fn panic(_info: &PanicInfo) -> ! {
         writer.set_colour(display_vga::VGAColour::new(display_vga::BaseColour::LightGray,display_vga::BaseColour::Red,true,false));
         
         // Write message and location
-        let _ = writer.write_string(&format!("\n\n\n\n\nKERNEL PANICKED (CPU {}): {}", lowlevel::get_cpu_id(), _info));
+        let _ = writer.write_string(&format!("\n\n\n\n\nKERNEL PANICKED (CPU {}): {}", context.cpu_id, _info));
         
         lowlevel::halt();
     }

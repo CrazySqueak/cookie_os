@@ -1,4 +1,4 @@
-use super::context_switch::StackPointer;
+use super::scheduler::StackPointer;
 
 static NEXT_ID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 

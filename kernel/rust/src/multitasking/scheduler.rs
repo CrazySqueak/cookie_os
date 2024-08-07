@@ -1,5 +1,5 @@
 /* This module is heavily coupled with lowlevel::context_switch, as this is the one that actually contains the scheduler. */
-use crate::lowlevel::{context_switch as cswitch_impl, get_cpu_id};
+use crate::lowlevel::{context_switch as cswitch_impl};
 use super::{Task,TaskType};
 use crate::sync::{Mutex,AlwaysPanic};
 use alloc::collections::VecDeque;
@@ -92,7 +92,7 @@ pub fn init_scheduler(){
     
     // All gucci :)
     // log message
-    klog!(Info, SCHEDULER, "Initialised scheduler on CPU {}. Bootstrapper task has become task {}.", get_cpu_id(), task_id);
+    klog!(Info, SCHEDULER, "Initialised scheduler on CPU {}. Bootstrapper task has become task {}.", 0, task_id);
     // Signal that scheduler is online
     super::BSP_SCHEDULER_READY.store(true,core::sync::atomic::Ordering::Release);
 }
@@ -112,6 +112,6 @@ pub(super) fn get_current_task() -> crate::sync::MutexGuard<'static, Option<Task
 #[inline(always)]
 pub(super) fn get_run_queue() -> crate::sync::MutexGuard<'static, VecDeque<Task>> { _RUN_QUEUE.lock() }
 
-/* Get the ID of the current task. */
+/* Get the ID of the current task, or None if the scheduler is running right now. */
 #[inline(always)]
-pub fn get_task_id() -> isize { get_current_task().as_ref().map(|t|t.task_id as isize).unwrap_or(-((get_cpu_id()+1) as isize)) }
+pub fn get_executing_task_id() -> Option<usize> { get_current_task().as_ref().map(|t|t.task_id) }

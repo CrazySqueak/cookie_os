@@ -1,4 +1,4 @@
-use crate::scheduler::context_switch as cswitch_api;
+use crate::multitasking::scheduler as cswitch_api;
 
 extern "sysv64" {
     /* Trigger a context switch, invoking the scheduler in order to do so.

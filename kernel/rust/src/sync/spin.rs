@@ -1,12 +1,12 @@
 use spin::relax::{RelaxStrategy,Spin};
-use crate::scheduler::{is_bsp_scheduler_initialised,is_scheduler_ready,yield_to_scheduler,SchedulerCommand};
+use crate::multitasking::{is_bsp_scheduler_initialised,is_executing_task,yield_to_scheduler,SchedulerCommand};
 
 pub struct SchedulerYield;
 impl RelaxStrategy for SchedulerYield {
     #[inline(always)]
     fn relax(){
         if is_bsp_scheduler_initialised() {
-            if is_scheduler_ready() {
+            if is_executing_task() {
                 // Yield
                 yield_to_scheduler(SchedulerCommand::PushBack)
             } else {

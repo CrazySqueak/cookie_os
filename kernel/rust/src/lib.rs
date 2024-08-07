@@ -37,6 +37,9 @@ static next_processor_stack: u8 = 0;  // TODO
 
 // Like all init functions, this must be called ONCE. No more. No less.
 pub unsafe fn _kinit() {
+    // Set CPU ID
+    multitasking::init_cpu_id();
+    
     // Create initial heap
     memory::kernel_heap::init_kheap();
     
@@ -121,7 +124,6 @@ extern "sysv64" fn test() -> ! {
     for i in 0..5 {
         klog!(Info,ROOT,"{}", i);
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
-        todo!()
     }
     multitasking::terminate_current_task();
 }

@@ -3,6 +3,7 @@ use core::sync::atomic::Ordering;
 
 pub mod task;
 pub mod context_switch;
+pub mod multicore;
 
 pub use context_switch::{yield_to_scheduler,terminate_current_task,SchedulerCommand};
 pub use task::{Task,TaskType};

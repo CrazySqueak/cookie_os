@@ -55,13 +55,6 @@ pub unsafe fn _kinit() {
         vgabuf.set_base_addr(display_vga::VGA_BUFFER_PHYSICAL, PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::PINNED));
         vgabuf.leak();
         
-        // APIC memory-mapped registers
-        // TODO: put this somewhere proper
-        let apic_addr = lowlevel::smp::APIC_MAPPED_ADDR;
-        let apic_buf = kallocator.allocate_at(apic_addr + kallocator.metadata().offset, 0x1000).expect("Unable to map APIC!");
-        apic_buf.set_base_addr(apic_addr, PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::PINNED));
-        apic_buf.leak();
-        
         // Guess who doesn't have to manually map the kernel in lib.rs anymore because it's done in global_pages.rs!!!
     }
     // Activate context

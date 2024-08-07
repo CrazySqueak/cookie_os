@@ -114,7 +114,3 @@ pub fn init_msr(){
         Cr4::write(cr4flags);
     }
 }
-
-/* Get the ID of the current CPU. */
-#[inline(always)]
-pub fn get_cpu_id() -> usize { 0 }  // TODO

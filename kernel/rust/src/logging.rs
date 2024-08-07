@@ -34,7 +34,7 @@ impl LogLevel {
 use crate::coredrivers::serial_uart::SERIAL1;
 use crate::util::LockedWrite;
 pub fn _kernel_log(level: LogLevel, component: &str, msg: &str){
-    let msg = format!("{}: [{}] {} - {}\r\n", 0, level.name(), component, msg);
+    let msg = format!("{}: [{}] {} - {}\r\n", crate::lowlevel::get_cpu_id(), level.name(), component, msg);
     
     let _ = SERIAL1.write_str(&msg);
 }
@@ -85,5 +85,7 @@ pub mod contexts {
         def_context!(MEMORY_PHYSICAL_ALLOCATOR, MEMORY_PHYSICAL, Warning);
       def_context!(MEMORY_ALLOCUTIL, MEMORY, Debug);
     def_context!(FEATURE_FLAGS, ROOT, Info);
+    def_context!(PROCESSOR_MANAGEMENT, ROOT, Info);
+      def_context!(PROCESSOR_MANAGEMENT_SMP, PROCESSOR_MANAGEMENT, Debug);
     def_context!(SCHEDULER, ROOT, Debug);
 }

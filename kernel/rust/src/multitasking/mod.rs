@@ -31,15 +31,16 @@ pub fn is_executing_task() -> bool {
 use core::sync::atomic::AtomicU16;
 static NEXT_CPU_ID: AtomicU16 = AtomicU16::new(0);
 /* Call once per CPU, early on. */
-pub fn init_cpu_id(){
+pub fn init_cpu_num(){
     let cpu_id = NEXT_CPU_ID.fetch_add(1, Ordering::Acquire);
     // Store
-    crate::lowlevel::_store_cpu_id(cpu_id);
+    crate::lowlevel::_store_cpu_num(cpu_id);
 }
-/* Get the CPU ID for the local CPU */
+/* Get the CPU number for the local CPU.
+    CPU numbers are assigned sequentially, so CPU 0 is the bootstrap processor, CPU 1 is the first AP to start, etc. */
 #[inline(always)]
-pub fn get_cpu_id() -> u16 {
-    crate::lowlevel::_load_cpu_id()
+pub fn get_cpu_num() -> u16 {
+    crate::lowlevel::_load_cpu_num()
 }
 
 // A snapshot of the execution context. Mostly useful for annotating log messages and the like.
@@ -52,7 +53,7 @@ impl ExecutionContext {
     #[inline]
     pub fn current() -> Self {
         Self {
-            cpu_id: get_cpu_id(),
+            cpu_id: get_cpu_num(),
             task_id: scheduler::get_executing_task_id(),
             scheduler_clock_ticks: 0,  // TODO
         }

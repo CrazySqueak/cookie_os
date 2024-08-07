@@ -37,9 +37,6 @@ static next_processor_stack: u8 = 0;  // TODO
 
 // Like all init functions, this must be called ONCE. No more. No less.
 pub unsafe fn _kinit() {
-    // Set CPU ID
-    multitasking::init_cpu_id();
-    
     // Create initial heap
     memory::kernel_heap::init_kheap();
     
@@ -80,6 +77,7 @@ pub unsafe fn _kinit() {
 
 #[no_mangle]
 pub extern "sysv64" fn _kmain() -> ! {
+    multitasking::init_cpu_num();
     unsafe{_kinit();}
     
     VGA_WRITER.write_string("OKAY!! 👌👌👌👌");
@@ -112,6 +110,7 @@ pub extern "sysv64" fn _kmain() -> ! {
 use core::sync::atomic::{AtomicPtr,Ordering};
 #[no_mangle]
 pub extern "sysv64" fn _kapstart() -> ! {
+    multitasking::init_cpu_num();
     // Signal that we've started
     todo!();//multitasking::scheduler::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
     

@@ -290,7 +290,7 @@ pub(self) fn pas_current<'a>(strat: PageAllocationStrategies<'a>) -> &'a PageAll
 // There is a kernel stack strategy but no kernel heap strategy, because quite a few items on the kernel heap (e.g. page tables) expect to be offset-mapped.
 // As a result, the heap is usually allocated in physical memory first, and then allocated in vmem using allocate_at. (allocate_at does not use allocation strategies as the location has already been chosen)
 // (PagingContexts are not an issue even on the stack, as the Arc<> internally always allocates on the heap (as it's the only way multiple ownership can function)
-pub use arch::{KALLOCATION_KERNEL_STACK,ALLOCATION_USER_STACK,ALLOCATION_USER_HEAP};
+pub use arch::{KALLOCATION_KERNEL_STACK,KALLOCATION_KERNEL_BOOTSTACK,ALLOCATION_USER_STACK,ALLOCATION_USER_HEAP};
 // The default strategy contains no restrictions or special behaviour
 // It is useful for e.g. calling allocate(ST::PAGE_SIZE) or if no strategy should be applied
 pub const ALLOCATION_DEFAULT: PageAllocationStrategies = &[PageAllocationStrategy::new_default()];

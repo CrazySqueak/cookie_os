@@ -3,7 +3,7 @@ use core::alloc::Layout;
 use alloc::vec::Vec; use alloc::vec;
 
 use crate::memory::physical::{PhysicalMemoryAllocation,palloc};
-use crate::memory::paging::{KALLOCATION_KERNEL_STACK,PageFlags,TransitivePageFlags,MappingSpecificPageFlags,PageFrameAllocator,PageAllocation,TLPageFrameAllocator,LockedPageAllocator,PageAllocationStrategies,ALLOCATION_USER_STACK,PagingContext};
+use crate::memory::paging::{KALLOCATION_KERNEL_STACK,KALLOCATION_KERNEL_BOOTSTACK,PageFlags,TransitivePageFlags,MappingSpecificPageFlags,PageFrameAllocator,PageAllocation,TLPageFrameAllocator,LockedPageAllocator,PageAllocationStrategies,ALLOCATION_USER_STACK,PagingContext};
 use crate::memory::paging::global_pages::{GPageFrameAllocator,KERNEL_PTABLE};
 
 pub const MARKER_STACK_GUARD: usize = 0xF47B33F;  // "Fat Beef"
@@ -130,6 +130,11 @@ impl AllocatedStack<GPageFrameAllocator> {
     #[inline]
     pub fn allocate_ktask() -> Option<Self> {
         Self::allocate_new(&KERNEL_PTABLE, 256*1024, 1, KALLOCATION_KERNEL_STACK, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()))
+    }
+    /* Allocates a stack for a newly starting CPU. This stack is placed as early in memory as possible to guarantee it is mapped in the bootstrap page table as well. */
+    #[inline]
+    pub fn allocate_kboot() -> Option<Self> {
+        Self::allocate_new(&KERNEL_PTABLE, 256*1024, 1, KALLOCATION_KERNEL_BOOTSTACK, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()))
     }
 }
 impl AllocatedStack<TLPageFrameAllocator> {

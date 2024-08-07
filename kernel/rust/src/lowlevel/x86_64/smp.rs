@@ -52,7 +52,7 @@ pub unsafe fn init_processor(apic_id: u8){
     klog!(Info, PROCESSOR_MANAGEMENT_SMP, "Starting AP CPU {}", apic_id);
     send_init(apic_id);
     
-    let current_processors_started: u16 = processors_started.load(Ordering::Relaxed);
+    let current_processors_started: u16 = processors_started.load(Ordering::SeqCst);
     let target: u8 = ((ap_trampoline_realmode as usize) / 4096).try_into().expect("SIPI Target out-of-bounds");
     // TODO: do this properly
     send_sipi(apic_id, target);
@@ -76,8 +76,10 @@ pub fn init_multiprocessing(){
     // Enable APIC in SVR
     let svr_ptr = SVR_ADDR as *mut u32;
     unsafe {
-        let svr = *svr_ptr;
-        write_volatile(svr_ptr, svr | 0b01_0000_0000);
+        let mut svr = *svr_ptr;
+        svr |= 0b01_0000_0000;  // enable APIC
+        svr |= 0x69;  // set spurious interrupt to 0x69 so i can tell if that's what's causing all the double faults
+        write_volatile(svr_ptr, svr);
     }
     // Get APIC ID or something??
     // idk what to do with it but ok
@@ -94,6 +96,6 @@ pub fn init_multiprocessing(){
 /* Get the ID of the current CPU. */
 #[inline(always)]
 pub fn get_cpu_id() -> usize {
-    if !MULTIPROCESSING_READY.load(Ordering::Relaxed) { return 0; }  // until we're multiprocessing ready, we can't know our own CPU ID
+    if !MULTIPROCESSING_READY.load(Ordering::Relaxed) { return 0xFFFF; }  // until we're multiprocessing ready, we can't know our own CPU ID
     ((unsafe { *(APIC_ID_ADDR as *const u32) } & 0xFF000000)>>24) as usize
 }

@@ -76,7 +76,7 @@ pub unsafe fn _kinit() {
 }
 
 #[no_mangle]
-pub extern "C" fn _kmain() -> ! {
+pub extern "sysv64" fn _kmain() -> ! {
     unsafe{_kinit();}
     
     VGA_WRITER.write_string("OKAY!! 👌👌👌👌");
@@ -104,12 +104,23 @@ pub extern "C" fn _kmain() -> ! {
     
     // testing
     unsafe {
-        lowlevel::smp::init_processor(1);
+        scheduler::multicore::start_processor(1);
     }
     scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     
     // TODO
     loop{}//lowlevel::halt();
+}
+
+use core::sync::atomic::{AtomicPtr,Ordering};
+#[no_mangle]
+pub extern "sysv64" fn _kapstart() -> ! {
+    // Signal that we've started
+    scheduler::multicore::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
+    
+    // TODO: Init CPU?
+    //klog!(Info,ROOT,"Hello :)");
+    loop{};
 }
 
 extern "sysv64" fn test() -> ! {

@@ -28,6 +28,8 @@ lazy_static! {
         idt[PICInterrupt::Keyboard.as_u8()].set_handler_fn(ps2keyboard_handler);
         keyboard::set_key_callback(print_key);
         
+        idt[0x69].set_handler_fn(spurious_handler);
+        
         idt
     };
 }
@@ -41,6 +43,7 @@ pub fn init(){
     x86_64::instructions::interrupts::enable();
 }
 
+#[no_mangle]
 extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode){
     use x86_64::registers::control::Cr2;
     let accessed_addr = Cr2::read();
@@ -49,11 +52,16 @@ extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, e
     panic!("Page Fault! Frame={:?} Code={:?} Addr={:?}", stack_frame, error_code, accessed_addr);
 }
 
+#[no_mangle]
 extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> ! {
     panic!("Double Fault!\n{:?}", stack_frame);
 }
+#[no_mangle]
 extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> () {
     unsafe { core::arch::asm!("nop"); } //panic!("General Protection Fault!\n{:?}", stack_frame);
+}
+#[no_mangle]
+extern "x86-interrupt" fn spurious_handler(stack_frame: InterruptStackFrame) -> () {
 }
 
 // PICs

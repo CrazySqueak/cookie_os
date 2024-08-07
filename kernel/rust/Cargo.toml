@@ -40,6 +40,12 @@ page_global_bit = []
 # If this feature is enabled but unsupported, it will be ignored.
 enable_amd64_TCE = []
 
+# If enabled, a kernel panic caused by a task will terminate that task instead of shutting down the entire system.
+# Kernel panics should only happen in this way due to bugs or similar conditions, and the resulting system may be unstable.
+# However, this setting may come in handy on release builds, for resilience
+# Make sure to disable it on debug builds though unless you want your life made 100x harder
+recover_from_task_related_kernel_panic = []
+
 [lib]
 crate-type = ["staticlib"]
 

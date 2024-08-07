@@ -121,6 +121,7 @@ extern "sysv64" fn test() -> ! {
     for i in 0..5 {
         klog!(Info,ROOT,"{}", i);
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
+        todo!()
     }
     multitasking::terminate_current_task();
 }
@@ -132,7 +133,7 @@ extern "sysv64" fn test() -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     let context = multitasking::ExecutionContext::current();
     let panic_header = format!("KERNEL PANIC at {}", context);
-    if multitasking::is_executing_task() {
+    if cfg!(feature = "recover_from_task_related_kernel_panic") && multitasking::is_executing_task() {
         // Terminate current task
         // This is still a serious issue - as we do not unwind the stack, the whole system could lock up
         // Additionally, such an issue could hint at underlying bugs or system instability

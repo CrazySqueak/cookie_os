@@ -44,7 +44,7 @@ long_mode_ap_start:
     
     ; Initialise kernel stack
     mov rax, next_processor_stack
-    mov rsp, rax
+    mov rsp, [rax]
     
     ; Hand control over to rust
     extern _kapstart

@@ -127,8 +127,6 @@ pub(in super) type TopLevelPageAllocator = X64Level4;
 
 // Kernel Stack: In the kernel page
 pub const KALLOCATION_KERNEL_STACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true), PageAllocationStrategy::new_default().reverse_order(true).spread_mode(true), PageAllocationStrategy::new_default().reverse_order(true)];
-// Kernel Boot Stack: For new CPUs which only have the first 1GiB mapped
-pub const KALLOCATION_KERNEL_BOOTSTACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().max_page(0), PageAllocationStrategy::new_default().reverse_order(true)];
 
 // User Stack: R2L before the kernel pages, spread mode
 pub const ALLOCATION_USER_STACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true).max_page(255), PageAllocationStrategy::new_default().reverse_order(true).spread_mode(true), PageAllocationStrategy::new_default().reverse_order(true)];

@@ -72,7 +72,7 @@ pub mod contexts {
     // Configure contexts in here! :)
     def_context!(MEMORY, ROOT);
       def_context!(MEMORY_PAGING, MEMORY, Info);
-        def_context!(MEMORY_PAGING_CONTEXT, MEMORY_PAGING, Debug);
+        def_context!(MEMORY_PAGING_CONTEXT, MEMORY_PAGING);
         def_context!(MEMORY_PAGING_GLOBALPAGES, MEMORY_PAGING);
         def_context!(MEMORY_PAGING_ALLOCATOR, MEMORY_PAGING);
           def_context!(MEMORY_PAGING_ALLOCATOR_MLFF, MEMORY_PAGING_ALLOCATOR);
@@ -83,9 +83,9 @@ pub mod contexts {
         def_context!(MEMORY_PHYSICAL_BUDDIES, MEMORY_PHYSICAL, Warning);
         def_context!(MEMORY_PHYSICAL_RAMMAP, MEMORY_PHYSICAL);
         def_context!(MEMORY_PHYSICAL_ALLOCATOR, MEMORY_PHYSICAL, Warning);
-      def_context!(MEMORY_ALLOCUTIL, MEMORY, Debug);
+      def_context!(MEMORY_ALLOCUTIL, MEMORY);
     def_context!(FEATURE_FLAGS, ROOT, Info);
     def_context!(PROCESSOR_MANAGEMENT, ROOT, Info);
       def_context!(PROCESSOR_MANAGEMENT_SMP, PROCESSOR_MANAGEMENT, Debug);
-    def_context!(SCHEDULER, ROOT, Debug);
+    def_context!(SCHEDULER, ROOT);
 }

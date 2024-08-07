@@ -67,9 +67,10 @@ pub unsafe fn _kinit() {
     let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
     let _ = memory::kernel_heap::grow_kheap( 8*1024*1024);
     
-    // Configure CPUs for multiprocessing
-    // TODO; put somewhere proper
-    lowlevel::smp::init_multiprocessing();
+    // Initialise low-level function (part 2 now that memory is configured)
+    lowlevel::init2();
+    
+    // Configure CPUs for multiprocessing TODO
     
     // Initialise scheduler
     scheduler::context_switch::init_scheduler();

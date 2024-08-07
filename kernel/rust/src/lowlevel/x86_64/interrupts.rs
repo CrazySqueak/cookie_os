@@ -28,8 +28,6 @@ lazy_static! {
         idt[PICInterrupt::Keyboard.as_u8()].set_handler_fn(ps2keyboard_handler);
         keyboard::set_key_callback(print_key);
         
-        idt[0x69].set_handler_fn(spurious_handler);
-        
         idt
     };
 }
@@ -59,9 +57,6 @@ extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame,
 #[no_mangle]
 extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> () {
     unsafe { core::arch::asm!("nop"); } //panic!("General Protection Fault!\n{:?}", stack_frame);
-}
-#[no_mangle]
-extern "x86-interrupt" fn spurious_handler(stack_frame: InterruptStackFrame) -> () {
 }
 
 // PICs

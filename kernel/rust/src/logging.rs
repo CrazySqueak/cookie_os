@@ -34,7 +34,7 @@ impl LogLevel {
 use crate::coredrivers::serial_uart::SERIAL1;
 use crate::util::LockedWrite;
 pub fn _kernel_log(level: LogLevel, component: &str, msg: &str){
-    let msg = format!("{}: [{}] {} - {}\r\n", crate::scheduler::multicore::get_cpu_id(), level.name(), component, msg);
+    let msg = format!("{}: [{}] {} - {}\r\n", 0, level.name(), component, msg);
     
     let _ = SERIAL1.write_str(&msg);
 }
@@ -71,8 +71,8 @@ pub mod contexts {
     
     // Configure contexts in here! :)
     def_context!(MEMORY, ROOT);
-      def_context!(MEMORY_PAGING, MEMORY);
-        def_context!(MEMORY_PAGING_CONTEXT, MEMORY_PAGING, Debug);
+      def_context!(MEMORY_PAGING, MEMORY, Info);
+        def_context!(MEMORY_PAGING_CONTEXT, MEMORY_PAGING);
         def_context!(MEMORY_PAGING_GLOBALPAGES, MEMORY_PAGING);
         def_context!(MEMORY_PAGING_ALLOCATOR, MEMORY_PAGING);
           def_context!(MEMORY_PAGING_ALLOCATOR_MLFF, MEMORY_PAGING_ALLOCATOR);
@@ -83,9 +83,7 @@ pub mod contexts {
         def_context!(MEMORY_PHYSICAL_BUDDIES, MEMORY_PHYSICAL, Warning);
         def_context!(MEMORY_PHYSICAL_RAMMAP, MEMORY_PHYSICAL);
         def_context!(MEMORY_PHYSICAL_ALLOCATOR, MEMORY_PHYSICAL, Warning);
-      def_context!(MEMORY_ALLOCUTIL, MEMORY);
+      def_context!(MEMORY_ALLOCUTIL, MEMORY, Debug);
     def_context!(FEATURE_FLAGS, ROOT, Info);
-    def_context!(PROCESSOR_MANAGEMENT, ROOT, Info);
-      def_context!(PROCESSOR_MANAGEMENT_SMP, PROCESSOR_MANAGEMENT, Debug);
     def_context!(SCHEDULER, ROOT, Debug);
 }

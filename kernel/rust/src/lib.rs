@@ -42,7 +42,7 @@ pub unsafe fn _kinit() {
     // Initialise physical memory
     memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
     
-    // Initialise paging
+    // Initialise paging (bunch of testing code)
     use alloc::boxed::Box;
     use memory::paging::{PagingContext,PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
     let pagetable = memory::alloc_util::new_user_paging_context();
@@ -67,37 +67,12 @@ pub unsafe fn _kinit() {
     let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
     let _ = memory::kernel_heap::grow_kheap( 8*1024*1024);
     
-    // Initialise low-level function (part 2 now that memory is configured)
-    lowlevel::init2();
-    
     // Initialise scheduler
     scheduler::context_switch::init_scheduler();
-    
-    // Wake up CPUs (in a background task)
-    // TODO: create spawn_task function
-    {
-        let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
-        let rsp = unsafe { lowlevel::context_switch::_cs_new(start_aps, kstack.bottom_vaddr() as *const u8) };
-        let task = unsafe { scheduler::Task::new_with_rsp(scheduler::TaskType::KernelTask, rsp) };
-        scheduler::context_switch::push_task(task);
-        core::mem::forget(kstack);  // I keep forgetting to NOT DROP THE STACK - i really need to put together a proper API for managing this
-    }
-}
-
-extern "sysv64" fn start_aps() -> ! {
-    // TODO: Find a way to identify the number and IDs of APs
-    unsafe {
-        scheduler::multicore::start_processor(1);
-        scheduler::multicore::start_processor(2);
-        scheduler::multicore::start_processor(3);
-    }
-    
-    // Done :)
-    scheduler::terminate_current_task();
 }
 
 #[no_mangle]
-pub extern "sysv64" fn _kmain() -> ! {
+pub extern "C" fn _kmain() -> ! {
     unsafe{_kinit();}
     
     VGA_WRITER.write_string("OKAY!! 👌👌👌👌");
@@ -122,31 +97,20 @@ pub extern "sysv64" fn _kmain() -> ! {
         // DUMBASS
         core::mem::forget(kstack);
     }
+    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     
     // TODO
     loop{}//lowlevel::halt();
-}
-
-use core::sync::atomic::{AtomicPtr,Ordering};
-#[no_mangle]
-pub extern "sysv64" fn _kapstart() -> ! {
-    // Signal that we've started
-    scheduler::multicore::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
-    
-    // Load page table
-    unsafe { let context = memory::alloc_util::new_user_paging_context(); context.activate(); }
-    
-    // TODO: Init CPU?
-    klog!(Info,ROOT,"Hello :)");
-    loop{};
 }
 
 extern "sysv64" fn test() -> ! {
     for i in 0..5 {
         klog!(Info,ROOT,"{}", i);
         scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
+        todo!();
     }
-    scheduler::terminate_current_task();
+    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
+    unreachable!();
 }
 
 /// This function is called on panic.

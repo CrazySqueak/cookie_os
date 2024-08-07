@@ -15,7 +15,7 @@ impl<const LEVEL: usize> X64PageTable<LEVEL> {
     const fn _default_flags() -> PageTableFlags {
         let mut defaults = PageTableFlags::empty();
         if cfg!(feature = "per_page_NXE_bit") { defaults = defaults.union(PageTableFlags::NO_EXECUTE); }
-        defaults.union(PageTableFlags::WRITE_THROUGH)  // testing
+        defaults
     }
     fn _calc_flags<const INCLUDE_NON_TRANSITIVE: bool>(mut previous: PageTableFlags, add: &PageFlags) -> PageTableFlags {
         {

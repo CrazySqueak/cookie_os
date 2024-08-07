@@ -47,18 +47,7 @@ start:
 extern processors_started_P
 ap_start:
     lock inc word [processors_started_P]  ; signal that we've started
-    
-    ; Initialise Stack
-    ; currently this function may not be used on multiple cores at the same time because otherwise they will clobber the bootstrap stack while it's still in use by each other
-    mov esp, bstack_top
-    
-    ; Enable Paging and enter Long Mode
-    ; (identity mappings are already set up)
-    call enable_paging_and_long_mode
-    ; Load GDT
-    lgdt [gdt64.pointer]
-    ; Far jump to start
-    jmp gdt64.kcode:long_mode_ap_bridge
+    hlt  ; TODO
 
 ; CHECKS
 check_multiboot:
@@ -191,14 +180,6 @@ configure_identity_paging:
     mov eax, PAGE_SPECIAL_GUARDPAGE
     mov [p1_table_withguard + esi * 8], eax
     
-    ; map P3 [3]-> P2 [503]-> APIC MMIO so CPUs can see their own ID
-    mov eax, p2_table_apic
-    or eax, PAGEFLAG_PRESENT_WRITEABLE
-    mov [p3_table + 3 * 8], eax
-    mov eax, 0xfee00000  ; APIC MMIO addr
-    or eax, PAGEFLAG_PRESENT_WRITEABLE_HUGE
-    mov [p2_table_apic + 503 * 8], eax
-    
     ret
 
 ; Enable Paging + Long Mode
@@ -293,8 +274,6 @@ p1_table_withguard:  ; allocate a p1 table for the stack & guard page
     resb 4096
 global p1_table_withguard
 extern kstack_guard_page_P
-p2_table_apic:
-    resb 4096
 ; bootstrap stack - for bootstrapping prior to entering long mode / kmain
 ; Note: setting up a guard page for the bootstrap stack is too much hassle considering it should NEVER come close to overflowing
 align 4096
@@ -312,8 +291,4 @@ bits 64
 extern long_mode_start
 long_mode_bridge:
     mov qword rax, long_mode_start
-    jmp rax
-extern long_mode_ap_start
-long_mode_ap_bridge:
-    mov qword rax, long_mode_ap_start
     jmp rax

@@ -56,20 +56,17 @@ impl<PFA: PageFrameAllocator> AllocatedStack<PFA> {
         klog!(Debug, MEMORY_ALLOCUTIL, "Allocating stack: size={}+{} strat={:?} flags={:?}", size, guard_size, strategy, flags);
         let physmemallocation = palloc(Layout::from_size_align(size, 16).unwrap())?;
         let vmemalloc = allocator.allocate(physmemallocation.get_size() + guard_size, strategy)?;
-        Some(Self::from_allocations(allocator, guard_size, physmemallocation, vmemalloc, flags))
-    }
-    fn from_allocations(allocator: &LockedPageAllocator<PFA>, guard_size: usize, physmemallocation: PhysicalMemoryAllocation, vmemalloc: PageAllocation<PFA>, flags: PageFlags) -> Self {
         let (guardalloc, stackalloc) = vmemalloc.split(guard_size);  // split at the low-end as stack grows downwards
         
         guardalloc.set_absent(MARKER_STACK_GUARD);
         stackalloc.set_base_addr(physmemallocation.get_addr(), flags);
-        Self {
+        Some(Self {
             allocations: vec![RealMemAllocation::new(stackalloc, Some(physmemallocation))],
             guard_page: guardalloc,
             
             allocator: LockedPageAllocator::clone_ref(allocator),
             flags: flags,
-        }
+        })
     }
     
     #[inline]
@@ -133,15 +130,6 @@ impl AllocatedStack<GPageFrameAllocator> {
     #[inline]
     pub fn allocate_ktask() -> Option<Self> {
         Self::allocate_new(&KERNEL_PTABLE, 256*1024, 1, KALLOCATION_KERNEL_STACK, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()))
-    }
-    /* Allocates a stack for a newly starting CPU. This stack is placed as early in memory as possible to guarantee it is mapped in the bootstrap page table as well.
-        Additionally, it is offset-mapped rather than */
-    #[inline]
-    pub fn allocate_kboot() -> Option<Self> {
-        let alloc_size = 256*1024; let guard_size = 4096;  // we have to allocate the guard page in pmem as well because it's offset mapped
-        let physalloc = palloc(Layout::from_size_align(alloc_size+guard_size, 16).unwrap())?;
-        let vmemalloc = KERNEL_PTABLE.allocate_at(KERNEL_PTABLE.get_vmem_offset()+physalloc.get_addr(), physalloc.get_size())?;
-        Some(Self::from_allocations(&KERNEL_PTABLE, guard_size, physalloc, vmemalloc, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty())))
     }
 }
 impl AllocatedStack<TLPageFrameAllocator> {

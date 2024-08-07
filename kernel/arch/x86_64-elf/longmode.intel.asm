@@ -1,5 +1,4 @@
 global long_mode_start
-extern boot_error
 
 section .text
 bits 64
@@ -24,15 +23,33 @@ long_mode_start:
     add rax, rcx
     mov [rdx], rax
     
-    ; un-map lower half of virtual memory (testing)
-    extern p4_table
-    mov rdx, p4_table
-    mov qword [rdx], 0
+    ; Note: we no longer un-map vmem as the identity mappings are still necessary for starting up later processors
+    ; (the kernel will change the context on boot anyway)
     
     ; Hand control over to rust
     extern _kmain
     call _kmain
     ; _kmain should never return
+
+global long_mode_ap_start
+extern next_processor_stack
+long_mode_ap_start:
+    ; zero out all data segment registers
+    mov ax, 0
+    mov ss, ax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    
+    ; Initialise kernel stack
+    mov rax, next_processor_stack
+    mov rsp, [rax]
+    
+    ; Hand control over to rust
+    extern _kapstart
+    call _kapstart
+    ; _kapstart should never return
 
 section .bss
 
@@ -66,6 +83,7 @@ section .data
 ; number of processors initialised (u16)
 ; note: this starts at one as the BSP code does not contain an INC instruction
 global processors_started
+align 2
 processors_started:
     dw 1
 

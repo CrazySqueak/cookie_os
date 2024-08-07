@@ -42,7 +42,7 @@ pub unsafe fn _kinit() {
     // Initialise physical memory
     memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
     
-    // Initialise paging (bunch of testing code)
+    // Initialise paging
     use alloc::boxed::Box;
     use memory::paging::{PagingContext,PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
     let pagetable = memory::alloc_util::new_user_paging_context();
@@ -72,7 +72,7 @@ pub unsafe fn _kinit() {
 }
 
 #[no_mangle]
-pub extern "C" fn _kmain() -> ! {
+pub extern "sysv64" fn _kmain() -> ! {
     unsafe{_kinit();}
     
     VGA_WRITER.write_string("OKAY!! 👌👌👌👌");
@@ -97,20 +97,28 @@ pub extern "C" fn _kmain() -> ! {
         // DUMBASS
         core::mem::forget(kstack);
     }
-    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     
     // TODO
     loop{}//lowlevel::halt();
+}
+
+use core::sync::atomic::{AtomicPtr,Ordering};
+#[no_mangle]
+pub extern "sysv64" fn _kapstart() -> ! {
+    // Signal that we've started
+    scheduler::multicore::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
+    
+    // TODO: Init CPU?
+    klog!(Info,ROOT,"Hello :)");
+    loop{};
 }
 
 extern "sysv64" fn test() -> ! {
     for i in 0..5 {
         klog!(Info,ROOT,"{}", i);
         scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
-        todo!();
     }
-    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
-    unreachable!();
+    scheduler::terminate_current_task();
 }
 
 /// This function is called on panic.

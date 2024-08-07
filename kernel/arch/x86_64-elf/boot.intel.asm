@@ -47,7 +47,18 @@ start:
 extern processors_started_P
 ap_start:
     lock inc word [processors_started_P]  ; signal that we've started
-    hlt  ; TODO
+    
+    ; Initialise Stack
+    ; currently this function may not be used on multiple cores at the same time because otherwise they will clobber the bootstrap stack while it's still in use by each other
+    mov esp, bstack_top
+    
+    ; Enable Paging and enter Long Mode
+    ; (identity mappings are already set up)
+    call enable_paging_and_long_mode
+    ; Load GDT
+    lgdt [gdt64.pointer]
+    ; Far jump to start
+    jmp gdt64.kcode:long_mode_ap_bridge
 
 ; CHECKS
 check_multiboot:
@@ -291,4 +302,8 @@ bits 64
 extern long_mode_start
 long_mode_bridge:
     mov qword rax, long_mode_start
+    jmp rax
+extern long_mode_ap_start
+long_mode_ap_bridge:
+    mov qword rax, long_mode_ap_start
     jmp rax

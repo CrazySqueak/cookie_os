@@ -138,10 +138,10 @@ impl AllocatedStack<GPageFrameAllocator> {
         Additionally, it is offset-mapped rather than */
     #[inline]
     pub fn allocate_kboot() -> Option<Self> {
-        let alloc_size = 256*1024;
-        let physalloc = palloc(Layout::from_size_align(alloc_size, 16).unwrap())?;
-        let vmemalloc = KERNEL_PTABLE.allocate_at(KERNEL_PTABLE.get_vmem_offset()+physalloc.get_addr(), physalloc.get_size()+1)?;
-        Some(Self::from_allocations(&KERNEL_PTABLE, 1, physalloc, vmemalloc, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty())))
+        let alloc_size = 256*1024; let guard_size = 4096;  // we have to allocate the guard page in pmem as well because it's offset mapped
+        let physalloc = palloc(Layout::from_size_align(alloc_size+guard_size, 16).unwrap())?;
+        let vmemalloc = KERNEL_PTABLE.allocate_at(KERNEL_PTABLE.get_vmem_offset()+physalloc.get_addr(), physalloc.get_size())?;
+        Some(Self::from_allocations(&KERNEL_PTABLE, guard_size, physalloc, vmemalloc, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty())))
     }
 }
 impl AllocatedStack<TLPageFrameAllocator> {

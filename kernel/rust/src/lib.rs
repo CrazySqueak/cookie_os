@@ -106,6 +106,12 @@ pub extern "sysv64" fn _kmain() -> ! {
     // testing
     unsafe {
         scheduler::multicore::start_processor(1);
+        scheduler::multicore::start_processor(2);
+        scheduler::multicore::start_processor(3);
+        scheduler::multicore::start_processor(4);
+        scheduler::multicore::start_processor(5);
+        scheduler::multicore::start_processor(6);
+        scheduler::multicore::start_processor(7);
     }
     scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
     

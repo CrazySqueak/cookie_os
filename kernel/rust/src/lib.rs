@@ -70,10 +70,30 @@ pub unsafe fn _kinit() {
     // Initialise low-level function (part 2 now that memory is configured)
     lowlevel::init2();
     
-    // Configure CPUs for multiprocessing TODO
-    
     // Initialise scheduler
     scheduler::context_switch::init_scheduler();
+    
+    // Wake up CPUs (in a background task)
+    // TODO: create spawn_task function
+    {
+        let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
+        let rsp = unsafe { lowlevel::context_switch::_cs_new(start_aps, kstack.bottom_vaddr() as *const u8) };
+        let task = unsafe { scheduler::Task::new_with_rsp(scheduler::TaskType::KernelTask, rsp) };
+        scheduler::context_switch::push_task(task);
+        core::mem::forget(kstack);  // I keep forgetting to NOT DROP THE STACK - i really need to put together a proper API for managing this
+    }
+}
+
+extern "sysv64" fn start_aps() -> ! {
+    // TODO: Find a way to identify the number and IDs of APs
+    unsafe {
+        scheduler::multicore::start_processor(1);
+        scheduler::multicore::start_processor(2);
+        scheduler::multicore::start_processor(3);
+    }
+    
+    // Done :)
+    scheduler::terminate_current_task();
 }
 
 #[no_mangle]
@@ -103,13 +123,6 @@ pub extern "sysv64" fn _kmain() -> ! {
         core::mem::forget(kstack);
     }
     
-    // testing
-    unsafe {
-        scheduler::multicore::start_processor(1);
-    }
-    loop{}
-    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
-    
     // TODO
     loop{}//lowlevel::halt();
 }
@@ -119,6 +132,9 @@ use core::sync::atomic::{AtomicPtr,Ordering};
 pub extern "sysv64" fn _kapstart() -> ! {
     // Signal that we've started
     scheduler::multicore::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
+    
+    // Load page table
+    unsafe { let context = memory::alloc_util::new_user_paging_context(); context.activate(); }
     
     // TODO: Init CPU?
     klog!(Info,ROOT,"Hello :)");
@@ -130,8 +146,7 @@ extern "sysv64" fn test() -> ! {
         klog!(Info,ROOT,"{}", i);
         scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushBack);
     }
-    scheduler::yield_to_scheduler(scheduler::SchedulerCommand::Terminate);
-    unreachable!();
+    scheduler::terminate_current_task();
 }
 
 /// This function is called on panic.

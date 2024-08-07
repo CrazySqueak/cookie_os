@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicU16,AtomicUsize,Ordering};
 use crate::memory::alloc_util::AllocatedStack;
 
 use crate::scheduler::{yield_to_scheduler,SchedulerCommand};
+pub use crate::lowlevel::get_cpu_id;
 
 pub static PROCESSORS_READY: AtomicU16 = AtomicU16::new(1);
 // This pointer is used for processor's kernel stacks as they come online

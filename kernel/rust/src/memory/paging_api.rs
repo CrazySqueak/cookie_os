@@ -222,7 +222,7 @@ impl PagingContext {
         set_active_page_table(table_addr);
         
         // store reference
-        let oldpt = _ACTIVE_PAGE_TABLE.lock().replace(Self::clone_ref(&self));
+        let oldpt = _ACTIVE_PAGE_TABLE.get().lock().replace(Self::clone_ref(&self));
         
         // Decrement reader count on old page table (if applicable)
         // Safety: Since the previous page table was activated using this function,
@@ -517,7 +517,8 @@ impl<T> core::ops::DerefMut for ForcedUpgradeGuard<'_, T>{
 
 // = ACTIVE OR SMTH? =
 // the currently active page table
-static _ACTIVE_PAGE_TABLE: Mutex<Option<PagingContext>, AlwaysPanic> = Mutex::new(None);
+use crate::sync::CPULocal;
+static _ACTIVE_PAGE_TABLE: CPULocal<Mutex<Option<PagingContext>, AlwaysPanic>> = CPULocal::new();
 
 // = ALLOCATIONS =
 // Note: Allocations must be allocated/deallocated manually

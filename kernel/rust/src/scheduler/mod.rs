@@ -27,3 +27,4 @@ pub fn is_bsp_scheduler_initialised() -> bool {
 pub fn is_scheduler_ready() -> bool {
     return is_bsp_scheduler_initialised() && context_switch::get_current_task().is_some()
 }
+pub use multicore::get_cpu_id;

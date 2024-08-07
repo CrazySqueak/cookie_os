@@ -120,7 +120,7 @@ pub extern "sysv64" fn _kapstart() -> ! {
     scheduler::multicore::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
     
     // TODO: Init CPU?
-    //klog!(Info,ROOT,"Hello :)");
+    klog!(Info,ROOT,"Hello :)");
     loop{};
 }
 

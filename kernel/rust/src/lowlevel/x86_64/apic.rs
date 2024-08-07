@@ -39,13 +39,27 @@ impl LocalID {
     }
 }
 
+def_reg!(LvtCMCI, 0x2F0);
+def_reg!(LvtTimer, 0x320);
+def_reg!(LvtThermal, 0x330);
+def_reg!(LvtPerfMon, 0x340);
+def_reg!(LvtLint0, 0x350);
+def_reg!(LvtLint1, 0x360);
+def_reg!(LvtError, 0x370);
+
+macro_rules! write64 {
+    ($lo:ident,$hi:ident,$value:expr) => {
+        $hi::write((($value&0xFFFFFFFF00000000)>>32) as u32);
+        $lo::write( ($value&0x00000000FFFFFFFF)      as u32);
+    }
+}
+
 pub unsafe fn send_icr<R: RelaxStrategy>(icr_value: u64){
-    IcrHI::write(((icr_value>>32)&0xFFFFFFFF00000000) as u32);
-    IcrLO::write(( icr_value     &0x00000000FFFFFFFF) as u32);
+    write64!(IcrLO,IcrHI,icr_value);
     // Small delay for APIC to register the command
     R::relax();
     // Wait until the Delivery Status becomes Idle
-    while IcrLO::read()&0x100 != 0 { R::relax(); }
+    while IcrLO::read()&0x1000 != 0 { R::relax(); }
 }
 
 /* Map the Local APIC into the page table as MMIO. 
@@ -64,4 +78,3 @@ pub unsafe fn enable_apic(){
     svr_value |= 0b01_0000_0000;
     SVR::write(svr_value);
 }
-

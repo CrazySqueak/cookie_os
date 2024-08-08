@@ -92,15 +92,10 @@ pub extern "sysv64" fn _kmain() -> ! {
         let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
         let rsp = unsafe { lowlevel::context_switch::_cs_new(test, kstack.bottom_vaddr() as *const u8) };
         klog!(Info,ROOT,"newtask RSP={:p}", rsp);
-        let task = unsafe { multitasking::Task::new_with_rsp(multitasking::TaskType::KernelTask, rsp) };
+        let task = unsafe { multitasking::Task::new_with_rsp(multitasking::TaskType::KernelTask(kstack), rsp) };
         multitasking::scheduler::push_task(task);
         
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
-        
-        // ALSO FOR THE LOVE OF GOD
-        // DON'T DROP() THE STACK WHILE YOU'RE STILL USING IT
-        // DUMBASS
-        core::mem::forget(kstack);
     }
     
     // TODO

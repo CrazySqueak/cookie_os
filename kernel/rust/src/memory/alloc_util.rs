@@ -129,7 +129,8 @@ impl<PFA: PageFrameAllocator> core::fmt::Debug for AllocatedStack<PFA> {
     }
 }
 
-impl AllocatedStack<GPageFrameAllocator> {
+pub type GAllocatedStack = AllocatedStack<GPageFrameAllocator>;
+impl GAllocatedStack {
     #[inline]
     pub fn allocate_ktask() -> Option<Self> {
         Self::allocate_new(&KERNEL_PTABLE, 256*1024, 1, KALLOCATION_KERNEL_STACK, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()))
@@ -144,7 +145,8 @@ impl AllocatedStack<GPageFrameAllocator> {
         Some(Self::from_allocations(&KERNEL_PTABLE, guard_size, physalloc, vmemalloc, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty())))
     }
 }
-impl AllocatedStack<TLPageFrameAllocator> {
+pub type TLAllocatedStack = AllocatedStack<TLPageFrameAllocator>;
+impl TLAllocatedStack {
     #[inline]
     pub fn allocate_user(context: &LockedPageAllocator<TLPageFrameAllocator>) -> Option<Self> {
         Self::allocate_new(context, 1*1024*1024, 4*4096, ALLOCATION_USER_STACK, PageFlags::new(TransitivePageFlags::USER_READABLE | TransitivePageFlags::USER_WRITEABLE, MappingSpecificPageFlags::empty()))

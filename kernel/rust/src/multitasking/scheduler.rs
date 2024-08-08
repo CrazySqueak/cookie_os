@@ -8,11 +8,16 @@ use crate::sync::cpulocal::{CpuLocal,CpuLocalGuard,CpuLocalLockedOption,CpuLocal
 // Currently active task & run queue
 struct SchedulerState {
     run_queue: VecDeque<Task>, // TODO replace with a better run queue system
+    
+    // Attempting to drop the most recent task causes an exception because its stack may still be in use
+    // so instead we store it here V and drop it later on
+    deferred_drop: Option<Task>,
 }
 impl core::default::Default for SchedulerState {
     fn default() -> Self {
         Self {
             run_queue: VecDeque::new(),
+            deferred_drop: None,
         }
     }
 }
@@ -53,7 +58,7 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
             SchedulerCommand::Terminate => {
                 // Terminate the task
                 klog!(Debug, SCHEDULER, "Terminating task: {}", current_task.task_id);
-                drop(current_task)
+                state.deferred_drop = Some(current_task)
             }
             
             _ => {
@@ -112,7 +117,7 @@ pub fn init_scheduler(){
         
         // Initialise task
         // Note: resuming the task is undefined (however that is the same for all "currently active tasks" - as they must be paused first)
-        let task = unsafe { Task::new_with_rsp(TaskType::KernelTask, core::ptr::null_mut()) };
+        let task = unsafe { Task::new_with_rsp(TaskType::BootstrapKernelTask, core::ptr::null_mut()) };
         let task_id = task.task_id;
         // Set current task
         _CURRENT_TASK.insert(task);

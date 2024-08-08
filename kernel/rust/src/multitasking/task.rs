@@ -1,12 +1,17 @@
 use super::scheduler::StackPointer;
 
+use crate::memory::alloc_util::GAllocatedStack;
+use alloc::boxed::Box;
+
 static NEXT_ID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// The type of task (i.e. where it came from / what it's for)
 #[derive(Debug)]
 pub enum TaskType {
     /// An anonymous kernel task
-    KernelTask,
+    KernelTask(GAllocatedStack),
+    /// A bootstrap kernel task - unlike regular kernel tasks, bootstrap tasks are not aware of their stack
+    BootstrapKernelTask,
 }
 pub struct Task {
     pub(super) task_id: usize,

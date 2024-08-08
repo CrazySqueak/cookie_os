@@ -1,9 +1,9 @@
 
 use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
-use crate::sync::{RwLock,RwLockReadGuard,RwLockWriteGuard,RwLockUpgradableGuard,AlwaysPanic};
+use crate::sync::{RwLock,RwLockReadGuard,RwLockWriteGuard,RwLockUpgradableGuard};
 use crate::sync::Mutex;
-use crate::sync::cpulocal::CpuLocal;
+use crate::sync::cpulocal::{CpuLocal,CpuLocalLockedOption};
 
 use super::*;
 
@@ -518,7 +518,7 @@ impl<T> core::ops::DerefMut for ForcedUpgradeGuard<'_, T>{
 
 // = ACTIVE OR SMTH? =
 // the currently active page table on each CPU
-static _ACTIVE_PAGE_TABLE: CpuLocal<Mutex<Option<PagingContext>, AlwaysPanic>> = CpuLocal::new();
+static _ACTIVE_PAGE_TABLE: CpuLocalLockedOption<PagingContext> = CpuLocal::new();
 
 // = ALLOCATIONS =
 // Note: Allocations must be allocated/deallocated manually

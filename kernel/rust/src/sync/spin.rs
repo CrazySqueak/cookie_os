@@ -10,21 +10,14 @@ impl RelaxStrategy for SchedulerYield {
                 // Yield
                 yield_to_scheduler(SchedulerCommand::PushBack)
             } else {
-                // Our scheduler is not yet ready, so this CPU is either trampolining or running scheduler code (and contending with other CPUs in the process)
+                // Our scheduler is not executing a task, so we cannot yield to it - this means we are probably the scheduler
+                // it is likely that another CPU is accessing this resource and we simply have to spin and hope it unblocks (because the scheduler can't continue without it)
+                // TODO: Add monotonic time measurement somehow and panic if 1+ seconds pass (either a deadlock or a hard-freeze - neither are good signs)
                 Spin::relax();
             }
         } else {
             panic!("Waiting for lock but scheduler not configured yet! Possible deadlock?");
         }
-    }
-}
-
-pub struct AlwaysPanic;
-// Used for Mutexes in certain cpu-local, scheduler-critical environments, where a lock being held prevents the scheduler from proceeding (and thus guarantees a deadlock)
-impl RelaxStrategy for AlwaysPanic {
-    #[inline(always)]
-    fn relax(){
-        panic!("Waiting for lock, but item is cpu-local and critical to scheduler functionality! Deadlock?");
     }
 }
 

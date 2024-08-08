@@ -51,26 +51,50 @@ use super::Mutex;
 
 pub type CpuLocalLockedItem<T> = CpuLocal<Mutex<T>>;
 impl<T: Default> CpuLocalLockedItem<T> {
+    /// Inspect (but do not mutate) the locked item
     #[inline]
     pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
         let cpul = self.get(); let item = cpul.lock();
         inspector(&item)
     }
+    /// Inspect and mutate the locked item
     #[inline]
     pub fn mutate<R>(&self, mutator: impl FnOnce(&mut T)->R) -> R {
         let cpul = self.get(); let mut item = cpul.lock();
         mutator(&mut item)
     }
 }
+pub type CpuLocalRWLockedItem<T> = CpuLocal<RwLock<T>>;
+impl<T: Default> CpuLocalRWLockedItem<T> {
+    /// Inspect (but do not mutate) the locked item using a read guard
+    #[inline]
+    pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
+        let cpul = self.get(); let item = cpul.read();
+        inspector(&item)
+    }
+    /// Inspect and mutate the locked item using a write guard
+    #[inline]
+    pub fn mutate<R>(&self, mutator: impl FnOnce(&mut T)->R) -> R {
+        let cpul = self.get(); let mut item = cpul.write();
+        mutator(&mut item)
+    }
+}
 
 pub type CpuLocalLockedOption<T> = CpuLocalLockedItem<Option<T>>;
 impl<T> CpuLocalLockedOption<T> {
+    /// Equivalent of Option.insert(...), but does not return a mutable reference as doing that would violate lifetime rules
     #[inline]
     pub fn insert(&self, item: T){
         self.mutate(move |opt|{let _ = opt.insert(item);});
     }
+    /// Equivalent of Option.take()
     #[inline]
     pub fn take(&self) -> Option<T> {
         self.mutate(|opt|opt.take())
+    }
+    /// Equivalent of Option.replace(...)
+    #[inline]
+    pub fn replace(&self, item: T) -> Option<T> {
+        self.mutate(move |opt|opt.replace(item))
     }
 }

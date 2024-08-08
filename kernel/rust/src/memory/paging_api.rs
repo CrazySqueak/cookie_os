@@ -3,6 +3,7 @@ use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
 use crate::sync::{RwLock,RwLockReadGuard,RwLockWriteGuard,RwLockUpgradableGuard,AlwaysPanic};
 use crate::sync::Mutex;
+use crate::sync::cpulocal::CpuLocal;
 
 use super::*;
 
@@ -222,7 +223,7 @@ impl PagingContext {
         set_active_page_table(table_addr);
         
         // store reference
-        let oldpt = _ACTIVE_PAGE_TABLE.lock().replace(Self::clone_ref(&self));
+        let oldpt = _ACTIVE_PAGE_TABLE.get().lock().replace(Self::clone_ref(&self));
         
         // Decrement reader count on old page table (if applicable)
         // Safety: Since the previous page table was activated using this function,
@@ -516,8 +517,8 @@ impl<T> core::ops::DerefMut for ForcedUpgradeGuard<'_, T>{
 }
 
 // = ACTIVE OR SMTH? =
-// the currently active page table
-static _ACTIVE_PAGE_TABLE: Mutex<Option<PagingContext>, AlwaysPanic> = Mutex::new(None);
+// the currently active page table on each CPU
+static _ACTIVE_PAGE_TABLE: CpuLocal<Mutex<Option<PagingContext>, AlwaysPanic>> = CpuLocal::new();
 
 // = ALLOCATIONS =
 // Note: Allocations must be allocated/deallocated manually

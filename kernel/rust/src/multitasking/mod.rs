@@ -24,7 +24,7 @@ pub fn is_bsp_scheduler_initialised() -> bool {
 */
 #[inline]
 pub fn is_executing_task() -> bool {
-    return is_bsp_scheduler_initialised() && scheduler::get_current_task().is_some()
+    return is_bsp_scheduler_initialised() && scheduler::is_executing_task()
 }
 
 // CPU ID - each cpu is assigned an OS-derived "CPU ID" for easy sorting and identification and stuff

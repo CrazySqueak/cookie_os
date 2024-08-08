@@ -1,6 +1,6 @@
 use super::scheduler::StackPointer;
 
-use crate::memory::alloc_util::GAllocatedStack;
+use crate::memory::alloc_util::AnyAllocatedStack;
 use alloc::boxed::Box;
 
 static NEXT_ID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
@@ -9,22 +9,22 @@ static NEXT_ID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsiz
 #[derive(Debug)]
 pub enum TaskType {
     /// An anonymous kernel task
-    KernelTask(GAllocatedStack),
-    /// A bootstrap kernel task - unlike regular kernel tasks, bootstrap tasks are not aware of their stack
-    BootstrapKernelTask,
+    KernelTask,
 }
 pub struct Task {
     pub(super) task_id: usize,
     pub(super) task_type: TaskType,
     
     pub(super) rsp: usize,
+    pub(super) stack_allocation: Option<Box<dyn AnyAllocatedStack>>,
 }
 impl Task {
-    pub unsafe fn new_with_rsp(task_type: TaskType, rsp: StackPointer) -> Self {
+    pub unsafe fn new_with_rsp(task_type: TaskType, rsp: StackPointer, stack_allocation: Option<Box<dyn AnyAllocatedStack>>) -> Self {
         Self {
             task_id: NEXT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
             task_type,
-            rsp: rsp as usize
+            rsp: rsp as usize,
+            stack_allocation: stack_allocation,
         }
     }
     

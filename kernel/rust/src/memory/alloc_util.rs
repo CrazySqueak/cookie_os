@@ -1,43 +1,44 @@
 use crate::logging::klog;
 use core::alloc::Layout;
 use alloc::vec::Vec; use alloc::vec;
+use alloc::boxed::Box;
 
 use crate::memory::physical::{PhysicalMemoryAllocation,palloc};
-use crate::memory::paging::{KALLOCATION_KERNEL_STACK,PageFlags,TransitivePageFlags,MappingSpecificPageFlags,PageFrameAllocator,PageAllocation,TLPageFrameAllocator,LockedPageAllocator,PageAllocationStrategies,ALLOCATION_USER_STACK,PagingContext};
+use crate::memory::paging::{KALLOCATION_KERNEL_STACK,PageFlags,TransitivePageFlags,MappingSpecificPageFlags,PageFrameAllocator,PageAllocation,TLPageFrameAllocator,LockedPageAllocator,PageAllocationStrategies,ALLOCATION_USER_STACK,PagingContext,AnyPageAllocation};
 use crate::memory::paging::global_pages::{GPageFrameAllocator,KERNEL_PTABLE};
 
 pub const MARKER_STACK_GUARD: usize = 0xF47B33F;  // "Fat Beef"
 pub const MARKER_NULL_GUARD: usize = 0x4E55_4C505452;  // "NULPTR"
 
-pub struct RealMemAllocation<PFA:PageFrameAllocator> {
-    pub virt: PageAllocation<PFA>,
+pub struct RealMemAllocation {
+    pub virt: Box<dyn AnyPageAllocation>,
     pub phys: Option<PhysicalMemoryAllocation>,
 }
-impl<PFA:PageFrameAllocator> RealMemAllocation<PFA> {
-    pub fn new(virt: PageAllocation<PFA>, phys: Option<PhysicalMemoryAllocation>) -> Self {
-        Self { virt, phys }
+impl RealMemAllocation {
+    pub fn new<PFA:PageFrameAllocator + Send + Sync + 'static>(virt: PageAllocation<PFA>, phys: Option<PhysicalMemoryAllocation>) -> Self {
+        Self { virt: Box::new(virt), phys }
     }
     
-    pub fn allocate(allocator: &LockedPageAllocator<PFA>, size: usize, strategy: PageAllocationStrategies, flags: PageFlags) -> Option<Self> {
+    pub fn allocate<PFA:PageFrameAllocator + Send + Sync + 'static>(allocator: &LockedPageAllocator<PFA>, size: usize, strategy: PageAllocationStrategies, flags: PageFlags) -> Option<Self> {
         let phys = palloc(Layout::from_size_align(size, 16).unwrap())?;
         let virt = allocator.allocate(phys.get_size(), strategy)?;
         virt.set_base_addr(phys.get_addr(), flags);
-        Some(Self { virt, phys: Some(phys) })
+        Some(Self { virt: Box::new(virt), phys: Some(phys) })
     }
-    pub fn allocate_at(allocator: &LockedPageAllocator<PFA>, vaddr: usize, size: usize, flags: PageFlags) -> Option<Self> {
+    pub fn allocate_at<PFA:PageFrameAllocator + Send + Sync + 'static>(allocator: &LockedPageAllocator<PFA>, vaddr: usize, size: usize, flags: PageFlags) -> Option<Self> {
         let phys = palloc(Layout::from_size_align(size, 16).unwrap())?;
         let virt = allocator.allocate_at(vaddr, phys.get_size())?;
         virt.set_base_addr(phys.get_addr(), flags);
-        Some(Self { virt, phys: Some(phys) })
+        Some(Self { virt: Box::new(virt), phys: Some(phys) })
     }
-    pub fn allocate_offset_mapped(allocator: &LockedPageAllocator<PFA>, offset: usize, size: usize, flags: PageFlags) -> Option<Self> {
+    pub fn allocate_offset_mapped<PFA:PageFrameAllocator + Send + Sync + 'static>(allocator: &LockedPageAllocator<PFA>, offset: usize, size: usize, flags: PageFlags) -> Option<Self> {
         let phys = palloc(Layout::from_size_align(size, 16).unwrap())?;
         let virt = allocator.allocate_at(phys.get_addr() + offset, phys.get_size())?;
         virt.set_base_addr(phys.get_addr(), flags);
-        Some(Self { virt, phys: Some(phys) })
+        Some(Self { virt: Box::new(virt), phys: Some(phys) })
     }
 }
-impl<PFA: PageFrameAllocator> core::fmt::Debug for RealMemAllocation<PFA> {
+impl core::fmt::Debug for RealMemAllocation {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("RealMemAllocation").field(&self.virt).field(&self.phys).finish()
     }
@@ -45,13 +46,13 @@ impl<PFA: PageFrameAllocator> core::fmt::Debug for RealMemAllocation<PFA> {
 
 // stacks
 pub struct AllocatedStack<PFA: PageFrameAllocator> {
-    allocations: Vec<RealMemAllocation<PFA>>,
+    allocations: Vec<RealMemAllocation>,
     guard_page: PageAllocation<PFA>,
     
     allocator: LockedPageAllocator<PFA>,
     flags: PageFlags,
 }
-impl<PFA: PageFrameAllocator> AllocatedStack<PFA> {
+impl<PFA: PageFrameAllocator + Send + Sync + 'static> AllocatedStack<PFA> {
     pub fn allocate_new(allocator: &LockedPageAllocator<PFA>, size: usize, guard_size: usize, strategy: PageAllocationStrategies, flags: PageFlags) -> Option<Self> {
         klog!(Debug, MEMORY_ALLOCUTIL, "Allocating stack: size={}+{} strat={:?} flags={:?}", size, guard_size, strategy, flags);
         let physmemallocation = palloc(Layout::from_size_align(size, 16).unwrap())?;
@@ -151,6 +152,16 @@ impl TLAllocatedStack {
     pub fn allocate_user(context: &LockedPageAllocator<TLPageFrameAllocator>) -> Option<Self> {
         Self::allocate_new(context, 1*1024*1024, 4*4096, ALLOCATION_USER_STACK, PageFlags::new(TransitivePageFlags::USER_READABLE | TransitivePageFlags::USER_WRITEABLE, MappingSpecificPageFlags::empty()))
     }
+}
+
+/* Any allocated stack, regardless of PFA */
+pub trait AnyAllocatedStack: core::fmt::Debug + Send {
+    fn bottom_vaddr(&self) -> usize;
+    fn expand(&mut self, bytes: usize) -> bool;
+}
+impl<PFA: PageFrameAllocator + Send + Sync + 'static> AnyAllocatedStack for AllocatedStack<PFA> {
+    fn bottom_vaddr(&self) -> usize { self.bottom_vaddr() }
+    fn expand(&mut self, bytes: usize) -> bool { self.expand(bytes) }
 }
 
 pub fn new_user_paging_context() -> PagingContext {

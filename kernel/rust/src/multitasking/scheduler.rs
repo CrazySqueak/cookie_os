@@ -117,7 +117,7 @@ pub fn init_scheduler(){
         
         // Initialise task
         // Note: resuming the task is undefined (however that is the same for all "currently active tasks" - as they must be paused first)
-        let task = unsafe { Task::new_with_rsp(TaskType::BootstrapKernelTask, core::ptr::null_mut()) };
+        let task = unsafe { Task::new_with_rsp(TaskType::KernelTask, core::ptr::null_mut(), None) };
         let task_id = task.task_id;
         // Set current task
         _CURRENT_TASK.insert(task);

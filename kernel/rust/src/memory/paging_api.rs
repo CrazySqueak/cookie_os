@@ -615,5 +615,23 @@ impl<PFA:PageFrameAllocator> core::fmt::Debug for PageAllocation<PFA> {
     }
 }
 
+/* Any page allocation, regardless of PFA. */
+pub trait AnyPageAllocation: core::fmt::Debug + Send {
+    fn start(&self) -> usize;
+    fn end(&self) -> usize;
+    fn size(&self) -> usize;
+    fn set_base_addr(&self, base_addr: usize, flags: PageFlags);
+    fn set_absent(&self, data: usize);
+    fn flush_tlb(&self);
+}
+impl<PFA:PageFrameAllocator + Send + Sync> AnyPageAllocation for PageAllocation<PFA> {
+    fn start(&self) -> usize { self.start() }
+    fn end(&self) -> usize { self.end() }
+    fn size(&self) -> usize { self.size() }
+    fn set_base_addr(&self, base_addr: usize, flags: PageFlags) { self.set_base_addr(base_addr, flags) }
+    fn set_absent(&self, data: usize) { self.set_absent(data) }
+    fn flush_tlb(&self) { self.flush_tlb() }
+}
+
 pub type TopLevelPageAllocation = PageAllocation<BaseTLPageAllocator>;
 pub type TLPageFrameAllocator = BaseTLPageAllocator;

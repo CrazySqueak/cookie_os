@@ -35,8 +35,10 @@ pub const GLOBAL_PAGES_START_IDX: usize = GlobalPTType::NPAGES / 2;  // Index of
 
 pub const KERNEL_PTABLE_IDX  : usize = GLOBAL_PAGES_START_IDX+0;
 pub const KERNEL_PTABLE_VADDR: usize = canonical_addr(KERNEL_PTABLE_IDX*TOPLEVEL_PAGE_SIZE);
+pub const MMIO_PTABLE_IDX    : usize = GLOBAL_PAGES_START_IDX+1;
+pub const MMIO_PTABLE_VADDR  : usize = canonical_addr(MMIO_PTABLE_IDX*TOPLEVEL_PAGE_SIZE);
 
-pub const N_GLOBAL_TABLES: usize = 1;
+pub const N_GLOBAL_TABLES: usize = 2;
 lazy_static! {
     
     pub static ref KERNEL_PTABLE: GlobalPageTable = {
@@ -44,10 +46,14 @@ lazy_static! {
         _map_kernel(&kt);
         kt
     };
+    pub static ref MMIO_PTABLE: GlobalPageTable = {
+        let mt = GlobalPageTable::new(MMIO_PTABLE_VADDR, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()));
+        mt
+    };
     
     // SAFETY: all tables in this array must have the 'static lifetime
     //         also TODO: ensure they don't get moved within physmem
-        static ref ALL_GLOBAL_TABLES     : [&'static GlobalPageTable; N_GLOBAL_TABLES] = [&KERNEL_PTABLE];
+        static ref ALL_GLOBAL_TABLES     : [&'static GlobalPageTable; N_GLOBAL_TABLES] = [&KERNEL_PTABLE, &MMIO_PTABLE];
     pub static ref GLOBAL_TABLE_PHYSADDRS: [         usize          ; N_GLOBAL_TABLES] = ALL_GLOBAL_TABLES.map(|pt| ptaddr_virt_to_phys(pt._begin_active().get_page_table_ptr() as usize));
     pub static ref GLOBAL_TABLE_FLAGS    : [         PageFlags      ; N_GLOBAL_TABLES] = ALL_GLOBAL_TABLES.map(|pt| pt.1);
 }

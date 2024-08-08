@@ -1,23 +1,33 @@
 use super::util_mmio32::*;
 
-pub const LOCAL_APIC_MMIO_ROOT: usize = crate::memory::paging::global_pages::KERNEL_PTABLE_VADDR + 0xFEE0_0000;
+use crate::memory::paging::global_pages;
+pub const LOCAL_APIC_MMIO_PHYS: usize = 0xFEE0_0000;
+pub const LOCAL_APIC_MMIO_ROOT: usize = global_pages::MMIO_PTABLE_VADDR + LOCAL_APIC_MMIO_PHYS;
 
 // TODO: make local APIC cpu-local
+
+/* Map the local APIC to the memory-mapped IO global page table. */
+pub fn map_local_apic_mmio() -> Option<global_pages::GlobalPageAllocation> {
+    let buf = global_pages::MMIO_PTABLE.allocate_at(LOCAL_APIC_MMIO_ROOT, 0x400)?;
+    use crate::memory::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
+    buf.set_base_addr(LOCAL_APIC_MMIO_PHYS, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::PINNED | MappingSpecificPageFlags::CACHE_WRITE_THROUGH | MappingSpecificPageFlags::CACHE_DISABLE));
+    Some(buf)
+}
 
 pub struct LocalAPIC {
     local_id: LocalAPICId,
     icr: InterruptCommandRegister,
 }
 impl LocalAPIC {
-    unsafe fn new()->Self { Self {
-        local_id: LocalAPICId::new(),
-        icr: InterruptCommandRegister::new(),
+    unsafe fn new(base:usize)->Self { Self {
+        local_id: LocalAPICId::new(base),
+        icr: InterruptCommandRegister::new(base),
     }}
 }
 
 pub struct LocalAPICId(MMIORegister32<true,true>);
 impl LocalAPICId {
-    unsafe fn new()->Self { Self(MMIORegister32::new(LOCAL_APIC_MMIO_ROOT,0x020)) }
+    unsafe fn new(base:usize)->Self { Self(MMIORegister32::new(base,0x020)) }
     pub fn read_id(&mut self) -> u8 {
         ((self.0.read_raw()&0xFF000000)>>24).try_into().unwrap()
     }
@@ -73,7 +83,7 @@ impl InterProcessorInterrupt {
 }
 pub struct InterruptCommandRegister(MMIORegister64<true,true,true>);
 impl InterruptCommandRegister {
-    unsafe fn new()->Self { Self(MMIORegister64::new(LOCAL_APIC_MMIO_ROOT, 0x300,0x310)) }
+    unsafe fn new(base:usize)->Self { Self(MMIORegister64::new(base, 0x300,0x310)) }
     /* Send an IPI, blocking until it completes. */
     pub fn send_ipi(&mut self, ipi: InterProcessorInterrupt, dest: IPIDestination){
         let (delivery_mode, ipi_vector) = ipi.destructure();
@@ -95,3 +105,4 @@ impl InterruptCommandRegister {
 //static LOCAL_APIC_ID: APICRegister32<true,true> = unsafe{APICRegister32::new(LOCAL_APIC_MMIO_ROOT+0x020)};
 //static SPURIOUS_INTERRUPT_VECTOR: APICRegister32<true,true> = unsafe{APICRegister32::new(LOCAL_APIC_MMIO_ROOT+0x0F0)};
 //static INTERRUPT_COMMAND_REGISTER: APICRegister64<true,true,true> = unsafe{APICRegister64::new(LOCAL_APIC_MMIO_ROOT+
+

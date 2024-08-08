@@ -85,11 +85,17 @@ impl VGABuffer {
     pub fn get_vgachar(&mut self, x: usize, y: usize) -> VGAChar { self.chars[y][x].read() }
 }
 
-// We're mapped to the higher half, so we have to remember to OFFSET the memory-mapped I/O otherwise we get a page fault
-// which ends badly because the current page fault handler involves writing to the screen. oops
+use crate::memory::paging::global_pages;
 pub const VGA_BUFFER_PHYSICAL: usize = 0xb8000;
-pub const VGA_BUFFER_ADDR: usize = crate::memory::paging::global_pages::KERNEL_PTABLE_VADDR + VGA_BUFFER_PHYSICAL;
+pub const VGA_BUFFER_ADDR: usize = global_pages::MMIO_PTABLE_VADDR + VGA_BUFFER_PHYSICAL;
 pub const VGA_BUFFER_SIZE: usize = VGA_HEIGHT * VGA_WIDTH * 2;
+
+pub fn map_vga_mmio() -> Option<global_pages::GlobalPageAllocation> {
+    let buf = global_pages::MMIO_PTABLE.allocate_at(VGA_BUFFER_ADDR, VGA_BUFFER_SIZE)?;
+    use crate::memory::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
+    buf.set_base_addr(VGA_BUFFER_PHYSICAL, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::PINNED | MappingSpecificPageFlags::CACHE_WRITE_THROUGH));
+    Some(buf)
+}
 
 fn get_standard_vga_buffer() -> &'static mut VGABuffer {
     return unsafe { &mut *(VGA_BUFFER_ADDR as *mut VGABuffer) };

@@ -22,6 +22,7 @@ use crate::util::{LockedWrite};
 mod coredrivers;
 use coredrivers::serial_uart::SERIAL1;
 use coredrivers::display_vga; use display_vga::VGA_WRITER;
+use coredrivers::system_apic;
 
 mod memory;
 mod descriptors;
@@ -54,10 +55,9 @@ pub unsafe fn _kinit() {
         let allocator = &pagetable;
         let kallocator = &memory::paging::global_pages::KERNEL_PTABLE;
         
-        // VGA Buffer memory-mapped IO
-        let vgabuf = kallocator.allocate_at(display_vga::VGA_BUFFER_ADDR, display_vga::VGA_BUFFER_SIZE).expect("Unable to map VGA buffer");
-        vgabuf.set_base_addr(display_vga::VGA_BUFFER_PHYSICAL, PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::PINNED));
-        vgabuf.leak();
+        // Memory-map the MMIO we're using
+        display_vga::map_vga_mmio().expect("Unable to map VGA buffer!").leak();
+        system_apic::map_local_apic_mmio().expect("Unable to map local APIC buffer!").leak();
         
         // Guess who doesn't have to manually map the kernel in lib.rs anymore because it's done in global_pages.rs!!!
     }

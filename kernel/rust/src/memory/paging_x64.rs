@@ -28,7 +28,9 @@ impl<const LEVEL: usize> X64PageTable<LEVEL> {
         if INCLUDE_NON_TRANSITIVE {
             let add = add.mflags;
             use MappingSpecificPageFlags as MF;
-            if add.contains(MF::PINNED) { previous |= PF_PINNED };
+            if add.contains(MF::PINNED             ) { previous |= PF_PINNED                     };
+            if add.contains(MF::CACHE_DISABLE      ) { previous |= PageTableFlags::NO_CACHE      };
+            if add.contains(MF::CACHE_WRITE_THROUGH) { previous |= PageTableFlags::WRITE_THROUGH };
             if cfg!(feature="page_global_bit") && add.contains(MF::GLOBAL) { previous |=  PageTableFlags::GLOBAL };
         }
         previous
@@ -44,8 +46,10 @@ impl<const LEVEL: usize> X64PageTable<LEVEL> {
             },
             {
                 use MappingSpecificPageFlags as MF; let mut mf = MF::empty();
-                if  flags.contains(PageTableFlags::GLOBAL) { mf |= MF::GLOBAL }
-                if  flags.contains(PF_PINNED)              { mf |= MF::PINNED }
+                if  flags.contains(PageTableFlags::GLOBAL)        { mf |= MF::GLOBAL             }
+                if  flags.contains(PF_PINNED)                     { mf |= MF::PINNED             }
+                if  flags.contains(PageTableFlags::NO_CACHE)      { mf |= MF::CACHE_DISABLE      }
+                if  flags.contains(PageTableFlags::WRITE_THROUGH) { mf |= MF::CACHE_WRITE_THROUGH}
                 mf
             },
         )

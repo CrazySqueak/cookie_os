@@ -45,6 +45,14 @@ bitflags::bitflags! {
         // On pages: Page must always point to the same frame. Frame's contents must not be moved.
         // On sub-tables: No effect.
         const PINNED = 1<<1;
+        // Affects the "memory type" of the selected area - idk what this does because what I've read is very vague
+        // On pages: influences the memory type of the memory mapped via the page
+        // On sub-tables: influences the memory type used for reading the sub-table
+        const CACHE_DISABLE = 1<<2;
+        // Affects the "memory type" of the selected area - enables "write-through caching", meaning that writes occur immediately instead of being cached and then written back later
+        // On pages: influences the memory type of the memory mapped via the page
+        // On sub-tables: influences the memory type used for reading the sub-table
+        const CACHE_WRITE_THROUGH = 1<<3;
     }
 }
 

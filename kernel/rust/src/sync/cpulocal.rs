@@ -44,3 +44,33 @@ impl<T> Deref for CpuLocalGuard<'_,T> {
         &self.0[self.1]
     }
 }
+
+
+// Utilities, since CpuLocal does not grant interior mutability due to obvious threading issues + borrow checker not liking nested guards
+use super::Mutex;
+
+pub type CpuLocalLockedItem<T> = CpuLocal<Mutex<T>>;
+impl<T: Default> CpuLocalLockedItem<T> {
+    #[inline]
+    pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
+        let cpul = self.get(); let item = cpul.lock();
+        inspector(&item)
+    }
+    #[inline]
+    pub fn mutate<R>(&self, mutator: impl FnOnce(&mut T)->R) -> R {
+        let cpul = self.get(); let mut item = cpul.lock();
+        mutator(&mut item)
+    }
+}
+
+pub type CpuLocalLockedOption<T> = CpuLocalLockedItem<Option<T>>;
+impl<T> CpuLocalLockedOption<T> {
+    #[inline]
+    pub fn insert(&self, item: T){
+        self.mutate(move |opt|{let _ = opt.insert(item);});
+    }
+    #[inline]
+    pub fn take(&self) -> Option<T> {
+        self.mutate(|opt|opt.take())
+    }
+}

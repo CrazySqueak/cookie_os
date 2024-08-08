@@ -106,7 +106,7 @@ use super::paging::PageAllocation;
 use super::physical::{palloc,PhysicalMemoryAllocation};
 use buddy_system_allocator::Heap;
 use core::alloc::Layout;
-use crate::sync::Mutex;
+use spin::Mutex;  // use a spinlock for the heap rather than scheduler yield - the scheduler could easily end up using the heap
 // As allocating new memory may require heap memory, we keep a 1MiB rescue section pre-allocated.
 const RESCUE_SIZE: usize = 1*1024*1024;  // 1MiB
 type RescueT = (PhysicalMemoryAllocation,PageAllocation<super::paging::global_pages::GlobalPTType>);

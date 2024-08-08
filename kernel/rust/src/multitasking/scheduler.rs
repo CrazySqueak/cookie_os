@@ -4,7 +4,7 @@ use super::{Task,TaskType};
 use crate::sync::{Mutex,AlwaysPanic};
 use alloc::collections::VecDeque;
 use crate::logging::klog;
-use crate::sync::cpulocal::{CpuLocal,CpuLocalGuard};
+use crate::sync::cpulocal::{CpuLocal,CpuLocalGuard,CpuLocalLockedOption,CpuLocalLockedItem};
 
 // Currently active task & run queue
 struct SchedulerState {
@@ -19,30 +19,8 @@ impl core::default::Default for SchedulerState {
 }
 // current_task is stored separately to the rest of the state as it is commonly accessed by logging methods,
 // and usually isn't held for very long. If it was part of _SCHEDULER_STATE, then logging during with_scheduler_state! would cause a deadlock
-static _CURRENT_TASK: CpuLocal<Mutex<Option<Task>, AlwaysPanic>> = CpuLocal::new();
-static _SCHEDULER_STATE: CpuLocal<Mutex<SchedulerState,AlwaysPanic>> = CpuLocal::new();
-/// This macro locks the current CPU's scheduler state for the duration of the block
-/// and makes it easily available in a variable (since dealing with nested guards is such a fucking PITA)
-macro_rules! with_scheduler_state {
-    {in $statename:ident; $($code:stmt);+} => {
-        {
-            let sg = _SCHEDULER_STATE.get(); let $statename = sg.lock();
-            $($code)+
-        }
-    };
-    {in $statename:ident; $($code:stmt);+ ;} => {
-        {with_scheduler_state!{in $statename; $($code);+};}
-    };
-    {in mut $statename:ident; $($code:stmt);+} => {
-        {
-            let sg = _SCHEDULER_STATE.get(); let mut $statename = sg.lock();
-            $($code)+
-        }
-    };
-    {in mut $statename:ident; $($code:stmt);+ ;} => {
-        {with_scheduler_state!{in mut $statename; $($code);+};}
-    };
-}
+static _CURRENT_TASK: CpuLocalLockedOption<Task> = CpuLocalLockedOption::new();
+static _SCHEDULER_STATE: CpuLocalLockedItem<SchedulerState> = CpuLocal::new();
 
 pub type StackPointer = cswitch_impl::StackPointer;
 pub use cswitch_impl::yield_to_scheduler;
@@ -66,9 +44,9 @@ pub enum SchedulerCommand {
     This function happens after the previous context is saved, but before the next one is loaded. It's this function's job to determine what to run next (and then run it). */
 #[inline]
 pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
-    with_scheduler_state!{in mut state;
+    _SCHEDULER_STATE.mutate(|state|{
         // Update current task
-        let mut current_task = _CURRENT_TASK.get().lock().take().expect("schedule() called but no task currently active?");
+        let mut current_task = _CURRENT_TASK.take().expect("schedule() called but no task currently active?");
         current_task.set_rsp(rsp);
         
         // Push previous task back onto the run queue
@@ -85,18 +63,18 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
                 state.run_queue.push_back(current_task);
             }
         }
-    }
+    });
     
     // Pick the next task off of the run queue
     loop {
-        let next_task: Option<Task> = with_scheduler_state!{in mut state;
+        let next_task: Option<Task> = _SCHEDULER_STATE.mutate(|state|{
             match &command {
                 _ => {
                     // Take next task
                     state.run_queue.pop_front()
                 }
             }
-        };
+        });
         
         if let Some(next_task) = next_task {
             klog!(Debug, SCHEDULER, "Resuming task: {}", next_task.task_id);
@@ -119,7 +97,7 @@ pub fn resume_context(task: Task) -> !{
     
     // set active task
     {
-        *_CURRENT_TASK.get().lock() = Some(task);
+        _CURRENT_TASK.insert(task);
     }  // <- lock gets dropped here
     // resume task
     unsafe { cswitch_impl::resume_context(rsp) };
@@ -129,7 +107,7 @@ pub fn resume_context(task: Task) -> !{
     Once this has been called, it is ok to call yield_to_scheduler.
     (calling this again will discard a large amount of the scheduler's state for the current CPU, so uh, don't)*/
 pub fn init_scheduler(){
-    with_scheduler_state!{ in mut state;
+    _SCHEDULER_STATE.mutate(|state|{
         // initialise run queue?
         state.run_queue.reserve(8);
         
@@ -138,20 +116,20 @@ pub fn init_scheduler(){
         let task = unsafe { Task::new_with_rsp(TaskType::KernelTask, core::ptr::null_mut()) };
         let task_id = task.task_id;
         // Set current task
-        *_CURRENT_TASK.get().lock() = Some(task);
+        _CURRENT_TASK.insert(task);
         
         // All gucci :)
         // log message
         klog!(Info, SCHEDULER, "Initialised scheduler on CPU {}. Bootstrapper task has become task {}.", 0, task_id);
         // Signal that scheduler is online
         super::BSP_SCHEDULER_READY.store(true,core::sync::atomic::Ordering::Release);
-    }
+    });
 }
 
 /* Push a new task to the current scheduler's run queue. */
 pub fn push_task(task: Task){
     klog!(Debug, SCHEDULER, "Pushing new task: {}", task.task_id);
-    with_scheduler_state!{ in mut state; state.run_queue.push_back(task); }
+    _SCHEDULER_STATE.mutate(|state|state.run_queue.push_back(task))
 }
 
 //#[inline(always)]
@@ -162,10 +140,10 @@ pub fn push_task(task: Task){
 /* Returns true if the scheduler is currently executing a task. Returns false otherwise (i.e. it's instead executing bootstrap or scheduler code). */
 #[inline(always)]
 pub fn is_executing_task() -> bool {
-    _CURRENT_TASK.get().lock().is_some()
+    _CURRENT_TASK.inspect(|ot|ot.is_some())
 }
 /* Get the ID of the current task, or None if the scheduler is running right now instead of a specific task. */
 #[inline(always)]
 pub fn get_executing_task_id() -> Option<usize> {
-    _CURRENT_TASK.get().lock().as_ref().map(|t|t.task_id)
+    _CURRENT_TASK.inspect(|ot|ot.as_ref().map(|t|t.task_id))
 }

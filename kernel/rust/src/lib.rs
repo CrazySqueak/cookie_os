@@ -104,7 +104,9 @@ pub extern "sysv64" fn _kmain() -> ! {
     }
     
     // TODO
-    loop{}//lowlevel::halt();
+    // For the love of god, please let other tasks run instead of blocking
+    // pre-emption hasn't been implemented yet
+    multitasking::terminate_current_task();
 }
 
 use core::sync::atomic::{AtomicPtr,Ordering};

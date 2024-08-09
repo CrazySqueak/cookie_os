@@ -32,8 +32,8 @@ pub fn init2_ap() {
     // xAPIC
     system_apic::init_local_apic();
     
-    //gdt::init(); TODO: Init AP TSS
-    //interrupts::init();
+    gdt::init();
+    interrupts::init_ap();
 }
 
 

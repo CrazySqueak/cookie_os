@@ -10,44 +10,44 @@ use lazy_static::lazy_static;
 
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 
-lazy_static! {
-    static ref TSS: TaskStateSegment = {
-        let mut tss = TaskStateSegment::new();
-        tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 5;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-
-            let stack_start = VirtAddr::from_ptr(unsafe { addr_of!(STACK) });
-            let stack_end = stack_start + (STACK_SIZE as u64);
-            stack_end
-        };
-        tss
-    };
+use alloc::boxed::Box;
+use crate::sync::cpulocal::CpuLocalLockedOption;
+pub struct GDTSegments {
+    gdt: &'static GlobalDescriptorTable,
+    tss: &'static TaskStateSegment,
+    
+    sg_kernel_code: SegmentSelector,
+    sg_tss: SegmentSelector,
 }
+static _LOCAL_GDT: CpuLocalLockedOption<GDTSegments> = CpuLocalLockedOption::new();
 
-lazy_static! {
-    static ref GDT_AND_FRIENDS: (GlobalDescriptorTable, SegmentSelector, SegmentSelector) = {
-        let mut gdt = GlobalDescriptorTable::new();
-        // breaking changes abound! I'm pretty sure intel CPUs haven't suddenly changed in the last 3 years so uhh. This one's on you.
-        // *hits x86_64's maintainer over the head with https://semver.org/ *
-        // *hits tutorial writer over the head for not providing the version of x86_64 they explain how to use*
-        let kcs = gdt.append(Descriptor::kernel_code_segment());
-        let tss = gdt.append(Descriptor::tss_segment(&TSS));
-        (gdt, kcs, tss)
+fn _init_local_gdt(){
+    // ===TSS
+    let tss = Box::leak(Box::new(TaskStateSegment::new()));
+    
+    // double-fault stack
+    tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
+        const DF_STACK_SIZE: usize = 4096 * 5;
+        let doublefaultstack = Box::new([0u8; DF_STACK_SIZE]);
+        let stack_start = VirtAddr::from_ptr(Box::leak(doublefaultstack) as *mut u8);
+        stack_start + (DF_STACK_SIZE.try_into().unwrap())
     };
-    static ref GDT: &'static GlobalDescriptorTable = &GDT_AND_FRIENDS.0;
-    static ref GDT_KERNEL_CODE: SegmentSelector = GDT_AND_FRIENDS.1;
-    static ref GDT_TSS: SegmentSelector = GDT_AND_FRIENDS.2;
+    
+    // ===GDT
+    let gdt = Box::leak(Box::new(GlobalDescriptorTable::new()));
+    let kernelcode = gdt.append(Descriptor::kernel_code_segment());
+    let sg_tss = gdt.append(Descriptor::tss_segment(tss));
+    
+    _LOCAL_GDT.insert_and(GDTSegments { gdt, tss, sg_kernel_code: kernelcode, sg_tss: sg_tss }, |gdts|gdts.gdt.load());
 }
 
 pub fn init() {
     use x86_64::instructions::tables::load_tss;
     use x86_64::instructions::segmentation::{CS, Segment};
+    _init_local_gdt();
     
-    GDT.load();
-    
-    unsafe {
-        CS::set_reg(*GDT_KERNEL_CODE);
-        load_tss(*GDT_TSS);
-    }
+    _LOCAL_GDT.inspect_unwrap(|gdts|unsafe {
+        CS::set_reg(gdts.sg_kernel_code);
+        load_tss(gdts.sg_tss);
+    });
 }

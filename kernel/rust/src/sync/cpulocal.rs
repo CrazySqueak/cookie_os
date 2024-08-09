@@ -98,6 +98,11 @@ impl<T> CpuLocalLockedOption<T> {
     pub fn insert(&self, item: T){
         self.mutate(move |opt|{let _ = opt.insert(item);});
     }
+    /// Equivalent of Option.insert(...), using a callback to recieve the mutable reference
+    #[inline]
+    pub fn insert_and<R>(&self, item: T, mutator: impl FnOnce(&mut T)->R) -> R {
+        self.mutate(move |opt|{let r = opt.insert(item); mutator(r)})
+    }
     /// Equivalent of Option.take()
     #[inline]
     pub fn take(&self) -> Option<T> {
@@ -107,5 +112,14 @@ impl<T> CpuLocalLockedOption<T> {
     #[inline]
     pub fn replace(&self, item: T) -> Option<T> {
         self.mutate(move |opt|opt.replace(item))
+    }
+    
+    #[inline]
+    pub fn inspect_unwrap<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
+        self.inspect(|opt|inspector(opt.as_ref().unwrap()))
+    }
+    #[inline]
+    pub fn inspect_expect<R>(&self, inspector: impl FnOnce(&T)->R, errmsg: &str) -> R {
+        self.inspect(|opt|inspector(opt.as_ref().expect(errmsg)))
     }
 }

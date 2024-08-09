@@ -9,34 +9,49 @@ use crate::util::LockedWrite;
 use crate::coredrivers::keyboard_ps2 as keyboard;
 use crate::coredrivers::display_vga::VGA_WRITER;
 
-// TODO: Create public API that is as architecture-independent as possible
+use crate::coredrivers::system_apic;
 
-lazy_static! {
-    static ref IDT: InterruptDescriptorTable = {
-        let mut idt = InterruptDescriptorTable::new();
+use alloc::boxed::Box;
+use crate::sync::cpulocal::CpuLocalLockedOption;
+
+static _LOCAL_IDT: CpuLocalLockedOption<&'static InterruptDescriptorTable> = CpuLocalLockedOption::new();
+fn init_idt() {
+    let idt = Box::leak(Box::new(InterruptDescriptorTable::new()));
         
-        idt.page_fault.set_handler_fn(page_fault_handler);
-        idt.general_protection_fault.set_handler_fn(gp_fault_handler);
-        
-        unsafe {
-            idt.double_fault.set_handler_fn(double_fault_handler).set_stack_index(super::gdt::DOUBLE_FAULT_IST_INDEX);
-        }
-        
-        // Timer
-        idt[PICInterrupt::Timer.as_u8()].set_handler_fn(timer_handler);
-        // PS/2 Keyboard
-        idt[PICInterrupt::Keyboard.as_u8()].set_handler_fn(ps2keyboard_handler);
-        keyboard::set_key_callback(print_key);
-        
-        idt
-    };
+    idt.page_fault.set_handler_fn(page_fault_handler);
+    idt.general_protection_fault.set_handler_fn(gp_fault_handler);
+    
+    unsafe {
+        idt.double_fault.set_handler_fn(double_fault_handler).set_stack_index(super::gdt::DOUBLE_FAULT_IST_INDEX);
+    }
+    
+    // Timer
+    idt[PICInterrupt::Timer.as_u8()].set_handler_fn(timer_handler);
+    // PS/2 Keyboard
+    idt[PICInterrupt::Keyboard.as_u8()].set_handler_fn(ps2keyboard_handler);
+    keyboard::set_key_callback(print_key);
+    
+    // Install and load IDT
+    _LOCAL_IDT.insert_and(idt, |idt|idt.load());
 }
 
 pub fn init(){
     // Load IDT
-    IDT.load();
+    init_idt();
+    
     // Initialize 1980s PIC chips
     unsafe { PICS.lock().initialize(); }
+    
+    // Enable interrupts
+    x86_64::instructions::interrupts::enable();
+}
+
+pub fn init_ap(){
+    // Load IDT
+    init_idt();
+    
+    // TODO: set interrupts on APIC?
+    
     // Enable interrupts
     x86_64::instructions::interrupts::enable();
 }
@@ -56,7 +71,7 @@ extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame,
 }
 #[no_mangle]
 extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> () {
-    unsafe { core::arch::asm!("nop"); } //panic!("General Protection Fault!\n{:?}", stack_frame);
+    panic!("General Protection Fault!\n{:?}", stack_frame);
 }
 
 // PICs

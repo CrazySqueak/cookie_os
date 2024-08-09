@@ -27,7 +27,7 @@ fn _init_local_gdt(){
     
     // double-fault stack
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
-        const DF_STACK_SIZE: usize = 4096 * 5;
+        const DF_STACK_SIZE: usize = 4096 * 8;
         let doublefaultstack = Box::new([0u8; DF_STACK_SIZE]);
         let stack_start = VirtAddr::from_ptr(Box::leak(doublefaultstack) as *mut u8);
         stack_start + (DF_STACK_SIZE.try_into().unwrap())

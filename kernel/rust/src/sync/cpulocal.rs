@@ -12,9 +12,8 @@ impl<T: Default> CpuLocal<T> {
     }
     
     fn _initialise_empty_values(&self, v: RwLockReadGuard<Vec<T>>, id: usize) -> RwLockReadGuard<Vec<T>> {
-        let vu = self.0.upgradeable_read();  // Get an upgradeable read, blocking further readers and preventing writer starvation
         drop(v);  // Drop the old guard so it doesn't block us
-        let mut vu = vu.upgrade();  // upgrade to a write guard
+        let mut vu = self.0.write();  // currently cannot grab an upgradeable read as that can cause deadlocks in some rare cases
         while vu.len() <= id { vu.push(T::default()) };  // push new values so that `id` is a valid index
         vu.downgrade()  // downgrade back to a read guard now our job is done
     }

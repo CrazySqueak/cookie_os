@@ -32,6 +32,13 @@ impl<const R: bool> MMIORegisterW for MMIORegister32<R,true> {
         unsafe{ write_volatile(self.addr as *mut u32, value) }
     }
 }
+impl<const R: bool> MMIORegister32<R,true> {
+    /// May be useful for some write-only registers that you need quick access to
+    #[inline(always)]
+    pub unsafe fn unchecked_write_raw(&self, value: u32){
+        unsafe{ write_volatile(self.addr as *mut u32, value) }
+    }
+}
 
 // IO_DESCENDING -> read/write in descending order (HI first) rather than ascending order
 pub struct MMIORegister64<const R: bool, const W: bool, const IO_DESCENDING:bool>{ addr_hi: usize, addr_lo: usize }

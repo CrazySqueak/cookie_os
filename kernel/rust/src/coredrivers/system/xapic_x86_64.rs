@@ -13,31 +13,29 @@ pub fn map_local_apic_mmio() -> Option<global_pages::GlobalPageAllocation> {
     Some(buf)
 }
 // Local APIC
-use crate::sync::cpulocal::CpuLocalLockedOption;
-static _LOCAL_APIC: CpuLocalLockedOption<LocalAPIC> = CpuLocalLockedOption::new();
+use crate::sync::cpulocal::{CpuLocalRWLockedItem,CpuLocalLockedOption};
+use crate::sync::Mutex;
+static _LOCAL_APIC: CpuLocalRWLockedItem<Option<LocalAPIC>> = CpuLocalRWLockedItem::new();
 /* Initialise the CPU's local APIC */
 pub fn init_local_apic(){
     klog!(Debug, COREDRIVERS_XAPIC, "Initialising local xAPIC");
-    // Init local APIC
-    _LOCAL_APIC.insert(unsafe { LocalAPIC::new(LOCAL_APIC_MMIO_ROOT) });
-    
-    // Configure APIC registers
+    // Initialise APIC and configure APIC registers
     _LOCAL_APIC.mutate(|apic_o| {
-        let apic = apic_o.as_mut().unwrap();
+        let apic = apic_o.insert(unsafe { LocalAPIC::new(LOCAL_APIC_MMIO_ROOT) });
         
         // Read APIC ID
-        let apic_id = apic.local_id.read_id();
+        let apic_id = apic.config.lock().local_id.read_id();
         _LOCAL_APIC_ID.insert(apic_id);
         klog!(Info, COREDRIVERS_XAPIC, "Local APIC ID is {}.", apic_id);
         
         // Enable local APIC
-        apic.siv.set_apic_enabled(true);
+        apic.config.lock().siv.set_apic_enabled(true);
     });
 }
 /* Access the CPU's local APIC */
-pub fn with_local_apic<R>(f: impl FnOnce(&mut LocalAPIC)->R)->R{
-    _LOCAL_APIC.mutate(|apic_o| {
-        let apic = apic_o.as_mut().expect("Cannot access local APIC, as this CPU's APIC isn't initialised yet!");
+pub fn with_local_apic<R>(f: impl FnOnce(&LocalAPIC)->R)->R{
+    _LOCAL_APIC.inspect(|apic_o| {
+        let apic = apic_o.as_ref().expect("Cannot access local APIC, as this CPU's APIC isn't initialised yet!");
         f(apic)
     })
 }
@@ -52,16 +50,49 @@ pub fn get_apic_id_for(cpu_num: usize) -> ApicID {
 }
 
 // = APIC IMPL =
-pub struct LocalAPIC {
+pub struct LocalAPICConfig {
     pub local_id: LocalAPICId,
     pub siv: SpuriousInterruptVector,
-    pub icr: InterruptCommandRegister,
+}
+pub struct LocalVectorTable {
+    pub timer: LVTTimer,
+    pub cmci: LVTCMCI,
+    pub lint0: LVTLINT0,
+    pub lint1: LVTLINT1,
+    pub error: LVTError,
+    pub perfmon: LVTPerfMon,
+    pub thermal: LVTThermalSensor,
+}
+pub struct LocalAPIC {
+    pub config: Mutex<LocalAPICConfig>,
+    pub lvt: Mutex<LocalVectorTable>,
+    
+    pub icr: Mutex<InterruptCommandRegister>,
+    pub timer_counters: Mutex<TimerCounts>,
+    
+    pub eoi: EndOfInterrupt,
 }
 impl LocalAPIC {
     unsafe fn new(base:usize)->Self { Self {
-        local_id: LocalAPICId::new(base),
-        siv: SpuriousInterruptVector::new(base),
-        icr: InterruptCommandRegister::new(base),
+        config: Mutex::new(LocalAPICConfig {
+            local_id: LocalAPICId::new(base),
+            siv: SpuriousInterruptVector::new(base),
+        }),
+        
+        lvt: Mutex::new(LocalVectorTable {
+            timer: LVTTimer::new(base),
+            cmci: LVTCMCI::new(base),
+            lint0: LVTLINT0::new(base),
+            lint1: LVTLINT1::new(base),
+            error: LVTError::new(base),
+            perfmon: LVTPerfMon::new(base),
+            thermal: LVTThermalSensor::new(base),
+        }),
+        
+        icr: Mutex::new(InterruptCommandRegister::new(base)),
+        timer_counters: Mutex::new(TimerCounts::new(base)),
+        
+        eoi: EndOfInterrupt::new(base),
     }}
 }
 
@@ -157,6 +188,100 @@ impl SpuriousInterruptVector {
         if enable { siv |= SIV_APIC_ENABLED }
         else { siv &=! SIV_APIC_ENABLED };
         self.0.write_raw(siv);
+    }
+    pub fn set_spurious_vector(&mut self, vector: u8) {
+        let mut siv = self.0.read_raw();
+        // Clear and then set the spurious vector
+        siv &=! 0x0FF; siv |= vector as u32;
+        // Write
+        self.0.write_raw(siv);
+    }
+}
+
+pub struct LVTEntry<const OFFSET: usize, const DELIVERY_MODE_ENABLED: bool, const IS_LINT: bool, const IS_TIMER: bool>(MMIORegister32<true,true>);
+impl<const OFFSET: usize, const DELIVERY_MODE_ENABLED: bool, const IS_LINT: bool, const IS_TIMER: bool> LVTEntry<OFFSET,DELIVERY_MODE_ENABLED, IS_LINT, IS_TIMER> {
+    unsafe fn new(base:usize)->Self { Self(MMIORegister32::new(base, OFFSET)) }
+    
+    pub fn set_vector(&mut self, vector: u8){
+        let mut entry = self.0.read_raw();
+        entry &=! 0x0FF; entry |= vector as u32;
+        self.0.write_raw(entry);
+    }
+    
+    /* Returns true if an interrupt is waiting and has not been accepted yet. */
+    pub fn is_waiting(&mut self) -> bool {
+        (self.0.read_raw() & 0x0100) != 0  // Bit 12
+    }
+    
+    pub fn set_masked(&mut self, mask: bool){
+        const MASK_BIT: u32 = 0x010000;  // Bit 16
+        let mut entry = self.0.read_raw();
+        if mask { entry |= MASK_BIT }
+        else { entry &=! MASK_BIT };
+        self.0.write_raw(entry);
+    }
+}
+impl<const OFFSET: usize, const IS_LINT: bool, const IS_TIMER: bool> LVTEntry<OFFSET,true, IS_LINT, IS_TIMER> {
+    // that's a you problem tbh
+    pub fn set_delivery_mode(&mut self, delivery_mode: u8){
+        let delivery_bits = ((delivery_mode&0b0111) as u32)<<8;
+        let mut entry = self.0.read_raw();
+        entry &=! (0b0111<<8); entry |= delivery_bits;
+        self.0.write_raw(entry);
+    }
+}
+impl<const OFFSET: usize, const DELIVERY_MODE_ENABLED: bool, const IS_TIMER: bool> LVTEntry<OFFSET,DELIVERY_MODE_ENABLED,true,IS_TIMER> {
+    // i'll do it eventually
+}
+pub enum TimerMode { OneShot, Repeating, TSCDeadline }
+impl TimerMode { 
+    pub fn as_bits(&self) -> u8 {
+        use TimerMode::*;
+        match self {
+            OneShot => 0b00,
+            Repeating => 0b01,
+            TSCDeadline => 0b10,
+        }
+    }
+}
+impl<const OFFSET: usize, const DELIVERY_MODE_ENABLED: bool, const IS_LINT: bool> LVTEntry<OFFSET,DELIVERY_MODE_ENABLED,IS_LINT,true> {
+    pub fn set_timer_mode(&mut self, timer_mode: TimerMode){
+        let mode_bits = (timer_mode.as_bits() as u32)<<17;
+        let mut entry = self.0.read_raw();
+        entry &=! (0b011<<17); entry |= mode_bits;
+        self.0.write_raw(entry);
+    }
+}
+
+pub type LVTTimer = LVTEntry<0x320, false, false, true>;
+pub type LVTCMCI = LVTEntry<0x2F0, true, false, false>;
+pub type LVTLINT0 = LVTEntry<0x350, true, true, false>;
+pub type LVTLINT1 = LVTEntry<0x360, true, true, false>;
+pub type LVTError = LVTEntry<0x370, false, false, false>;
+pub type LVTPerfMon = LVTEntry<0x340, true, false, false>;
+pub type LVTThermalSensor = LVTEntry<0x330, true, false, false>;
+
+pub struct TimerCounts{initial: MMIORegister32<true,true>, current: MMIORegister32<true,true>}
+impl TimerCounts {
+    unsafe fn new(base:usize)->Self { Self{initial:MMIORegister32::new(base,0x380),current:MMIORegister32::new(base,0x390)} }
+    pub fn set_initial_count(&mut self, count: u32){
+        self.initial.write_raw(count);
+    }
+    pub fn get_current_count(&mut self) -> u32 {
+        self.current.read_raw()
+    }
+}
+
+pub struct EndOfInterrupt(MMIORegister32<false,true>);
+impl EndOfInterrupt {
+    unsafe fn new(base:usize)->Self { Self(MMIORegister32::new(base,0x0B0)) }
+    pub fn signal_eoi(&self){
+        // This is safe because it's a simple signal register
+        // it doesn't matter how many times it's called before or after
+        // as long as the number of times it's called == the number of interrupts received
+        unsafe {
+            self.0.unchecked_write_raw(0);  // must be a zero
+        }
     }
 }
 

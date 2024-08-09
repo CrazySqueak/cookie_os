@@ -28,9 +28,10 @@ pub unsafe fn start_processor_xapic(target_apic_id: crate::coredrivers::system_a
     // Send INIT-SIPI-SIPI
     let ipi_destination = system_apic::IPIDestination::APICId(target_apic_id);
     system_apic::with_local_apic(|apic|{
+        let mut icr = apic.icr.lock();
         klog!(Debug, CPU_MANAGEMENT, "Sending INIT to APIC ID {}", target_apic_id);
         // Send INIT
-        apic.icr.send_ipi(system_apic::InterProcessorInterrupt::INIT, ipi_destination);
+        icr.send_ipi(system_apic::InterProcessorInterrupt::INIT, ipi_destination);
         // Wait for CPU to initialise
         yield_to_scheduler(SchedulerCommand::SleepNTicks(20));
         
@@ -41,7 +42,7 @@ pub unsafe fn start_processor_xapic(target_apic_id: crate::coredrivers::system_a
         loop {
             klog!(Debug, CPU_MANAGEMENT, "Sending SIPI #{} to APIC ID {}", num_sent+1, target_apic_id);
             // Send SIPI
-            apic.icr.send_ipi(system_apic::InterProcessorInterrupt::SIPI(ap_trampoline_realmode as usize), ipi_destination);
+            icr.send_ipi(system_apic::InterProcessorInterrupt::SIPI(ap_trampoline_realmode as usize), ipi_destination);
             // Wait for CPU to boot
             yield_to_scheduler(SchedulerCommand::SleepNTicks(1));
             // Check processors_started

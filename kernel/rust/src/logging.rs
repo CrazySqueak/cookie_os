@@ -41,7 +41,7 @@ pub fn _kernel_log(level: LogLevel, component: &str, msg: &str, context: crate::
 
 macro_rules! klog {
     ($level: ident, $component:ident, $template:expr, $($x:expr),*) => {
-        crate::logging::klog!($level, $component, &alloc::format!($template, $($x),*));
+        crate::logging::klog!($level, $component, &alloc::format!($template, $($x),*))
     };
     
     ($level: ident, $component:ident, $msg: expr) => {
@@ -85,7 +85,7 @@ pub mod contexts {
         def_context!(MEMORY_PHYSICAL_RAMMAP, MEMORY_PHYSICAL);
         def_context!(MEMORY_PHYSICAL_ALLOCATOR, MEMORY_PHYSICAL, Warning);
       def_context!(MEMORY_ALLOCUTIL, MEMORY);
-    def_context!(FEATURE_FLAGS, ROOT);
+    def_context!(FEATURE_FLAGS, ROOT, Debug);
     def_context!(SCHEDULER, ROOT, Debug);
     def_context!(CPU_MANAGEMENT, ROOT, Debug);
     def_context!(COREDRIVERS, ROOT);

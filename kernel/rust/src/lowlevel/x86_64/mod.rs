@@ -5,6 +5,7 @@ mod lowlevel;
 pub mod multiboot;
 pub mod context_switch;  // testing
 pub mod smp;  // testing or smth
+mod featureflags; use featureflags::init_msr; use featureflags::init_msr_ap;
 
 pub use lowlevel::{halt, without_interrupts};
 
@@ -12,7 +13,7 @@ use crate::coredrivers::system_apic;
 
 /* Early BSP initialisation prior to paging/extendedheap/etc. setup. */
 pub fn init1_bsp() {
-    lowlevel::init_msr();
+    init_msr();
 }
 /* Late BSP initialisation to be done after paging / memory is initialised. */
 pub fn init2_bsp() {
@@ -25,7 +26,7 @@ pub fn init2_bsp() {
 }
 /* Early AP initialisation */
 pub fn init1_ap() {
-    lowlevel::init_msr_ap();
+    init_msr_ap();
 }
 /* Late AP initialisation */
 pub fn init2_ap() {

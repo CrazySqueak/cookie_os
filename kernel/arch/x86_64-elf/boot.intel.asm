@@ -257,7 +257,7 @@ db 'NO_MULTIBOOT',0
 .err_no_cpuid:
 db 'NO_CPUID',0
 .err_8086:
-db 'NO_THIS_IS_AN_INTEL_8086',0
+db 'What kind of useless computer is this anyway? It isn t even 64-bit!',0
 ; global descriptor table
 gdt64:
     dq 0 ; null entry

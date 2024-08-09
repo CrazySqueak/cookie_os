@@ -4,6 +4,7 @@ mod interrupts;
 mod lowlevel;
 pub mod multiboot;
 pub mod context_switch;  // testing
+pub mod smp;  // testing or smth
 
 pub use lowlevel::{halt, without_interrupts};
 

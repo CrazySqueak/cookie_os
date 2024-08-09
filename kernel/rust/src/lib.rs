@@ -32,10 +32,6 @@ mod multitasking;
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
 mod lowlevel;
 
-#[used]
-#[no_mangle]
-static next_processor_stack: u8 = 0;  // TODO
-
 // Like all init functions, this must be called ONCE. No more. No less.
 pub unsafe fn _kinit() {
     // Create initial heap
@@ -73,6 +69,9 @@ pub unsafe fn _kinit() {
     
     // Initialise scheduler
     multitasking::scheduler::init_scheduler();
+    
+    // Initialise local APIC
+    system_apic::init_local_apic();
 }
 
 #[no_mangle]
@@ -97,6 +96,9 @@ pub extern "sysv64" fn _kmain() -> ! {
         
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
     }
+    
+    // testing
+    unsafe { crate::lowlevel::smp::start_processor_xapic(1).expect("Failed to start processor!") };
     
     // TODO
     // For the love of god, please let other tasks run instead of blocking

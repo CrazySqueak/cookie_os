@@ -138,7 +138,7 @@ pub fn init_scheduler(){
         
         // All gucci :)
         // log message
-        klog!(Info, SCHEDULER, "Initialised scheduler on CPU {}. Bootstrapper task has become task {}.", 0, task_id);
+        klog!(Info, SCHEDULER, "Initialised scheduler on CPU {}. Bootstrapper task has become task {}.", super::get_cpu_num(), task_id);
         
         // Signal that scheduler is online
         super::BSP_SCHEDULER_READY.store(true,core::sync::atomic::Ordering::Release);

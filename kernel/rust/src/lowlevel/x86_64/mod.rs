@@ -8,18 +8,34 @@ pub mod smp;  // testing or smth
 
 pub use lowlevel::{halt, without_interrupts};
 
-/* Early initialisation prior to paging/extendedheap/etc. setup. */
-pub fn init() {
+use crate::coredrivers::system_apic;
+
+/* Early BSP initialisation prior to paging/extendedheap/etc. setup. */
+pub fn init1_bsp() {
     lowlevel::init_msr();
+}
+/* Late BSP initialisation to be done after paging / memory is initialised. */
+pub fn init2_bsp() {
+    // xAPIC
+    system_apic::init_local_apic();
+    
+    // GDT + Interrupts
     gdt::init();
     interrupts::init();
 }
-/* A version of init() that runs on APs. */
-pub fn init_ap() {
-    lowlevel::init_msr();
+/* Early AP initialisation */
+pub fn init1_ap() {
+    lowlevel::init_msr_ap();
+}
+/* Late AP initialisation */
+pub fn init2_ap() {
+    // xAPIC
+    system_apic::init_local_apic();
+    
     //gdt::init(); TODO: Init AP TSS
     //interrupts::init();
 }
+
 
 // TODO: Put somewhere
 // TODO: find a faster/better way to do this?

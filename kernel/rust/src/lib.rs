@@ -32,13 +32,17 @@ mod multitasking;
 #[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
 mod lowlevel;
 
-// Like all init functions, this must be called ONCE. No more. No less.
-pub unsafe fn _kinit() {
-    // Create initial heap
-    memory::kernel_heap::init_kheap();
+#[no_mangle]
+pub extern "sysv64" fn _kstart() -> ! {
+    multitasking::init_cpu_num();
+    // EARLY-BOOTSTRAP
     
-    // Initialise low-level functions
-    lowlevel::init();
+    // Create initial heap
+    unsafe{memory::kernel_heap::init_kheap();}
+    
+    // Initialise CPU/system
+    lowlevel::init1_bsp();
+    // BOOTSTRAP
     
     // Initialise physical memory
     memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
@@ -58,10 +62,14 @@ pub unsafe fn _kinit() {
         // Guess who doesn't have to manually map the kernel in lib.rs anymore because it's done in global_pages.rs!!!
     }
     // Activate context
-    pagetable.activate();
+    unsafe{pagetable.activate();}
+    // LATE-BOOTSTRAP
+    
+    // Initialise CPU/system (part II)
+    lowlevel::init2_bsp();
     
     // Initialise kernel heap rescue
-    memory::kernel_heap::init_kheap_2();
+    unsafe{memory::kernel_heap::init_kheap_2();}
     
     // Grow kernel heap by 16+8MiB for a total initial size of 32
     let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
@@ -69,16 +77,45 @@ pub unsafe fn _kinit() {
     
     // Initialise scheduler
     multitasking::scheduler::init_scheduler();
+    // EARLY-MULTIPROGRAM
     
-    // Initialise local APIC
-    system_apic::init_local_apic();
+    
+    
+    // Call kmain
+    _kmain();
 }
 
 #[no_mangle]
-pub extern "sysv64" fn _kmain() -> ! {
+pub extern "sysv64" fn _kstart_ap() -> ! {
     multitasking::init_cpu_num();
-    unsafe{_kinit();}
+    // Signal that we've started
+    //TODO//multitasking::scheduler::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
+    // EARLY-BOOTSTRAP
     
+    // Initialise CPU/system
+    lowlevel::init1_ap();
+    // BOOTSTRAP
+    
+    // Initialise paging
+    let page_table = memory::alloc_util::new_user_paging_context();
+    unsafe{page_table.activate();}
+    // LATE-BOOTSTRAP
+    
+    // Initialise CPU/system (part II)
+    lowlevel::init2_ap();
+    
+    // Initialise scheduler
+    multitasking::scheduler::init_scheduler();
+    // EARLY-MULTIPROGRAM
+    
+    
+    
+    // Call apmain since there's nothing else to do yet
+    _apmain();
+}
+
+#[no_mangle]
+pub fn _kmain() -> ! {
     VGA_WRITER.write_string("OKAY!! 👌👌👌👌");
     
     VGA_WRITER.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
@@ -90,7 +127,7 @@ pub extern "sysv64" fn _kmain() -> ! {
     for i in 0..3 {
         let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
         let rsp = unsafe { lowlevel::context_switch::_cs_new(test, kstack.bottom_vaddr() as *const u8) };
-        klog!(Info,ROOT,"newtask RSP={:p}", rsp);
+        //klog!(Info,ROOT,"newtask RSP={:p}", rsp);
         let task = unsafe { multitasking::Task::new_with_rsp(multitasking::TaskType::KernelTask, rsp, Some(alloc::boxed::Box::new(kstack))) };
         multitasking::scheduler::push_task(task);
         
@@ -106,24 +143,10 @@ pub extern "sysv64" fn _kmain() -> ! {
     multitasking::terminate_current_task();
 }
 
-use core::sync::atomic::{AtomicPtr,Ordering};
 #[no_mangle]
-pub extern "sysv64" fn _kapstart() -> ! {
-    multitasking::init_cpu_num();
-    // Signal that we've started
-    //TODO//multitasking::scheduler::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
-    
-    // Initialise CPU
-    lowlevel::init_ap();
-    // Initialise paging, scheduler, APIC
-    let page_table = memory::alloc_util::new_user_paging_context(); unsafe{page_table.activate();}  // remember to activate your page table before using MMIO you fucking idiot
-    multitasking::scheduler::init_scheduler();
-    system_apic::init_local_apic();
-    
-    // TODO
+pub fn _apmain() -> ! {
     klog!(Info,ROOT,"Hello :)");
-    todo!();
-    //loop{};
+    multitasking::terminate_current_task();
 }
 
 extern "sysv64" fn test() -> ! {

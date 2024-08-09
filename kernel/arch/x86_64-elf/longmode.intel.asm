@@ -27,8 +27,8 @@ long_mode_start:
     ; (the kernel will change the context on boot anyway)
     
     ; Hand control over to rust
-    extern _kmain
-    call _kmain
+    extern _kstart
+    call _kstart
     ; _kmain should never return
 
 global long_mode_ap_start
@@ -44,11 +44,13 @@ long_mode_ap_start:
     
     ; Initialise kernel stack
     mov rax, next_processor_stack
-    mov rsp, [rax]
+    mov qword rsp, [rax]
+    ; Set stack to zero, since we're using it - this can also signal to the kernel that we have successfully taken the stack
+    mov qword [rax], 0
     
     ; Hand control over to rust
-    extern _kapstart
-    call _kapstart
+    extern _kstart_ap
+    call _kstart_ap
     ; _kapstart should never return
 
 section .bss

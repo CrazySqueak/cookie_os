@@ -34,6 +34,11 @@ macro_rules! incompatible {
     }
 }
 
+use crate::sync::RwLock;
+use x86_64::registers::model_specific::EferFlags;
+use x86_64::registers::control::Cr4Flags;
+static _MSR_FLAGS: RwLock<Option<(EferFlags,Cr4Flags)>> = RwLock::new(None);
+
 use crate::logging::klog;
 pub fn init_msr(){
     // SAFETY: Care must be taken to set the flags correctly.
@@ -110,6 +115,20 @@ pub fn init_msr(){
         
         // Save flags
         klog!(Debug, FEATURE_FLAGS, "Writing changes to control registers: EFER={:?} CR4={:?}", eferflags, cr4flags);
+        Efer::write(eferflags);
+        Cr4::write(cr4flags);
+        
+        // Store flags for use by APs
+        let _=_MSR_FLAGS.write().insert((eferflags, cr4flags));
+    }
+}
+
+pub fn init_msr_ap(){
+    unsafe {
+        use x86_64::registers::model_specific::{Efer,EferFlags};
+        use x86_64::registers::control::{Cr4,Cr4Flags};
+        let (eferflags, cr4flags) = _MSR_FLAGS.read().expect("init_msr_ap called before BSP set its own flags!");
+        klog!(Debug, FEATURE_FLAGS, "Writing flags to control registers: EFER={:?} CR4={:?}", eferflags, cr4flags);
         Efer::write(eferflags);
         Cr4::write(cr4flags);
     }

@@ -3,11 +3,16 @@ use crate::lowlevel::{context_switch as cswitch_impl};
 use super::{Task,TaskType};
 use alloc::collections::VecDeque;
 use crate::logging::klog;
-use crate::sync::cpulocal::{CpuLocal,CpuLocalGuard,CpuLocalLockedOption,CpuLocalLockedItem};
+use crate::sync::cpulocal::{CpuLocal,CpuLocalGuard,CpuLocalLockedOption,CpuLocalLockedItem,CpuLocalNoInterruptsLockedItem};
+use core::sync::atomic::{AtomicUsize,Ordering};
 
 // Currently active task & run queue
 struct SchedulerState {
     run_queue: VecDeque<Task>, // TODO replace with a better run queue system
+    
+    /// Some internal IO tasks are currently put here when they need to sleep for a while
+    /// This will eventually be superseded by a proper "sleep" system
+    sleeping: VecDeque<(Task,usize)>,
     
     // Attempting to drop the most recent task causes an exception because its stack may still be in use
     // so instead we store it here V and drop it later on
@@ -17,6 +22,7 @@ impl core::default::Default for SchedulerState {
     fn default() -> Self {
         Self {
             run_queue: VecDeque::new(),
+            sleeping: VecDeque::new(),
             deferred_drop: None,
         }
     }
@@ -24,7 +30,8 @@ impl core::default::Default for SchedulerState {
 // current_task is stored separately to the rest of the state as it is commonly accessed by logging methods,
 // and usually isn't held for very long. If it was part of _SCHEDULER_STATE, then logging during with_scheduler_state! would cause a deadlock
 static _CURRENT_TASK: CpuLocalLockedOption<Task> = CpuLocalLockedOption::new();
-static _SCHEDULER_STATE: CpuLocalLockedItem<SchedulerState> = CpuLocal::new();
+static _SCHEDULER_STATE: CpuLocalNoInterruptsLockedItem<SchedulerState> = CpuLocalNoInterruptsLockedItem::new();
+static _SCHEDULER_TICKS: CpuLocal<AtomicUsize> = CpuLocal::new();
 
 pub type StackPointer = cswitch_impl::StackPointer;
 pub use cswitch_impl::yield_to_scheduler;
@@ -42,6 +49,8 @@ pub enum SchedulerCommand {
     PushBack,
     /// Discard the current task - it has terminated
     Terminate,
+    /// Sleep for the requested number of PIT ticks
+    SleepNTicks(usize),
 }
 
 /* Do not call this function yourself! (unless you know what you're doing). Use yield_to_scheduler instead!
@@ -59,6 +68,13 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
                 // Terminate the task
                 klog!(Debug, SCHEDULER, "Terminating task: {}", current_task.task_id);
                 state.deferred_drop = Some(current_task)
+            }
+            
+            SchedulerCommand::SleepNTicks(ticks) => {
+                // Sleep
+                let wake_at = get_scheduler_ticks() + ticks;
+                klog!(Debug, SCHEDULER, "Task {} sleeping for {} ticks. (until t={})", current_task.task_id, ticks, wake_at);
+                state.sleeping.push_back((current_task, wake_at));
             }
             
             _ => {
@@ -111,7 +127,7 @@ pub fn resume_context(task: Task) -> !{
     Once this has been called, it is ok to call yield_to_scheduler.
     (calling this again will discard a large amount of the scheduler's state for the current CPU, so uh, don't)*/
 pub fn init_scheduler(){
-    _SCHEDULER_STATE.mutate(|state|{
+    let boot_task = _SCHEDULER_STATE.mutate(|state|{
         // initialise run queue?
         state.run_queue.reserve(8);
         
@@ -119,15 +135,22 @@ pub fn init_scheduler(){
         // Note: resuming the task is undefined (however that is the same for all "currently active tasks" - as they must be paused first)
         let task = unsafe { Task::new_with_rsp(TaskType::KernelTask, core::ptr::null_mut(), None) };
         let task_id = task.task_id;
-        // Set current task
-        _CURRENT_TASK.insert(task);
         
         // All gucci :)
         // log message
         klog!(Info, SCHEDULER, "Initialised scheduler on CPU {}. Bootstrapper task has become task {}.", 0, task_id);
+        
         // Signal that scheduler is online
         super::BSP_SCHEDULER_READY.store(true,core::sync::atomic::Ordering::Release);
+        // Return the task
+        task
     });
+    
+    // Set current task
+    // We should not be holding any locks once we initialise the current task to a non-None value,
+    // as otherwise any unexpected event (or held lock) would attempt to yield to the scheduler
+    // (which cannot be done if the scheduler lock is held, causing what I think is a stack overflow)
+    _CURRENT_TASK.insert(boot_task);
 }
 
 /* Push a new task to the current scheduler's run queue. */
@@ -136,10 +159,26 @@ pub fn push_task(task: Task){
     _SCHEDULER_STATE.mutate(|state|state.run_queue.push_back(task))
 }
 
-//#[inline(always)]
-//pub(super) fn get_current_task() -> CpuLocalGuard<'static,Option<Task>> { let cg = _CURRENT_TASK.get() }
-//#[inline(always)]
-//pub(super) fn get_run_queue() -> CpuLocalGuard<'static,VecDeque<Task>> { let cg = _RUN_QUEUE.get() }
+/* Advances the scheduler's clock by 1 tick. Called by the PIT. */
+pub fn _scheduler_tick(){
+    _SCHEDULER_STATE.mutate(|state|{
+        let current_ticks = _SCHEDULER_TICKS.get().fetch_add(1, Ordering::SeqCst)+1;
+        
+        // wake tasks sleeping on clock ticks
+        // We go in reverse order to ensure that the indexes still line up 
+        for i in (0..state.sleeping.len()).rev() {
+            let (_, wake_at) = state.sleeping[i];
+            if wake_at <= current_ticks {
+                // Take item
+                // Since this is either the back, or we've already processed the back, we can safely perform a swap_remove_back
+                let (task, _) = state.sleeping.swap_remove_back(i).unwrap();
+                klog!(Debug, SCHEDULER, "Waking task: {}", task.task_id);
+                // Push to run queue
+                state.run_queue.push_back(task);
+            }
+        }
+    });
+}
 
 /* Returns true if the scheduler is currently executing a task. Returns false otherwise (i.e. it's instead executing bootstrap or scheduler code). */
 #[inline(always)]
@@ -150,4 +189,11 @@ pub fn is_executing_task() -> bool {
 #[inline(always)]
 pub fn get_executing_task_id() -> Option<usize> {
     _CURRENT_TASK.inspect(|ot|ot.as_ref().map(|t|t.task_id))
+}
+/* Get the current tick count on the current CPU's scheduler.
+This may differ between CPUs, and is not a good way of keeping time, but is lowlevel and does not rely on the RTC or anything complicated like that. 
+Will probably be deprecated once support for actual time is added. */
+#[inline(always)]
+pub fn get_scheduler_ticks() -> usize {
+    _SCHEDULER_TICKS.get().load(Ordering::Relaxed)
 }

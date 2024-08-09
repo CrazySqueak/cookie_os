@@ -56,7 +56,7 @@ impl<const W: bool, const IO_DESCENDING: bool> MMIORegisterR for MMIORegister64<
         if IO_DESCENDING { hi = self.rhi(); lo = self.rlo(); }
         else { lo = self.rlo(); hi = self.rhi(); }
         let hi: u64 = hi.into(); let lo: u64 = lo.into();
-        hi<<32 + lo
+        (hi<<32) | lo
     }
 }
 impl<const R: bool, const IO_DESCENDING: bool> MMIORegister64<R,true,IO_DESCENDING> {

@@ -140,9 +140,10 @@ impl GAllocatedStack {
         Additionally, it is offset-mapped rather than */
     #[inline]
     pub fn allocate_kboot() -> Option<Self> {
-        let alloc_size = 256*1024; let guard_size = 4096;  // we have to allocate the guard page in pmem as well because it's offset mapped
-        let physalloc = palloc(Layout::from_size_align(alloc_size+guard_size, 16).unwrap())?;
-        let vmemalloc = KERNEL_PTABLE.allocate_at(KERNEL_PTABLE.get_vmem_offset()+physalloc.get_addr(), physalloc.get_size())?;
+        // TBH i don't particularly remember how this works because brain fog but it works now so yay
+        let alloc_size = 256*1024; let guard_size = 4096;
+        let physalloc = palloc(Layout::from_size_align(alloc_size, 16).unwrap())?;
+        let vmemalloc = KERNEL_PTABLE.allocate_at(KERNEL_PTABLE.get_vmem_offset()+physalloc.get_addr()-guard_size, physalloc.get_size()+guard_size)?;  // make sure the guard page factored in despite not occupying any real memory
         Some(Self::from_allocations(&KERNEL_PTABLE, guard_size, physalloc, vmemalloc, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty())))
     }
 }

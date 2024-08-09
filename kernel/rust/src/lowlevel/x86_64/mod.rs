@@ -14,6 +14,12 @@ pub fn init() {
     gdt::init();
     interrupts::init();
 }
+/* A version of init() that runs on APs. */
+pub fn init_ap() {
+    lowlevel::init_msr();
+    //gdt::init(); TODO: Init AP TSS
+    //interrupts::init();
+}
 
 // TODO: Put somewhere
 // TODO: find a faster/better way to do this?

@@ -111,10 +111,18 @@ use core::sync::atomic::{AtomicPtr,Ordering};
 pub extern "sysv64" fn _kapstart() -> ! {
     multitasking::init_cpu_num();
     // Signal that we've started
-    todo!();//multitasking::scheduler::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
+    //TODO//multitasking::scheduler::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
     
-    // TODO: Init CPU?
-    //klog!(Info,ROOT,"Hello :)");
+    // Initialise CPU
+    lowlevel::init_ap();
+    // Initialise paging, scheduler, APIC
+    let page_table = memory::alloc_util::new_user_paging_context(); unsafe{page_table.activate();}  // remember to activate your page table before using MMIO you fucking idiot
+    multitasking::scheduler::init_scheduler();
+    system_apic::init_local_apic();
+    
+    // TODO
+    klog!(Info,ROOT,"Hello :)");
+    todo!();
     //loop{};
 }
 

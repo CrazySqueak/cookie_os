@@ -18,6 +18,7 @@ static next_processor_stack: AtomicUsize = AtomicUsize::new(0);
     Note: This function is not re-entrant.*/
 pub unsafe fn start_processor_xapic(target_apic_id: crate::coredrivers::system_apic::ApicID) -> Result<(),()> {
     use crate::coredrivers::system_apic;
+    use crate::multitasking::{yield_to_scheduler,SchedulerCommand};
     klog!(Info, CPU_MANAGEMENT, "Starting CPU with APIC ID {}", target_apic_id);
     // Allocate stack
     let stack = GAllocatedStack::allocate_kboot().ok_or(())?;
@@ -30,7 +31,8 @@ pub unsafe fn start_processor_xapic(target_apic_id: crate::coredrivers::system_a
         klog!(Debug, CPU_MANAGEMENT, "Sending INIT to APIC ID {}", target_apic_id);
         // Send INIT
         apic.icr.send_ipi(system_apic::InterProcessorInterrupt::INIT, ipi_destination);
-        // TODO: wait
+        // Wait for CPU to initialise
+        yield_to_scheduler(SchedulerCommand::SleepNTicks(20));
         
         // Send up to 3 SIPIs (usually takes 2, sometimes takes 1. should never take 3)
         // until the trampoline code has started
@@ -40,7 +42,8 @@ pub unsafe fn start_processor_xapic(target_apic_id: crate::coredrivers::system_a
             klog!(Debug, CPU_MANAGEMENT, "Sending SIPI #{} to APIC ID {}", num_sent+1, target_apic_id);
             // Send SIPI
             apic.icr.send_ipi(system_apic::InterProcessorInterrupt::SIPI(ap_trampoline_realmode as usize), ipi_destination);
-            // Wait TODO
+            // Wait for CPU to boot
+            yield_to_scheduler(SchedulerCommand::SleepNTicks(1));
             // Check processors_started
             num_sent += 1;
             if processors_started.load(Ordering::SeqCst) > prev_processors_started { break; }  // success

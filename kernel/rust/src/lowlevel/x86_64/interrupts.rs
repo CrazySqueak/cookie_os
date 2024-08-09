@@ -87,7 +87,7 @@ macro_rules! pic_interrupt_handler {
     }
 }
 pic_interrupt_handler!(PICInterrupt::Timer.as_u8(), timer_handler, {
-    // TODO
+    crate::multitasking::scheduler::_scheduler_tick();
 });
 
 // PS/2 Keyboard

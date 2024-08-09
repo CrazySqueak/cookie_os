@@ -55,7 +55,7 @@ impl ExecutionContext {
         Self {
             cpu_id: get_cpu_num(),
             task_id: scheduler::get_executing_task_id(),
-            scheduler_clock_ticks: 0,  // TODO
+            scheduler_clock_ticks: scheduler::get_scheduler_ticks(),
         }
     }
 }

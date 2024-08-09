@@ -126,7 +126,7 @@ impl InterProcessorInterrupt {
 pub struct InterruptCommandRegister(MMIORegister64<true,true,true>);
 impl InterruptCommandRegister {
     unsafe fn new(base:usize)->Self { Self(MMIORegister64::new(base, 0x300,0x310)) }
-    /* Send an IPI, blocking until it completes. */
+    /* Send an IPI, blocking until it has sent. */
     pub fn send_ipi(&mut self, ipi: InterProcessorInterrupt, dest: IPIDestination){
         klog!(Debug, COREDRIVERS_XAPIC, "Sending IPI {:?} to {:?}", ipi, dest);
         let (delivery_mode, ipi_vector) = ipi.destructure();
@@ -141,7 +141,10 @@ impl InterruptCommandRegister {
         self.0.write_raw(ipi_value);
         
         // Wait for it to send
-        todo!()
+        use crate::multitasking::{yield_to_scheduler,SchedulerCommand};
+        yield_to_scheduler(SchedulerCommand::PushBack);  // Ensure APIC has time to process our command
+        while self.0.read_raw()&0x1000 != 0 { yield_to_scheduler(SchedulerCommand::SleepNTicks(1)); }  // wait until the IPI has sent
+        // Done :)
     }
 }
 

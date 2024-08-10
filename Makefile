@@ -15,8 +15,11 @@ export BUILDNAME := $(ARCH)
 
 ifeq ($(INCLUDE_DEBUG_SYMBOLS),1)
 $(info Including debug symbols.)
+# include debug symbols
 export NASM := $(NASM) -g -F dwarf
 export BUILDNAME := $(BUILDNAME)-withsymbols
+# include unwind tables for backtracing
+export RUSTFLAGS:=-Cforce-unwind-tables $(RUSTFLAGS)
 else
 $(info Stripping debug symbols.)
 export LD := $(LD) -S

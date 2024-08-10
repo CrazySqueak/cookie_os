@@ -4,7 +4,7 @@ use super::{Task,TaskType};
 use alloc::collections::VecDeque;
 use crate::logging::klog;
 use crate::sync::cpulocal::{CpuLocal,CpuLocalGuard,CpuLocalLockedOption,CpuLocalLockedItem,CpuLocalNoInterruptsLockedItem};
-use core::sync::atomic::{AtomicUsize,Ordering};
+use core::sync::atomic::{AtomicUsize,AtomicBool,Ordering};
 
 // Currently active task & run queue
 struct SchedulerState {
@@ -33,6 +33,11 @@ static _CURRENT_TASK: CpuLocalLockedOption<Task> = CpuLocalLockedOption::new();
 static _SCHEDULER_STATE: CpuLocalNoInterruptsLockedItem<SchedulerState> = CpuLocalNoInterruptsLockedItem::new();
 static _SCHEDULER_TICKS: CpuLocal<AtomicUsize> = CpuLocal::new();
 
+// _IS_EXECUTING_TASK is a lock-free heuristic for checking if a task is not currently executing, even if the scheduler is not initialised yet on this CPU or if the scheduler is deadlocked
+// It is false when scheduler/bootstrap code is executing, and is true starting right before resume_context is called.
+// It is only intended as a heuristic. If you intend to interact with tasks properly, use a standard lock acquire and match statement.
+static _IS_EXECUTING_TASK: CpuLocal<AtomicBool> = CpuLocal::new();
+
 pub type StackPointer = cswitch_impl::StackPointer;
 pub use cswitch_impl::yield_to_scheduler;
 /* Terminate the current task. This is akin to calling yield_to_scheduler(Terminate), but returns the "!" type to hint that it cannot resume afterwards. */
@@ -57,6 +62,7 @@ pub enum SchedulerCommand {
     This function happens after the previous context is saved, but before the next one is loaded. It's this function's job to determine what to run next (and then run it). */
 #[inline]
 pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
+    _IS_EXECUTING_TASK.get().store(false, Ordering::Release);
     _SCHEDULER_STATE.mutate(|state|{
         // Update current task
         let mut current_task = _CURRENT_TASK.take().expect("schedule() called but no task currently active?");
@@ -119,6 +125,7 @@ pub fn resume_context(task: Task) -> !{
     {
         _CURRENT_TASK.insert(task);
     }  // <- lock gets dropped here
+    _IS_EXECUTING_TASK.get().store(true, Ordering::Release);
     // resume task
     unsafe { cswitch_impl::resume_context(rsp) };
 }
@@ -183,7 +190,7 @@ pub fn _scheduler_tick(){
 /* Returns true if the scheduler is currently executing a task. Returns false otherwise (i.e. it's instead executing bootstrap or scheduler code). */
 #[inline(always)]
 pub fn is_executing_task() -> bool {
-    _CURRENT_TASK.inspect(|ot|ot.is_some())
+    _IS_EXECUTING_TASK.get().load(Ordering::Relaxed) && _CURRENT_TASK.inspect(|ot|ot.is_some())
 }
 /* Get the ID of the current task, or None if the scheduler is running right now instead of a specific task. */
 #[inline(always)]

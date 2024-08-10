@@ -40,7 +40,7 @@ pub fn _kernel_log(level: LogLevel, component: &str, msg: &str, context: crate::
 }
 
 macro_rules! klog {
-    ($level: ident, $component:ident, $template:expr, $($x:expr),*) => {
+    ($level: ident, $component:ident, $template:literal, $($x:expr),*) => {
         crate::logging::klog!($level, $component, &alloc::format!($template, $($x),*))
     };
     
@@ -54,6 +54,25 @@ macro_rules! klog {
     };
 }
 pub(in crate) use klog;
+
+// For use in emergency situations, such as a kernel panic.
+// uses no heap allocation and forcibly bypasses locks
+// generally if you're using this function, shit is fucked and the program should be due to abort any second now
+macro_rules! emergency_kernel_log {
+    ($($msg:tt)*) => {
+        crate::lowlevel::without_interrupts(||{
+            use crate::coredrivers::serial_uart::SERIAL1;
+            use core::fmt::Write;
+            let mut serial = unsafe { loop { match SERIAL1.inner.try_lock() {
+                    Some(lock) => break lock,
+                    None => SERIAL1.inner.force_unlock(),
+                }
+            }};
+            let _ = write!(serial, $($msg)*);
+        })
+    }
+}
+pub(crate) use emergency_kernel_log;
 
 // Logging contexts allow filtered log levels to be configured per-context
 pub mod contexts {

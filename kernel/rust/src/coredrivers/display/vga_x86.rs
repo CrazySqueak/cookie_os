@@ -181,6 +181,12 @@ impl<'a> VGAConsoleWriter<'a> {
     }
 }
 
+impl core::fmt::Write for VGAConsoleWriter<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.write_string(s); Ok(())
+    }
+}
+
 // This writer uses spinlocks and without_interrupts(...) to ensure that no deadlocks or race conditions occur
 use crate::util::mutex_no_interrupts;
 mutex_no_interrupts!(LockedVGAConsoleWriter, 'a, VGAConsoleWriter<'a>);

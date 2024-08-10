@@ -8,7 +8,7 @@ macro_rules! mutex_no_interrupts {
         use crate::util::LockedNoInterrupts;
         #[repr(transparent)]
         pub struct $name<$($lifes),*> {
-            inner: crate::sync::Mutex<$wraps>
+            pub(crate) inner: crate::sync::Mutex<$wraps>
         }
         impl<$($lifes),*> $name<$($lifes),*>{
             pub const fn wraps(inner: $wraps) -> Self {

@@ -96,7 +96,7 @@ impl LocalAPIC {
     }}
 }
 
-pub struct LocalAPICId(MMIORegister32<true,true>);
+pub struct LocalAPICId(MMIORegister32<true,false>);  // technically it's writable but doing so could confuse the kernel
 impl LocalAPICId {
     unsafe fn new(base:usize)->Self { Self(MMIORegister32::new(base,0x020)) }
     pub fn read_id(&mut self) -> u8 {
@@ -289,3 +289,58 @@ impl EndOfInterrupt {
 //static SPURIOUS_INTERRUPT_VECTOR: APICRegister32<true,true> = unsafe{APICRegister32::new(LOCAL_APIC_MMIO_ROOT+0x0F0)};
 //static INTERRUPT_COMMAND_REGISTER: APICRegister64<true,true,true> = unsafe{APICRegister64::new(LOCAL_APIC_MMIO_ROOT+
 
+// I/O APIC
+mod ioapicreg_sealed {
+    pub type IOAPICRegID = u8;
+    pub struct IOAPICRegDef<const R: bool, const W: bool>(IOAPICRegID);
+    impl<const R:bool,const W:bool> IOAPICRegDef<R,W> { pub(super) const fn new(id: IOAPICRegID) -> Self { Self(id) } }
+    pub trait IOAPICReg{ fn get_id(&self) -> IOAPICRegID; }
+    impl<const R:bool,const W:bool> IOAPICReg for IOAPICRegDef<R,W> { fn get_id(&self) -> IOAPICRegID  { self.0 } }
+    pub trait IOAPICRegR: IOAPICReg {} impl<const W: bool> IOAPICRegR for IOAPICRegDef<true,W>{}
+    pub trait IOAPICRegW: IOAPICReg {} impl<const R: bool> IOAPICRegW for IOAPICRegDef<R,true>{}
+    pub trait IOAPICRegRW: IOAPICRegR + IOAPICRegW{} impl IOAPICRegRW for IOAPICRegDef<true,true>{}
+    
+    pub type IOAPICRegDefRO = IOAPICRegDef<true,false>;
+    pub type IOAPICRegDefWO = IOAPICRegDef<true,false>;
+    pub type IOAPICRegDefRW = IOAPICRegDef<true,false>;
+}
+pub use ioapicreg_sealed::{IOAPICRegID, IOAPICRegR, IOAPICRegW, IOAPICRegRW};
+use ioapicreg_sealed::{IOAPICRegDef,IOAPICRegDefRO,IOAPICRegDefWO,IOAPICRegDefRW};
+
+pub struct IOAPIC {
+    pub regselect: MMIORegister32<true,true>,
+    pub data: MMIORegister32<true,true>,
+}
+impl IOAPIC {
+    unsafe fn new(base: usize) -> Self { Self{regselect:MMIORegister32::new(base,0x00), data:MMIORegister32::new(base,0x10)} }
+    fn select_register_raw(&mut self, reg: IOAPICRegID){
+        self.regselect.write_raw(reg.into());  // bits 8-31 are reserved
+    }
+    fn read(&mut self, reg: &dyn IOAPICRegR) -> u32 {
+        self.select_register_raw(reg.get_id());
+        self.data.read_raw()
+    }
+    fn write(&mut self, reg: &dyn IOAPICRegW, data: u32) {
+        self.select_register_raw(reg.get_id());
+        self.data.write_raw(data);
+    }
+    fn read_modify_write(&mut self, reg: &dyn IOAPICRegRW, mutator: impl FnOnce(u32)->u32){
+        self.select_register_raw(reg.get_id());
+        let value = self.data.read_raw();
+        let value = mutator(value);
+        self.data.write_raw(value);
+    }
+    
+    // ID
+    pub const IOAPICID: IOAPICRegDefRO = IOAPICRegDefRO::new(0x00);
+    pub fn get_ioapic_id(&mut self) -> u8 {
+        // Bits [24,27] = id
+        ((self.read(&Self::IOAPICID)&0x0F00_0000)>>24).try_into().unwrap()
+    }
+    // VER
+    pub const IOAPICVER: IOAPICRegDefRO = IOAPICRegDefRO::new(0x01);
+    pub fn get_max_redirection_entry(&mut self) -> u8 {
+        // Bits [16,23]
+        ((self.read(&Self::IOAPICVER)&0x00FF_0000)>>16).try_into().unwrap()
+    }
+}

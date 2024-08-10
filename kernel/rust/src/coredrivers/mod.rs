@@ -12,8 +12,9 @@ pub mod util_mmio32;
 #[cfg_attr(target_arch = "x86_64", path = "keyboard/ps2_x86_64.rs")]
 pub mod keyboard_ps2;
 
-#[cfg_attr(target_arch = "x86_64", path = "system/uart_x86_64.rs")]
-pub mod system_uart; pub use system_uart as serial_uart;
+#[cfg_attr(target_arch = "x86_64", path = "serial/uart_x86_64.rs")]
+pub mod serial_uart;
+
 #[cfg_attr(target_arch = "x86_64", path = "system/xapic_x86_64.rs")]
 pub mod system_apic;
 

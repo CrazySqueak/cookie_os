@@ -40,7 +40,10 @@ static _IS_EXECUTING_TASK: CpuLocal<AtomicBool> = CpuLocal::new();
 
 pub type StackPointer = cswitch_impl::StackPointer;
 pub use cswitch_impl::yield_to_scheduler;
-/* Terminate the current task. This is akin to calling yield_to_scheduler(Terminate), but returns the "!" type to hint that it cannot resume afterwards. */
+/* Terminate the current task. This is akin to calling yield_to_scheduler(Terminate), but returns the "!" type to hint that it cannot resume afterwards.
+    This currently does not unwind the stack, so any objects you store in the stack will not be dropped. However, this may change in the future without warning (so be cautious but don't depend on it).
+    Anything held in the task object itself (e.g. stack allocations, handles to the relevant process/thread, etc.) will be dropped as normal
+        at a non-deterministic time in the near future (usually when another terminate call occurs in the scheduler, or sooner if i add a cleanup task that periodically cleans up terminated tasks). */
 #[inline]
 pub fn terminate_current_task() -> ! {
     yield_to_scheduler(SchedulerCommand::Terminate);
@@ -52,7 +55,8 @@ pub fn terminate_current_task() -> ! {
 pub enum SchedulerCommand {
     /// Push the current task back to the run_queue, and run it again once it's time
     PushBack,
-    /// Discard the current task - it has terminated
+    /// Discard the current task - it has terminated. (this does not perform unwinding).
+    /// It is preferred to use terminate_current_task or similar instead of yield_to_scheduler(Terminate) where possible.
     Terminate,
     /// Sleep for the requested number of PIT ticks
     SleepNTicks(usize),

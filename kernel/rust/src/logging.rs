@@ -90,6 +90,7 @@ pub mod contexts {
     pub const ROOT: LogLevel = DEFAULT_MIN_LOG_LEVEL;
     
     // Configure contexts in here! :)
+    def_context!(BOOT, ROOT);  // boot-time top-level progress messages
     def_context!(MEMORY, ROOT);
       def_context!(MEMORY_PAGING, MEMORY);
         def_context!(MEMORY_PAGING_CONTEXT, MEMORY_PAGING);
@@ -106,8 +107,8 @@ pub mod contexts {
       def_context!(MEMORY_ALLOCUTIL, MEMORY);
     def_context!(FEATURE_FLAGS, ROOT, Debug);
     def_context!(SCHEDULER, ROOT);
-    def_context!(CPU_MANAGEMENT, ROOT, Debug);
+    def_context!(CPU_MANAGEMENT, ROOT);
     def_context!(COREDRIVERS, ROOT);
-      def_context!(COREDRIVERS_XAPIC, COREDRIVERS, Debug);
+      def_context!(COREDRIVERS_XAPIC, COREDRIVERS);
       def_context!(COREDRIVERS_VGA, COREDRIVERS);
 }

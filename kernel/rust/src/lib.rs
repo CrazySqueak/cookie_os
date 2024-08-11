@@ -38,18 +38,20 @@ pub extern "sysv64" fn _kstart() -> ! {
     {   // N.B. anything that is owned here gets dropped before _kmain is called.
         // This is useful because terminate_current_task doesn't perform unwinding or drop any values held by the given task.
         
-        // EARLY-BOOTSTRAP
         // Create initial heap
         unsafe{memory::kernel_heap::init_kheap();}
         
         // Initialise CPU/system
         lowlevel::init1_bsp();
         // BOOTSTRAP
+        klog!(Info, BOOT, "Starting <OS_NAME> version <VERSION>...");
         
         // Initialise physical memory
+        klog!(Info, BOOT, "Reading memory map");
         memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
         
         // Initialise paging
+        klog!(Info, BOOT, "Configuring page tables");
         use alloc::boxed::Box;
         use memory::paging::{PagingContext,PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
         let pagetable = memory::alloc_util::new_user_paging_context();
@@ -58,19 +60,23 @@ pub extern "sysv64" fn _kstart() -> ! {
             let kallocator = &memory::paging::global_pages::KERNEL_PTABLE;
             
             // Memory-map the MMIO we're using
+            klog!(Info, BOOT, "Adding MMIO to page mappings");
             display_vga::map_vga_mmio().expect("Unable to map VGA buffer!").leak();
             system_apic::map_local_apic_mmio().expect("Unable to map local APIC buffer!").leak();
             
             // Guess who doesn't have to manually map the kernel in lib.rs anymore because it's done in global_pages.rs!!!
         }
         // Activate context
+        klog!(Info, BOOT, "Activating kernel-controlled page tables");
         unsafe{pagetable.activate();}
         // LATE-BOOTSTRAP
         
         // Initialise CPU/system (part II)
+        klog!(Info, BOOT, "Configuring CPU features and interrupts");
         lowlevel::init2_bsp();
         
         // Initialise kernel heap rescue
+        klog!(Info, BOOT, "Expanding kernel heap");
         unsafe{memory::kernel_heap::init_kheap_2();}
         
         // Grow kernel heap by 16+8MiB for a total initial size of 32
@@ -78,10 +84,13 @@ pub extern "sysv64" fn _kstart() -> ! {
         let _ = memory::kernel_heap::grow_kheap( 8*1024*1024);
         
         // Initialise scheduler
+        klog!(Info, BOOT, "Configuring scheduler");
         multitasking::scheduler::init_scheduler();
         // EARLY-MULTIPROGRAM
+        klog!(Info, BOOT, "Entered multiprogram phase.");
         
         // Begin waking processors
+        klog!(Info, BOOT, "Starting CPU cores (executing in background)");
         // TODO: create spawn() function that wraps task creation
         {
             let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
@@ -93,12 +102,14 @@ pub extern "sysv64" fn _kstart() -> ! {
     }
     
     // Call kmain
+    klog!(Info, BOOT, "Bootstrapping complete. Executing _kmain().");
     _kmain();
 }
 
 #[no_mangle]
 pub extern "sysv64" fn _kstart_ap() -> ! {
     multitasking::init_cpu_num();
+    klog!(Info, BOOT, "Secondary CPU initialising");
     {   // N.B. Everything used in initialisation should be dropped before the call to _apmain, because terminate_current_task doesn't perform unwinding
         
         // Signal that we've started
@@ -121,6 +132,7 @@ pub extern "sysv64" fn _kstart_ap() -> ! {
         multitasking::scheduler::init_scheduler();
         // EARLY-MULTIPROGRAM
     }
+    klog!(Info, BOOT, "Secondary CPU successfully entered multiprogram phase. Executing _apmain().");
     
     // Call apmain since there's nothing else to do yet
     _apmain();

@@ -80,6 +80,16 @@ pub extern "sysv64" fn _kstart() -> ! {
         // Initialise scheduler
         multitasking::scheduler::init_scheduler();
         // EARLY-MULTIPROGRAM
+        
+        // Begin waking processors
+        // TODO: create spawn() function that wraps task creation
+        {
+            let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
+            let rsp = unsafe { lowlevel::context_switch::_cs_new(_start_processors_task, kstack.bottom_vaddr() as *const u8) };
+            let task = unsafe { multitasking::Task::new_with_rsp(multitasking::TaskType::KernelTask, rsp, Some(alloc::boxed::Box::new(kstack))) };
+            multitasking::scheduler::push_task(task);
+            multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);  // yield immediately since starting processors is I/O-bound and will yield to us pretty soon
+        }
     }
     
     // Call kmain
@@ -136,9 +146,6 @@ pub fn _kmain() -> ! {
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
     }
     
-    // testing
-    unsafe { crate::lowlevel::smp::start_processor_xapic(1).expect("Failed to start processor!") };
-    
     // TODO
     // For the love of god, please let other tasks run instead of blocking
     // pre-emption hasn't been implemented yet
@@ -156,6 +163,13 @@ extern "sysv64" fn test() -> ! {
         klog!(Info,ROOT,"{}", i);
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
     }
+    multitasking::terminate_current_task();
+}
+
+extern "sysv64" fn _start_processors_task() -> ! {
+    // Start processors
+    unsafe { lowlevel::start_all_processors(); }
+    // Terminate
     multitasking::terminate_current_task();
 }
 

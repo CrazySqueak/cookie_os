@@ -39,13 +39,13 @@ pub fn init_cpu_num(){
 /* Get the CPU number for the local CPU.
     CPU numbers are assigned sequentially, so CPU 0 is the bootstrap processor, CPU 1 is the first AP to start, etc. */
 #[inline(always)]
-pub fn get_cpu_num() -> u16 {
-    crate::lowlevel::_load_cpu_num()
+pub fn get_cpu_num() -> usize {
+    crate::lowlevel::_load_cpu_num().into()
 }
 
 // A snapshot of the execution context. Mostly useful for annotating log messages and the like.
 pub struct ExecutionContext {
-    pub cpu_id: u16,
+    pub cpu_id: usize,
     pub task_id: Option<usize>,
     pub scheduler_clock_ticks: usize,
 }

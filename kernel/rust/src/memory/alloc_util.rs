@@ -142,8 +142,21 @@ impl GAllocatedStack {
     pub fn allocate_kboot() -> Option<Self> {
         // TBH i don't particularly remember how this works because brain fog but it works now so yay
         let alloc_size = 256*1024; let guard_size = 4096;
-        let physalloc = palloc(Layout::from_size_align(alloc_size, 16).unwrap())?;
-        let vmemalloc = KERNEL_PTABLE.allocate_at(KERNEL_PTABLE.get_vmem_offset()+physalloc.get_addr()-guard_size, physalloc.get_size()+guard_size)?;  // make sure the guard page factored in despite not occupying any real memory
+        // Note: we keep retrying until we get one that's able to be offset mapped
+        // (slow but eh it'll hold)
+        let mut failed = alloc::vec::Vec::<PhysicalMemoryAllocation>::new();
+        let (physalloc, vmemalloc) = loop {
+            let physalloc = palloc(Layout::from_size_align(alloc_size, 4096).unwrap())?;
+              // make sure the guard page factored in despite not occupying any real memory
+            match KERNEL_PTABLE.allocate_at(KERNEL_PTABLE.get_vmem_offset()+physalloc.get_addr()-guard_size, physalloc.get_size()+guard_size){
+                Some(vmemalloc) => break (physalloc, vmemalloc),  // OK :)
+                None => {
+                    // We failed to offset-map that section of memory, so try again.
+                    failed.push(physalloc);  // store the failed allocation in a vec for now, so that the allocator is forced to give us a new chunk of memory (but the unused physical allocations are dropped again once we're finished)
+                    continue;
+                }
+            }
+        };
         Some(Self::from_allocations(&KERNEL_PTABLE, guard_size, physalloc, vmemalloc, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty())))
     }
 }

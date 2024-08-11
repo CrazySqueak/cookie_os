@@ -31,7 +31,7 @@ impl<T: Default> CpuLocal<T> {
     /* Get the T for the current CPU. */
     #[inline(always)]
     pub fn get(&self) -> CpuLocalGuard<T> {
-        self.get_for(get_cpu_num().into())
+        self.get_for(get_cpu_num())
     }
 }
 

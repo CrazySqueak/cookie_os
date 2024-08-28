@@ -1,4 +1,4 @@
-use kapi::scheduler::{SchedulerCommand,schedule,StackPointer};
+use crate::multitasking::scheduler as cswitch_api;
 
 extern "sysv64" {
     /* Trigger a context switch, invoking the scheduler in order to do so.
@@ -13,17 +13,19 @@ extern "sysv64" {
     pub fn _cs_new(entrypoint: extern "sysv64" fn() -> !, stack: *const u8) -> *const u8;
 }
 
+pub type StackPointer = *const u8;
+
 use alloc::boxed::Box;  // box is used for passing across the command
 
 /* Scheduler callback triggered by _cs_push. */
 #[no_mangle]
-unsafe extern "sysv64" fn contextswitch_scheduler_cb(command: *mut SchedulerCommand, rsp: StackPointer) -> ! {
-    schedule(Box::into_inner(Box::from_raw(command)), rsp);
+unsafe extern "sysv64" fn contextswitch_scheduler_cb(command: *mut cswitch_api::SchedulerCommand, rsp: StackPointer) -> ! {
+    cswitch_api::schedule(Box::into_inner(Box::from_raw(command)), rsp);
 }
 
 /* Begin a context switch by calling _cs_push, yielding to the scheduler. Return once this thread resumes. */
 #[inline]
-pub fn yield_to_scheduler(command: SchedulerCommand) -> () {
+pub fn yield_to_scheduler(command: cswitch_api::SchedulerCommand) -> () {
     let command_ptr = Box::into_raw(Box::new(command));
     unsafe { _cs_push(command_ptr as *mut u8) }
 }

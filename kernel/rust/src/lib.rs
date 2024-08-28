@@ -10,7 +10,6 @@
 #![allow(dead_code)]
 
 extern crate alloc;
-
 use core::panic::PanicInfo;
 use alloc::format;
 

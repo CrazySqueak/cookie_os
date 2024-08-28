@@ -3,9 +3,10 @@ pub trait LockedNoInterrupts {
     fn with_lock<R,F: FnOnce(crate::sync::MutexGuard<Self::Wraps>)->R>(&self, f: F) -> R;
 }
 
+#[macro_export]
 macro_rules! mutex_no_interrupts {
     ($name:ident, $($lifes:lifetime),*, $wraps:ty) => {
-        use crate::util::LockedNoInterrupts;
+        use $crate::LockedNoInterrupts;
         #[repr(transparent)]
         pub struct $name<$($lifes),*> {
             pub(crate) inner: crate::sync::Mutex<$wraps>
@@ -30,7 +31,7 @@ macro_rules! mutex_no_interrupts {
         mutex_no_interrupts!($name,,$wraps);
     };
 }
-pub(crate) use mutex_no_interrupts;
+pub use mutex_no_interrupts;
 
 use core::fmt::Write;
 pub trait LockedWrite {

@@ -39,6 +39,7 @@ pub fn _kernel_log(level: LogLevel, component: &str, msg: &str, context: crate::
     let _ = SERIAL1.write_str(&msg);
 }
 
+#[macro_export]
 macro_rules! klog {
     ($level: ident, $component:ident, $template:literal, $($x:expr),*) => {
         crate::logging::klog!($level, $component, &alloc::format!($template, $($x),*))
@@ -46,18 +47,19 @@ macro_rules! klog {
     
     ($level: ident, $component:ident, $msg: expr) => {
         {
-            use crate::logging::LogLevel::*;
-            use crate::logging::contexts::*;
+            use $crate::LogLevel::*;
+            use $crate::contexts::*;
             use crate::multitasking::ExecutionContext;
-            if const { ($level as u8) >= ($component as u8) } { crate::logging::_kernel_log($level, stringify!($component), $msg, ExecutionContext::current(), file!(), line!(), column!()) };
+            if const { ($level as u8) >= ($component as u8) } { $crate::_kernel_log($level, stringify!($component), $msg, ExecutionContext::current(), file!(), line!(), column!()) };
         }
     };
 }
-pub(in crate) use klog;
+pub use klog;
 
 // For use in emergency situations, such as a kernel panic.
 // uses no heap allocation and forcibly bypasses locks
 // generally if you're using this function, shit is fucked and the program should be due to abort any second now
+#[macro_export]
 macro_rules! emergency_kernel_log {
     ($($msg:tt)*) => {
         crate::lowlevel::without_interrupts(||{
@@ -72,7 +74,7 @@ macro_rules! emergency_kernel_log {
         })
     }
 }
-pub(crate) use emergency_kernel_log;
+pub use emergency_kernel_log;
 
 // Logging contexts allow filtered log levels to be configured per-context
 pub mod contexts {

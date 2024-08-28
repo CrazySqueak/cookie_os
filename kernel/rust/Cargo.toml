@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
+# kapi - declarations for types + forward-declarations for some functions
+# arch_x - arch specific stuff
 # kcore - core features such as logging
-members = [
+members = [ 
+    "kapi",
+    "arch_x86_64",
     "kcore",
 ]
 
@@ -14,6 +18,8 @@ buddy_system_allocator = "0.10.0"
 volatile = "0.2.6"
 spin = "0.9.8"
 uart_16550 = "0.3.0"
+
+kcore = { path="./kcore" }
 
 [dependencies.lazy_static]
 version = "1.0"
@@ -27,25 +33,24 @@ version = "1.13.0"
 default-features = false 
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
-x86_64 = "0.15.1"
-pic8259 = "0.10.1"
-pc-keyboard = "0.7.0"
-raw-cpuid = { git = "https://github.com/CrazySqueak/rust-cpuid.git", branch = "os_test_2" }
+arch = { package="arch_x86_64", path="./arch_x86_64" }
 
 [features]
+### CPU FEATURES
 # Enables 1GiB Huge Pages on x86_64 systems. This is a relatively new feature and is not supported by all CPUs.
-1G_huge_pages = []
+1G_huge_pages = ["arch/1G_huge_pages"]
 # Enables the NXE (No-Execute) Page Entry bit (bit 63) on x86_64 systems.
-per_page_NXE_bit = []
+per_page_NXE_bit = ["arch/per_page_NXE_bit"]
 # Enables the G (Global) bit in page mappings, on x86_64 systems.
-page_global_bit = []
+page_global_bit = ["arch/page_global_bit"]
 # Enables the TCE (Translation Cache Extensions) system in the EFER register, for AMD64 (x86_64) systems. (See https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24593.pdf §3.1.7)
 # TCE makes some things faster by not clearing some TLB caches, but requires the OS to be aware of it and take it into account.
 # I have no clue how invlpg actually works so my code is already compatible (as I made the most conservative assumption)
 # Note: This is not present in the latest Intel manual https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html §4.2.1 Pg2-64 under IA32_EFER
 # If this feature is enabled but unsupported, it will be ignored.
-enable_amd64_TCE = []
+enable_amd64_TCE = ["arch/enable_amd64_TCE"]
 
+### MISC
 # If enabled, a kernel panic caused by a task will terminate that task instead of shutting down the entire system.
 # Kernel panics should only happen in this way due to bugs or similar conditions, and the resulting system may be unstable.
 # However, this setting may come in handy on release builds, for resilience

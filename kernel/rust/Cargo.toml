@@ -3,6 +3,12 @@ name = "kernel_rs"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+# kcore - core features such as logging
+members = [
+    "kcore",
+]
+
 [dependencies]
 buddy_system_allocator = "0.10.0"
 volatile = "0.2.6"

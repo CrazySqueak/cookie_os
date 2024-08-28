@@ -42,15 +42,15 @@ pub fn _kernel_log(level: LogLevel, component: &str, msg: &str, context: crate::
 #[macro_export]
 macro_rules! klog {
     ($level: ident, $component:ident, $template:literal, $($x:expr),*) => {
-        crate::logging::klog!($level, $component, &alloc::format!($template, $($x),*))
+        $crate::logging::klog!($level, $component, &alloc::format!($template, $($x),*))
     };
     
     ($level: ident, $component:ident, $msg: expr) => {
         {
-            use crate::logging::LogLevel::*;
-            use crate::logging::contexts::*;
-            use crate::multitasking::ExecutionContext;
-            if const { ($level as u8) >= ($component as u8) } { crate::logging::_kernel_log($level, stringify!($component), $msg, ExecutionContext::current(), file!(), line!(), column!()) };
+            use $crate::logging::LogLevel::*;
+            use $crate::logging::contexts::*;
+            use $crate::multitasking::ExecutionContext;
+            if const { ($level as u8) >= ($component as u8) } { $crate::logging::_kernel_log($level, stringify!($component), $msg, ExecutionContext::current(), file!(), line!(), column!()) };
         }
     };
 }
@@ -62,8 +62,8 @@ pub use klog;
 #[macro_export]
 macro_rules! emergency_kernel_log {
     ($($msg:tt)*) => {
-        crate::lowlevel::without_interrupts(||{
-            use crate::coredrivers::serial_uart::SERIAL1;
+        $crate::lowlevel::without_interrupts(||{
+            use $crate::coredrivers::serial_uart::SERIAL1;
             use core::fmt::Write;
             let mut serial = unsafe { loop { match SERIAL1.inner.try_lock() {
                     Some(lock) => break lock,

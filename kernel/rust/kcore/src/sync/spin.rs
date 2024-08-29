@@ -1,14 +1,15 @@
 use spin::relax::{RelaxStrategy,Spin};
-use crate::multitasking::{is_bsp_scheduler_initialised,is_executing_task,yield_to_scheduler,SchedulerCommand};
+//use crate::multitasking::{is_bsp_scheduler_initialised,is_executing_task,yield_to_scheduler,SchedulerCommand};
+use crate::forward::scheduler;
 
 pub struct SchedulerYield;
 impl RelaxStrategy for SchedulerYield {
     #[inline(always)]
     fn relax(){
-        if is_bsp_scheduler_initialised() {
-            if is_executing_task() {
+        if true{//is_bsp_scheduler_initialised() {  // TODO
+            if scheduler::is_executing_task() {
                 // Yield
-                yield_to_scheduler(SchedulerCommand::PushBack)
+                scheduler::spin_yield()
             } else {
                 // Our scheduler is not executing a task, so we cannot yield to it - this means we are probably the scheduler
                 // it is likely that another CPU is accessing this resource and we simply have to spin and hope it unblocks (because the scheduler can't continue without it)

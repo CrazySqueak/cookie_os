@@ -1,7 +1,7 @@
 use super::{RwLock,RwLockReadGuard};
 use alloc::vec::Vec;
 use core::default::Default;
-use crate::multitasking::get_cpu_num;
+use crate::status::{get_cpu_num,CpuID};
 use core::ops::{Deref,DerefMut};
 use crate::lowlevel::without_interrupts;
 
@@ -11,21 +11,21 @@ impl<T: Default> CpuLocal<T> {
         Self(RwLock::new(Vec::new()))
     }
     
-    fn _initialise_empty_values(&self, v: RwLockReadGuard<Vec<T>>, id: usize) -> RwLockReadGuard<Vec<T>> {
+    fn _initialise_empty_values(&self, v: RwLockReadGuard<Vec<T>>, up_to: usize) -> RwLockReadGuard<Vec<T>> {
         drop(v);  // Drop the old guard so it doesn't block us
         let mut vu = self.0.write();  // currently cannot grab an upgradeable read as that can cause deadlocks in some rare cases
-        while vu.len() <= id { vu.push(T::default()) };  // push new values so that `id` is a valid index
+        while vu.len() <= up_to { vu.push(T::default()) };  // push new values so that `up_to` is a valid index
         vu.downgrade()  // downgrade back to a read guard now our job is done
     }
     
     /* Get the T for the CPU with the given number. */
     #[inline(always)]
-    pub fn get_for(&self, id: usize) -> CpuLocalGuard<T> {
+    pub fn get_for(&self, id: CpuID) -> CpuLocalGuard<T> {
         let v = self.0.read();
-        let v = if v.len() <= id {
-            self._initialise_empty_values(v,id)
+        let v = if v.len() <= id.into() {
+            self._initialise_empty_values(v,id.into())
         } else { v };
-        CpuLocalGuard(v, id)
+        CpuLocalGuard(v, id.into())
     }
     
     /* Get the T for the current CPU. */

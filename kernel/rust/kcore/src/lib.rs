@@ -28,5 +28,6 @@ pub mod logging;
 pub mod util;
 pub mod sync;
 pub mod forward;
+pub mod status;
 
 //arch_specific_module!(pub mod lowlevel);

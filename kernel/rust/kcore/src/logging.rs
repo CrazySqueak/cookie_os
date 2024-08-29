@@ -1,5 +1,6 @@
 use alloc::format;
 use core::{file,line};
+use lazy_static::lazy_static;
 
 #[derive(Debug,Clone,Copy,PartialOrd,Ord,PartialEq,Eq)]
 #[repr(u8)]
@@ -31,26 +32,66 @@ impl LogLevel {
     }
 }
 
-use crate::coredrivers::serial_uart::SERIAL1;
-use crate::util::LockedWrite;
-pub fn _kernel_log(level: LogLevel, component: &str, msg: &str, context: crate::multitasking::ExecutionContext, file: &str, line: u32, column: u32){
-    let msg = format!("[{}] {}: {} - {} ({}:{}:{})\r\n", level.name(), context, component, msg, file, line, column);
-    
-    let _ = SERIAL1.write_str(&msg);
+// use crate::coredrivers::serial_uart::SERIAL1;
+// LOG DESTINATIONS
+use alloc::{boxed::Box,vec::Vec};
+pub trait LogFormatter: Send {
+    fn format_log_message(&self, level: LogLevel, component: &str, msg: &str, file: &str, line: u32, column: u32) -> alloc::string::String;
+}
+pub struct DefaultLogFormatter();
+impl LogFormatter for DefaultLogFormatter {
+    fn format_log_message(&self, level: LogLevel, component: &str, msg: &str, file: &str, line: u32, column: u32) -> alloc::string::String {
+        format!("[{}] BOOT: {} - {} ({}:{}:{})", level.name(), component, msg, file, line, column)
+    }
 }
 
+pub struct LoggingContext {
+    formatter: Box<dyn LogFormatter>,
+    destinations: Vec<Box<dyn core::fmt::Write + Send>>,
+}
+impl core::default::Default for LoggingContext {
+    fn default() -> Self {
+        Self {
+            formatter: Box::new(DefaultLogFormatter()),
+            destinations: Vec::new(),
+        }
+    }
+}
+
+lazy_static! {
+    static ref CONTEXT: crate::sync::Mutex<LoggingContext> = crate::sync::Mutex::default();
+}
+
+pub fn _kernel_log(level: LogLevel, component: &str, msg: &(impl core::fmt::Display + ?Sized), file: &str, line: u32, column: u32){
+    let mut context = CONTEXT.lock();
+    let formatted = context.formatter.format_log_message(level, component, &format!("{}",msg), file, line, column);
+    for dest in context.destinations.iter_mut() {
+        let _=write!(dest,"{}\r\n",formatted);
+    }
+}
+pub fn update_logging_context(updater: impl FnOnce(&mut LoggingContext)) {
+    let mut context = CONTEXT.lock();
+    updater(&mut context);
+}
+// pub fn _kernel_log(level: LogLevel, component: &str, msg: &str, context: crate::multitasking::ExecutionContext, file: &str, line: u32, column: u32){
+//     let msg = format!("[{}] {}: {} - {} ({}:{}:{})\r\n", level.name(), context, component, msg, file, line, column);
+//     
+//     let _ = SERIAL1.write_str(&msg);
+// }
+
+
+// LOGGING MACROS
 #[macro_export]
 macro_rules! klog {
     ($level: ident, $component:ident, $template:literal, $($x:expr),*) => {
-        $crate::logging::klog!($level, $component, &alloc::format!($template, $($x),*))
+        $crate::logging::klog!($level, $component, &core::format_args!($template, $($x),*))
     };
     
     ($level: ident, $component:ident, $msg: expr) => {
         {
             use $crate::logging::LogLevel::*;
             use $crate::logging::contexts::*;
-            use $crate::multitasking::ExecutionContext;
-            if const { ($level as u8) >= ($component as u8) } { $crate::logging::_kernel_log($level, stringify!($component), $msg, ExecutionContext::current(), file!(), line!(), column!()) };
+            if const { ($level as u8) >= ($component as u8) } { $crate::logging::_kernel_log($level, stringify!($component), $msg, file!(), line!(), column!()) };
         }
     };
 }
@@ -76,6 +117,7 @@ macro_rules! emergency_kernel_log {
 }
 pub use emergency_kernel_log;
 
+// LOGGING CONTEXTS
 // Logging contexts allow filtered log levels to be configured per-context
 pub mod contexts {
     use super::LogLevel; use LogLevel::*;

@@ -1,5 +1,6 @@
 use alloc::format;
 use core::{file,line};
+use lazy_static::lazy_static;
 
 #[derive(Debug,Clone,Copy,PartialOrd,Ord,PartialEq,Eq)]
 #[repr(u8)]
@@ -31,29 +32,79 @@ impl LogLevel {
     }
 }
 
-use crate::coredrivers::serial_uart::SERIAL1;
+// LOG FORMATTING
+use alloc::{boxed::Box,vec::Vec};
+pub trait LogFormatter: Send {
+    fn format_log_message(&self, level: LogLevel, component: &str, msg: &str, file: &str, line: u32, column: u32) -> alloc::string::String;
+}
+pub struct DefaultLogFormatter();
+impl LogFormatter for DefaultLogFormatter {
+    fn format_log_message(&self, level: LogLevel, component: &str, msg: &str, file: &str, line: u32, column: u32) -> alloc::string::String {
+        let context = crate::multitasking::ExecutionContext::current();
+        format!("[{}] {}: {} - {} ({}:{}:{})", level.name(), context, component, msg, file, line, column)
+    }
+}
+
+// LOG DESTINATIONS
 use crate::util::LockedWrite;
-pub fn _kernel_log(level: LogLevel, component: &str, msg: &str, context: crate::multitasking::ExecutionContext, file: &str, line: u32, column: u32){
-    let msg = format!("[{}] {}: {} - {} ({}:{}:{})\r\n", level.name(), context, component, msg, file, line, column);
-    
-    let _ = SERIAL1.write_str(&msg);
+struct Serial1(&'static crate::coredrivers::serial_uart::LockedSerialPort);
+impl core::fmt::Write for Serial1 {
+    fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error>{
+        self.0.write_str(s)
+    }
+    fn write_char(&mut self, c: char) -> Result<(), core::fmt::Error>{
+        self.0.write_char(c)
+    }
+    fn write_fmt(&mut self, args: core::fmt::Arguments<'_>) -> Result<(), core::fmt::Error>{
+        self.0.write_fmt(args)
+    }
+}
+
+// FORMATTER/DESTINATION SELECTION
+pub struct LoggingContext {
+    formatter: Box<dyn LogFormatter>,
+    destinations: Vec<Box<dyn core::fmt::Write + Send>>,
+}
+impl core::default::Default for LoggingContext {
+    fn default() -> Self {
+        let serial1: Box<dyn core::fmt::Write + Send> = Box::new(Serial1(&crate::coredrivers::serial_uart::SERIAL1));
+        Self {
+            formatter: Box::new(DefaultLogFormatter()),
+            destinations: Vec::from([serial1]),
+        }
+    }
+}
+
+lazy_static! {
+    static ref CONTEXT: crate::sync::Mutex<LoggingContext> = crate::sync::Mutex::default();
+}
+
+pub fn _kernel_log(level: LogLevel, component: &str, msg: &(impl core::fmt::Display + ?Sized), file: &str, line: u32, column: u32){
+    let mut context = CONTEXT.lock();
+    let formatted = context.formatter.format_log_message(level, component, &format!("{}",msg), file, line, column);
+    for dest in context.destinations.iter_mut() {
+        let _=write!(dest,"{}\r\n",formatted);
+    }
+}
+pub fn update_logging_context(updater: impl FnOnce(&mut LoggingContext)) {
+    let mut context = CONTEXT.lock();
+    updater(&mut context);
 }
 
 macro_rules! klog {
     ($level: ident, $component:ident, $template:literal, $($x:expr),*) => {
-        crate::logging::klog!($level, $component, &alloc::format!($template, $($x),*))
+        $crate::logging::klog!($level, $component, &core::format_args!($template, $($x),*))
     };
     
     ($level: ident, $component:ident, $msg: expr) => {
         {
-            use crate::logging::LogLevel::*;
-            use crate::logging::contexts::*;
-            use crate::multitasking::ExecutionContext;
-            if const { ($level as u8) >= ($component as u8) } { crate::logging::_kernel_log($level, stringify!($component), $msg, ExecutionContext::current(), file!(), line!(), column!()) };
+            use $crate::logging::LogLevel::*;
+            use $crate::logging::contexts::*;
+            if const { ($level as u8) >= ($component as u8) } { $crate::logging::_kernel_log($level, stringify!($component), $msg, file!(), line!(), column!()) };
         }
     };
 }
-pub(in crate) use klog;
+pub(crate) use klog;
 
 // For use in emergency situations, such as a kernel panic.
 // uses no heap allocation and forcibly bypasses locks

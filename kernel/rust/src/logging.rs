@@ -46,19 +46,7 @@ impl LogFormatter for DefaultLogFormatter {
 }
 
 // LOG DESTINATIONS
-use crate::util::LockedWrite;
-struct Serial1(&'static crate::coredrivers::serial_uart::LockedSerialPort);
-impl core::fmt::Write for Serial1 {
-    fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error>{
-        self.0.write_str(s)
-    }
-    fn write_char(&mut self, c: char) -> Result<(), core::fmt::Error>{
-        self.0.write_char(c)
-    }
-    fn write_fmt(&mut self, args: core::fmt::Arguments<'_>) -> Result<(), core::fmt::Error>{
-        self.0.write_fmt(args)
-    }
-}
+use crate::util::{LockedWrite,LockedWriteWrapper};
 
 // FORMATTER/DESTINATION SELECTION
 pub struct LoggingContext {
@@ -67,7 +55,7 @@ pub struct LoggingContext {
 }
 impl core::default::Default for LoggingContext {
     fn default() -> Self {
-        let serial1: Box<dyn core::fmt::Write + Send> = Box::new(Serial1(&crate::coredrivers::serial_uart::SERIAL1));
+        let serial1: Box<dyn core::fmt::Write + Send> = Box::new(LockedWriteWrapper(&*crate::coredrivers::serial_uart::SERIAL1));
         Self {
             formatter: Box::new(DefaultLogFormatter()),
             destinations: Vec::from([serial1]),

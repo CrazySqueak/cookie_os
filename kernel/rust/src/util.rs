@@ -51,3 +51,17 @@ impl<T:LockedNoInterrupts> LockedWrite for T
         self.with_lock(|mut w|w.write_fmt(args))
     }
 }
+/// A newtype wrapper for any LockedWrite that implements Write for it.
+/// (because we can't impl it directly for any T where T: LockedWrite)
+pub struct LockedWriteWrapper<T:LockedWrite+?Sized,R:core::ops::Deref<Target=T>>(pub R);
+impl<T:LockedWrite,R:core::ops::Deref<Target=T>> core::fmt::Write for LockedWriteWrapper<T,R> {
+    fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error>{
+        self.0.write_str(s)
+    }
+    fn write_char(&mut self, c: char) -> Result<(), core::fmt::Error>{
+        self.0.write_char(c)
+    }
+    fn write_fmt(&mut self, args: core::fmt::Arguments<'_>) -> Result<(), core::fmt::Error>{
+        self.0.write_fmt(args)
+    }
+}

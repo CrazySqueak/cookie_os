@@ -28,9 +28,24 @@ mod memory;
 mod descriptors;
 mod multitasking;
 
+// arch-specific code lives either in "lowlevel", or in "x::arch" for stuff specific to certain modules
+macro_rules! arch_specific_module {
+    ($v:vis mod $name:ident) => {
+        $v mod $name { cfg_if::cfg_if! {
+            if #[cfg(target_arch = "x86_64")] {
+                mod x86_64;
+                pub use x86_64::*;
+            } else {
+                compile_error!(concat!("This architecture is unsupported as it does not have an implementation for the '",stringify!($name),"' module!"));
+            }
+        }}
+    }
+}
+pub(crate) use arch_specific_module;
 // arch-specific "lowlevel" module
-#[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
-mod lowlevel;
+arch_specific_module!(mod lowlevel);
+//#[cfg_attr(target_arch = "x86_64", path = "lowlevel/x86_64/mod.rs")]
+//mod lowlevel;
 
 #[no_mangle]
 pub extern "sysv64" fn _kstart() -> ! {

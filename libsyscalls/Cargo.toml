@@ -1,0 +1,12 @@
+[package]
+name = "libsyscalls"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# Facilities for setting up system call handlers (used by the kernel)
+handle = []
+# Facilities for invoking system calls (for use by applications)
+invoke = []
+
+[dependencies]

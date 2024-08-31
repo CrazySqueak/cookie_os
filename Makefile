@@ -45,8 +45,11 @@ SYSROOT := $(abspath $(BUILDDIR)/sysroot)
 ## Sub-modules
 # kernel
 KERNEL_BIN := kernel/$(KBINNAME)
-$(KERNEL_BIN): FORCE
+$(KERNEL_BIN): FORCE libsyscalls
 	$(MAKE) -C kernel
+# libsyscalls - this uses cargo (and is imported using cargo) so we actually only run `cargo check` rather than producing any artifacts
+libsyscalls: FORCE
+	export RUSTFLAGS="-Awarnings" && cd libsyscalls && cargo check --all-features $(CARGOFLAGS)
 
 # QEMU config
 export QLOGSDIR := logs
@@ -161,4 +164,4 @@ compile: $(KERNEL_BIN)
 # special targets
 FORCE:
 
-.PHONY: all clean clean-all iso-grub iso-limine run debug check compile check-qemu-var
+.PHONY: all clean clean-all iso-grub iso-limine run debug check compile check-qemu-var libsyscalls

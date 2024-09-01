@@ -109,8 +109,7 @@ pub extern "sysv64" fn _kstart() -> ! {
         // TODO: create spawn() function that wraps task creation
         {
             let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
-            let rsp = unsafe { lowlevel::context_switch::_cs_new(_start_processors_task, kstack.bottom_vaddr() as *const u8) };
-            let task = unsafe { multitasking::Task::new_with_rsp(multitasking::TaskType::KernelTask, rsp, Some(alloc::boxed::Box::new(kstack))) };
+            let task = multitasking::Task::new_kernel_task(_start_processors_task, alloc::boxed::Box::new(kstack));
             multitasking::scheduler::push_task(task);
             multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);  // yield immediately since starting processors is I/O-bound and will yield to us pretty soon
         }
@@ -165,9 +164,7 @@ pub fn _kmain() -> ! {
     // test
     for i in 0..3 {
         let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
-        let rsp = unsafe { lowlevel::context_switch::_cs_new(test, kstack.bottom_vaddr() as *const u8) };
-        //klog!(Info,ROOT,"newtask RSP={:p}", rsp);
-        let task = unsafe { multitasking::Task::new_with_rsp(multitasking::TaskType::KernelTask, rsp, Some(alloc::boxed::Box::new(kstack))) };
+            let task = multitasking::Task::new_kernel_task(test, alloc::boxed::Box::new(kstack));
         multitasking::scheduler::push_task(task);
         
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);

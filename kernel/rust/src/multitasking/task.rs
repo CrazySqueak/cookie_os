@@ -27,6 +27,16 @@ impl Task {
             stack_allocation: stack_allocation,
         }
     }
+    /// Create a new task using the given stack and entry point. This calls _cs_new to initialise the stack with the necessary function pointer, and then returns a suitable task.
+    pub fn new_kernel_task(entry_point: extern "sysv64" fn() -> !, stack: Box<dyn AnyAllocatedStack>) -> Task {
+        // Initialise stack and get RSP
+        // SAFETY: This MUST have exclusive access to the given stack, which is enforced (hopefully) by ownership rules
+        // (stack must grow downwards. TODO: Kill myself if I'm ever porting this to an architecture where the stack grows upwards)
+        unsafe {
+            let rsp = super::arch::context_switch::_cs_new(entry_point, stack.bottom_vaddr() as *const u8);
+            Self::new_with_rsp(TaskType::KernelTask, rsp, Some(stack))
+        }
+    }
     
     pub fn task_id(&self) -> usize { self.task_id }
     pub fn task_type(&self) -> &TaskType {

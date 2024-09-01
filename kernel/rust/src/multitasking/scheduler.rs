@@ -1,5 +1,5 @@
-/* This module is heavily coupled with lowlevel::context_switch, as this is the one that actually contains the scheduler. */
-use crate::lowlevel::{context_switch as cswitch_impl};
+
+use super::arch::{context_switch as cswitch_impl};
 use super::{Task,TaskType};
 use alloc::collections::VecDeque;
 use crate::logging::klog;

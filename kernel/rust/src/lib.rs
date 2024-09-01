@@ -170,6 +170,10 @@ pub fn _kmain() -> ! {
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
     }
     
+    // test
+    multitasking::yield_to_scheduler(multitasking::SchedulerCommand::SleepNTicks(22));
+    panic!("beep");
+    
     // TODO
     // For the love of god, please let other tasks run instead of blocking
     // pre-emption hasn't been implemented yet
@@ -178,6 +182,7 @@ pub fn _kmain() -> ! {
 
 #[no_mangle]
 pub fn _apmain() -> ! {
+    multitasking::yield_to_scheduler(multitasking::SchedulerCommand::SleepNTicks(10));
     klog!(Info,ROOT,"Hello :)");
     multitasking::terminate_current_task();
 }
@@ -197,7 +202,7 @@ extern "sysv64" fn _start_processors_task() -> ! {
     // TODO: figure out number of processors and their APIC IDs
     for i in 0..16 {
         if i == our_apic_id { continue; }
-        let result = unsafe{ coredrivers::system_smp::start_processor_xapic(i) };
+        let result = unsafe{ lowlevel::start_processor_xapic(i) };
         match result {
             Ok(_) => {},
             Err(_) => klog!(Warning, BOOT, "CPU with APIC ID {} failed to start!", i),
@@ -251,6 +256,7 @@ fn panic(_info: &PanicInfo) -> ! {
         _PANICKING_CPU.store(cpu_num.into(), Ordering::SeqCst);
         
         // Begin shutting down CPUs - requires MMIO to be mapped for APIC to work - med risk but high importance. paging/MMIO is mapped way before multitasking is configured anyway
+        unsafe{lowlevel::emit_panic();}
         
         // Print more debug information - requires scheduler to be in a sane state (either there or not there) - med risk
         let context = multitasking::ExecutionContext::current();

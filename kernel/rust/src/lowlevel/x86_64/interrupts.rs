@@ -15,15 +15,17 @@ use alloc::boxed::Box;
 use crate::sync::cpulocal::CpuLocalLockedOption;
 
 // 0x0X and 0x1X - CPU Exceptions
+
 // 0x20 - APIC Timer
 pub const APIC_TIMER_VECTOR: u8 = 0x20;
+// 0x21 - Kernel Panic
+/// May be emitted by the kernel in the case of an unrecoverable panic, to interrupt the other CPUs
+pub const KERNEL_PANIC_VECTOR: u8 = 0x21;
 // ... available
 // 0xEX - Legacy PICs (shouldn't trigger but might)
 pub const PIC_1_OFFSET: u8 = 0xE0;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
-// 0xFX - Special cases
-/// May be emitted by the kernel in the case of an unrecoverable panic, to interrupt the other CPUs
-pub const KERNEL_PANIC_VECTOR: u8 = 0xFE;
+// 0xFF - Spurious
 /// Suprious Interrupts: Emitted by the APIC when an interrupt occurs but disappears before the vector is read
 /// Must not send an EOI, and the handler should ideally just ignore these.
 pub const SPURIOUS_INTERRUPT_VECTOR: u8 = 0xFF;
@@ -44,6 +46,8 @@ fn init_idt() {
     
     // Handle spurious interrupts
     idt[SPURIOUS_INTERRUPT_VECTOR].set_handler_fn(spurious_interrupt_handler);
+    // Handle panics
+    idt[KERNEL_PANIC_VECTOR].set_handler_fn(kernel_panic_interrupt);
     
     // // Timer
     // idt[PICInterrupt::Timer.as_u8()].set_handler_fn(timer_handler);
@@ -116,6 +120,12 @@ extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame,
 #[no_mangle]
 extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> () {
     panic!("General Protection Fault!\n{:?}", stack_frame);
+}
+
+// Special
+#[no_mangle]
+extern "x86-interrupt" fn kernel_panic_interrupt(_stack_frame: InterruptStackFrame){
+    panic!("Received kernel panic from another CPU");
 }
 
 // APICs

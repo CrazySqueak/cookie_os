@@ -3,8 +3,10 @@ mod gdt;
 mod interrupts;
 mod lowlevel;
 mod featureflags; use featureflags::init_msr; use featureflags::init_msr_ap;
+mod smp;
 
 pub use lowlevel::{halt, without_interrupts};
+pub use smp::{start_processor_xapic,emit_panic};
 
 use crate::coredrivers::system_apic;
 

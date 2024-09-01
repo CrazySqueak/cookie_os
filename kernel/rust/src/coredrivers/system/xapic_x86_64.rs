@@ -160,6 +160,16 @@ impl InterruptCommandRegister {
     /* Send an IPI, blocking until it has sent. */
     pub fn send_ipi(&mut self, ipi: InterProcessorInterrupt, dest: IPIDestination){
         klog!(Debug, COREDRIVERS_XAPIC, "Sending IPI {:?} to {:?}", ipi, dest);
+        self.send_ipi_raw(ipi, dest);
+        
+        // Wait for it to send
+        use crate::multitasking::{yield_to_scheduler,SchedulerCommand};
+        yield_to_scheduler(SchedulerCommand::PushBack);  // Ensure APIC has time to process our command
+        while self.0.read_raw()&0x1000 != 0 { yield_to_scheduler(SchedulerCommand::SleepNTicks(1)); }  // wait until the IPI has sent
+        // Done :)
+    }
+    /// Send an IPI without blocking or logging
+    pub fn send_ipi_raw(&mut self, ipi: InterProcessorInterrupt, dest: IPIDestination){
         let (delivery_mode, ipi_vector) = ipi.destructure();
         let (dest_shorthand, dest_mode, dest_value) = dest.destructure();
         
@@ -170,12 +180,6 @@ impl InterruptCommandRegister {
         ipi_value |= (dest_shorthand as u64)<<18;
         ipi_value |= (dest_value as u64)<<56;
         self.0.write_raw(ipi_value);
-        
-        // Wait for it to send
-        use crate::multitasking::{yield_to_scheduler,SchedulerCommand};
-        yield_to_scheduler(SchedulerCommand::PushBack);  // Ensure APIC has time to process our command
-        while self.0.read_raw()&0x1000 != 0 { yield_to_scheduler(SchedulerCommand::SleepNTicks(1)); }  // wait until the IPI has sent
-        // Done :)
     }
 }
 

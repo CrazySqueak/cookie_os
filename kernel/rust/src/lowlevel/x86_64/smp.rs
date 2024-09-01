@@ -62,3 +62,12 @@ pub unsafe fn start_processor_xapic(target_apic_id: system_apic::ApicID) -> Resu
     // OK!
     Ok(())
 }
+
+/// Send a Kernel Panic interrupt to all other CPUs, bringing them down
+pub unsafe fn emit_panic() {
+    system_apic::with_local_apic(|apic|{
+        unsafe{apic.icr.force_unlock();}
+        let mut icr = apic.icr.lock();
+        icr.send_ipi_raw(system_apic::InterProcessorInterrupt::Fixed(super::interrupts::KERNEL_PANIC_VECTOR), system_apic::IPIDestination::EveryoneButSelf);
+    });
+}

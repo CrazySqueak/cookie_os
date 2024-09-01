@@ -6,7 +6,8 @@ impl RelaxStrategy for SchedulerYield {
     #[inline(always)]
     fn relax(){
         if is_bsp_scheduler_initialised() {
-            if is_executing_task() {
+            // (don't yield if we're panicking or not executing a task)
+            if is_executing_task() && !crate::_ABORTING.load(core::sync::atomic::Ordering::Relaxed) {
                 // Yield
                 yield_to_scheduler(SchedulerCommand::PushBack)
             } else {

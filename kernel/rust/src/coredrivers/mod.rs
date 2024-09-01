@@ -17,8 +17,6 @@ pub mod serial_uart;
 
 #[cfg_attr(target_arch = "x86_64", path = "system/xapic_x86_64.rs")]
 pub mod system_apic;
-#[cfg_attr(target_arch = "x86_64", path = "system/xapic_smp_x86_64.rs")]
-pub mod system_smp;
 
 #[cfg_attr(target_arch = "x86_64", path = "display/vga_x86.rs")]
 pub mod display_vga;

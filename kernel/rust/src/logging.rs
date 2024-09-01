@@ -147,6 +147,7 @@ pub mod contexts {
     def_context!(FEATURE_FLAGS, ROOT, Debug);
     def_context!(SCHEDULER, ROOT);
     def_context!(CPU_MANAGEMENT, ROOT);
+      def_context!(CPU_MANAGEMENT_SMP, CPU_MANAGEMENT);
     def_context!(COREDRIVERS, ROOT);
       def_context!(COREDRIVERS_XAPIC, COREDRIVERS);
       def_context!(COREDRIVERS_VGA, COREDRIVERS);

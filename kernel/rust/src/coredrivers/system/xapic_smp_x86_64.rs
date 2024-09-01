@@ -2,6 +2,7 @@
 use core::sync::atomic::{AtomicU16,AtomicU64,Ordering};
 use crate::memory::alloc_util::GAllocatedStack;
 use crate::logging::klog;
+use super::system_apic;
 
 extern "sysv64" {
     /// Number of APs that have started. Starts at 1.
@@ -16,10 +17,9 @@ static next_processor_stack: AtomicU64 = AtomicU64::new(0);
 
 /* Start the requested processor using the xAPIC. Blocks until this has completed.
     Note: This function is not re-entrant.*/
-pub unsafe fn start_processor_xapic(target_apic_id: crate::coredrivers::system_apic::ApicID) -> Result<(),()> {
-    use crate::coredrivers::system_apic;
+pub unsafe fn start_processor_xapic(target_apic_id: system_apic::ApicID) -> Result<(),()> {
     use crate::multitasking::{yield_to_scheduler,SchedulerCommand};
-    klog!(Info, CPU_MANAGEMENT, "Starting CPU with APIC ID {}", target_apic_id);
+    klog!(Info, CPU_MANAGEMENT_SMP, "Starting CPU with APIC ID {}", target_apic_id);
     // Allocate stack
     let stack = GAllocatedStack::allocate_kboot().ok_or(())?;
     next_processor_stack.store(stack.bottom_vaddr().try_into().unwrap(), Ordering::SeqCst);
@@ -28,7 +28,7 @@ pub unsafe fn start_processor_xapic(target_apic_id: crate::coredrivers::system_a
     let ipi_destination = system_apic::IPIDestination::APICId(target_apic_id);
     system_apic::with_local_apic(|apic|{
         let mut icr = apic.icr.lock();
-        klog!(Debug, CPU_MANAGEMENT, "Sending INIT to APIC ID {}", target_apic_id);
+        klog!(Debug, CPU_MANAGEMENT_SMP, "Sending INIT to APIC ID {}", target_apic_id);
         // Send INIT
         icr.send_ipi(system_apic::InterProcessorInterrupt::INIT, ipi_destination);
         // Wait for CPU to initialise
@@ -39,7 +39,7 @@ pub unsafe fn start_processor_xapic(target_apic_id: crate::coredrivers::system_a
         let mut num_sent: u8 = 0;
         let prev_processors_started = processors_started.load(Ordering::SeqCst);
         loop {
-            klog!(Debug, CPU_MANAGEMENT, "Sending SIPI #{} to APIC ID {}", num_sent+1, target_apic_id);
+            klog!(Debug, CPU_MANAGEMENT_SMP, "Sending SIPI #{} to APIC ID {}", num_sent+1, target_apic_id);
             // Send SIPI
             icr.send_ipi(system_apic::InterProcessorInterrupt::SIPI(ap_trampoline_realmode as usize), ipi_destination);
             // Wait for CPU to boot
@@ -61,22 +61,4 @@ pub unsafe fn start_processor_xapic(target_apic_id: crate::coredrivers::system_a
     
     // OK!
     Ok(())
-}
-
-/* Attempt to start all available processors on the system. Any which fail to start are skipped. */
-pub unsafe fn start_all_processors_xapic_acpi(){
-    use crate::coredrivers::system_apic;
-    let our_apic_id = system_apic::get_apic_id_for(crate::multitasking::get_cpu_num());
-    
-    // TODO: figure out number of processors and their APIC IDs
-    for i in 0..16 {
-        if i == our_apic_id { continue; }
-        let result = start_processor_xapic(i);
-        match result {
-            Ok(_) => {},
-            Err(_) => klog!(Warning, CPU_MANAGEMENT, "CPU with APIC ID {} failed to start!", i),
-        }
-    }
-    
-    // Done :)
 }

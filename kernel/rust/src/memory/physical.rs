@@ -5,7 +5,6 @@ use core::ptr::addr_of;
 use lazy_static::lazy_static;
 
 use crate::lowlevel::without_interrupts;
-use crate::lowlevel::multiboot::MemoryMapEntry;
 use crate::util::mutex_no_interrupts;
 
 use core::fmt::write;
@@ -168,7 +167,7 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> core::fmt::Debug for BuddyAl
     }
 }
 
-pub fn init_pmem(mmap: &Vec<MemoryMapEntry>){
+pub fn init_pmem(mmap: &Vec<crate::coredrivers::parse_multiboot::MemoryMapEntry>){
     let (_, kend) = get_kernel_bounds();  // note: we ignore any memory before the kernel, its a tiny sliver (2MB tops) and isn't worth it
     klog!(Info, MEMORY_PHYSICAL_RAMMAP, "\tKernel ends @ {:x}", kend);
     let mut total_general_use: u64 = 0;

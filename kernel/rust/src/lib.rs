@@ -63,7 +63,7 @@ pub extern "sysv64" fn _kstart() -> ! {
         
         // Initialise physical memory
         klog!(Info, BOOT, "Reading memory map");
-        memory::physical::init_pmem(lowlevel::multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
+        memory::physical::init_pmem(coredrivers::parse_multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!"));
         
         // Initialise paging
         klog!(Info, BOOT, "Configuring page tables");
@@ -191,9 +191,20 @@ extern "sysv64" fn test() -> ! {
 }
 
 extern "sysv64" fn _start_processors_task() -> ! {
-    // Start processors
-    unsafe { lowlevel::start_all_processors(); }
-    // Terminate
+    //! Attempt to start all available processors on the system, one-by-one
+    let our_apic_id = coredrivers::system_apic::get_apic_id_for(multitasking::get_cpu_num());
+    
+    // TODO: figure out number of processors and their APIC IDs
+    for i in 0..16 {
+        if i == our_apic_id { continue; }
+        let result = unsafe{ coredrivers::system_smp::start_processor_xapic(i) };
+        match result {
+            Ok(_) => {},
+            Err(_) => klog!(Warning, BOOT, "CPU with APIC ID {} failed to start!", i),
+        }
+    }
+    
+    // Now terminate
     multitasking::terminate_current_task();
 }
 

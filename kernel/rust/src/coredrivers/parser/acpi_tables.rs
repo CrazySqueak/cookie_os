@@ -8,11 +8,19 @@ struct AcpiMemoryAllocation{ phys: usize, virt: usize, alloc: GlobalPageAllocati
 
 #[derive(Clone)]
 pub struct AcpiMemoryMapper(Arc<Mutex<Vec<AcpiMemoryAllocation>>>);
+impl AcpiMemoryMapper {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(Vec::new())))
+    }
+}
+
 impl AcpiHandler for AcpiMemoryMapper {
     unsafe fn map_physical_region<T>(&self, phys_addr: usize, size: usize) -> AcpiPhysicalMapping<Self,T> {
         // Map the requested address
         // (we don't have to touch our physical map as ACPI tables are marked as RESERVED by the bootloader, and thus aren't included as "free memory" by our physical allocator)
-        let allocation = MMIO_PTABLE.allocate(size, KALLOCATION_DYN_MMIO).expect("Allocation for ACPI Tables failed?!");
+        // These have to be dynamically allocated as the ACPI parser constantly allocates them in non-page-sized amounts
+        crate::logging::klog!(Info, ROOT, "acpi_pmap phys={:x} size={}", phys_addr, size);
+        let allocation = MMIO_PTABLE.allocate_alignedoffset(size, KALLOCATION_DYN_MMIO, phys_addr).expect("Allocation for ACPI Tables failed?!");
         let virt_addr = allocation.base();
         allocation.set_base_addr(phys_addr, pageFlags!(m:PINNED));
         
@@ -33,4 +41,17 @@ impl AcpiHandler for AcpiMemoryMapper {
         let position = allocations.iter().position(|a| a.phys == region.physical_start() && a.virt == (region.virtual_start().as_ptr() as usize)).expect("ACPI Allocation not found? Double free!");
         allocations.swap_remove(position);
     }
+}
+
+use acpi::AcpiError;
+use acpi::platform::PlatformInfo;
+use crate::coredrivers::parse_multiboot;
+pub type AcpiTables = acpi::AcpiTables<AcpiMemoryMapper>;
+
+pub fn parse_tables_multiboot() -> Option<Result<AcpiTables,AcpiError>> {
+    let phys_addr = parse_multiboot::ACPI_RSDP_V2_PHYSADDR.or(*parse_multiboot::ACPI_RSDP_V1_PHYSADDR)?;
+    Some(unsafe{parse_tables(phys_addr)})
+}
+pub unsafe fn parse_tables(rsdp_phys: usize) -> Result<AcpiTables,AcpiError> {
+    AcpiTables::from_rsdp(AcpiMemoryMapper::new(), rsdp_phys)
 }

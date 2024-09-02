@@ -14,6 +14,14 @@ extern "C" {
     static multiboot_info_ptr: *const InfoHeader;
 }
 
+#[repr(C,packed)]
+union MBTagContentRaw {
+    mem_info: (u32,u32),
+    mem_map: (u32,u32,MemoryMapEntry),  // the first MemoryMapEntry is a stand in for the start of the list of entries
+    rsdp_v1: u8,  // The u8 is a stand in for the actual content
+    rsdp_v2: u8,
+}
+
 #[derive(Debug,Clone,Copy)]
 #[repr(C,packed)]
 pub struct MBTagHeader {
@@ -30,32 +38,13 @@ pub enum MBTagContents {
     BasicMemInfo {mem_lower: u32, mem_upper: u32},
     MemoryMap {entry_size: u32, entry_version: u32, entries: Vec<MemoryMapEntry>},
     
+    // Note: Parsing and validating the ACPI RSDP should be done by a dedicated parser.
+    AcpiRsdpV1 { rsdp_virt_addr: usize },  // const pointers are not Sync???
+    AcpiRsdpV2 { rsdp_virt_addr: usize },
+    
     // Terminates the list of tags
     EndOfTags,
 }
-
-#[repr(C,packed)]
-union MBTagContentRaw {
-    mem_info: (u32,u32),
-    mem_map: (u32,u32,MemoryMapEntry),  // the first MemoryMapEntry is a stand in for the start of the list of entries
-}
-
-#[repr(C,packed)]
-#[derive(Debug,Clone,Copy)]
-pub struct MemoryMapEntry {
-    pub base_addr: u64,
-    pub length: u64,
-    mem_type: u32,
-    reserved: u32,
-}
-impl MemoryMapEntry {
-    pub fn is_for_general_use(&self) -> bool {
-        // If 1, then this is available for use by the OS
-        // If any other number, then it is reserved by the BIOS/ACPI/UEFI/etc.
-        self.mem_type == 1
-    }
-}
-
 impl MBTag {
     // Read a tag from the following pointer, and return a safe
     // representation. An Err containing only the header is returned if the type field is
@@ -94,10 +83,29 @@ impl MBTag {
                                    entries
                 }},
                 
+                14 => AcpiRsdpV1 { rsdp_virt_addr: addr_of!(tag_raw.rsdp_v1) as usize },
+                15 => AcpiRsdpV2 { rsdp_virt_addr: addr_of!(tag_raw.rsdp_v2) as usize },
+                
                 0 => EndOfTags,
                 _ => Err(header)?,
             },
         })
+    }
+}
+
+#[repr(C,packed)]
+#[derive(Debug,Clone,Copy)]
+pub struct MemoryMapEntry {
+    pub base_addr: u64,
+    pub length: u64,
+    mem_type: u32,
+    reserved: u32,
+}
+impl MemoryMapEntry {
+    pub fn is_for_general_use(&self) -> bool {
+        // If 1, then this is available for use by the OS
+        // If any other number, then it is reserved by the BIOS/ACPI/UEFI/etc.
+        self.mem_type == 1
     }
 }
 
@@ -129,4 +137,17 @@ lazy_static! {
     pub static ref MULTIBOOT_MEMORY_MAP: Option<&'static Vec<MemoryMapEntry>> = { for tag in &*MULTIBOOT_TAGS {
         if let MBTagContents::MemoryMap { ref entries, .. } = tag.content { return Some(entries); }
     }; None};
+    
+    pub static ref ACPI_RSDP_V1_PHYSADDR: Option<usize> = { for tag in &*MULTIBOOT_TAGS {
+            if let MBTagContents::AcpiRsdpV1 { rsdp_virt_addr } = tag.content {
+                let rsdp_phys_addr = crate::memory::paging::ptaddr_virt_to_phys(rsdp_virt_addr);
+                return Some(rsdp_phys_addr);
+            }
+        }; None };
+    pub static ref ACPI_RSDP_V2_PHYSADDR: Option<usize> = { for tag in &*MULTIBOOT_TAGS {
+            if let MBTagContents::AcpiRsdpV2 { rsdp_virt_addr } = tag.content {
+                let rsdp_phys_addr = crate::memory::paging::ptaddr_virt_to_phys(rsdp_virt_addr);
+                return Some(rsdp_phys_addr);
+            }
+        }; None };
 }

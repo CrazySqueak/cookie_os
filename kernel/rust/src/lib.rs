@@ -195,17 +195,52 @@ extern "sysv64" fn _start_processors_task() -> ! {
     //! Attempt to start all available processors on the system, one-by-one
     let our_apic_id = coredrivers::system_apic::get_apic_id_for(multitasking::get_cpu_num());
     
-    // TODO: figure out number of processors and their APIC IDs
-    for i in 0..16 {
-        if i == our_apic_id { continue; }
-        let result = unsafe{ lowlevel::start_processor_xapic(i) };
-        match result {
-            Ok(_) => {},
-            Err(_) => klog!(Warning, BOOT, "CPU with APIC ID {} failed to start!", i),
+    // Parse ACPI tables
+    use coredrivers::parse_acpi_tables;
+    let Some(acpi_tables) = parse_acpi_tables::parse_tables_multiboot() else {
+        klog!(Severe, BOOT, "Failed to parse ACPI tables: No RSDP found!");
+        multitasking::terminate_current_task();
+    };
+    let Ok(acpi_tables) = acpi_tables else {
+        let Err(err) = acpi_tables else {unreachable!()};
+        klog!(Severe, BOOT, "Failed to parse ACPI tables: Got Err({:?})!", err);
+        multitasking::terminate_current_task();
+    };
+    let    acpi_info  = acpi_tables.platform_info();
+    let Ok(acpi_info) = acpi_info else {
+        let Err(err) = acpi_info else {unreachable!()};
+        klog!(Severe, BOOT, "Failed to parse ACPI tables: Got Err({:?})!", err);
+        multitasking::terminate_current_task();
+    };
+    let Some(processor_info) = acpi_info.processor_info else {
+        klog!(Severe, BOOT, "No processor info found in ACPI tables!");
+        multitasking::terminate_current_task();
+    };
+    assert!(processor_info.boot_processor.local_apic_id == our_apic_id.into());
+    
+    let mut num_started = 0; let mut num_skipped = 0; let mut num_failed = 0;
+    for processor in processor_info.application_processors.iter() {
+        let Ok(apic_id): Result<u8,_> = processor.local_apic_id.try_into()  else {
+            klog!(Warning, BOOT, "Skipping CPU with APIC ID >255");
+            num_skipped += 1;
+            continue;
+        };
+        if let acpi::platform::ProcessorState::Disabled = processor.state {
+            klog!(Warning, BOOT, "CPU with APIC ID {} is disabled. Skipping...", apic_id);
+            num_skipped += 1;
+            continue;
+        }
+        
+        if let Ok(_) = unsafe{ lowlevel::start_processor_xapic(apic_id) } {
+            num_started += 1;
+        } else {
+            klog!(Warning, BOOT, "CPU with APIC ID {} failed to start!", apic_id);
+            num_failed += 1;
         }
     }
     
     // Now terminate
+    klog!(Info, BOOT, "Started {} secondary CPUs. ({} failed, {} skipped)", num_started, num_failed, num_skipped);
     multitasking::terminate_current_task();
 }
 

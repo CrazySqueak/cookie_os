@@ -128,6 +128,8 @@ type X64Level3 = MLFFAllocator<X64Level2, X64PageTable<3>, true , true>;  // Pag
 type X64Level4 = MLFFAllocator<X64Level3, X64PageTable<4>, true , false>;  // Page Map Level 4
 
 pub(in super) type TopLevelPageAllocator = X64Level4;
+/// The size of the smallest possible page
+pub const MIN_PAGE_SIZE: usize = 4096;
 
 // Kernel Stack: In the kernel page
 pub const KALLOCATION_KERNEL_STACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true), PageAllocationStrategy::new_default().reverse_order(true).spread_mode(true), PageAllocationStrategy::new_default().reverse_order(true)];

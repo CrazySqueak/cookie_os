@@ -237,6 +237,10 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     pub fn allocate_at(&self, addr: usize, size: usize) -> Option<PageAllocation<PFA>> {
         self.write_when_active().allocate_at(addr, size)
     }
+    /// Allocate page(s) dynamically such that the given physical address would be able to be mapped using a simple .set_addr (i.e. such that phys minus base would be page-aligned)
+    pub fn allocate_alignedoffset(&self, size: usize, alloc_strat: PageAllocationStrategies, phys_addr: usize) -> Option<PageAllocation<PFA>> {
+        self.write_when_active().allocate_alignedoffset(size, alloc_strat, phys_addr)
+    }
 }
 
 pub struct PagingContext(LockedPageAllocator<BaseTLPageAllocator>);
@@ -388,6 +392,18 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         let mut palloc = PageAllocation::new(LockedPageAllocator::clone_ref(&self.allocator), allocation);
         palloc.baseaddr_offset = addr - palloc.start();  // Figure out the offset between the requested address and the actual start of the allocation, if required
         Some(palloc)
+    }
+    /// Allocate page(s) dynamically such that the given physical address would be able to be mapped using a simple .set_addr (i.e. such that phys minus base would be page-aligned)
+    pub(super) fn allocate_alignedoffset(&mut self, size: usize, alloc_strat: PageAllocationStrategies, phys_addr: usize) -> Option<PageAllocation<PFA>> {
+        // Step 1: round down the physical address to page alignment
+        use super::MIN_PAGE_SIZE;
+        let (_, allocation_offset) = (phys_addr / MIN_PAGE_SIZE, phys_addr % MIN_PAGE_SIZE);
+        // Step 2: increase size by the remainder to compensate
+        let allocated_size = size + allocation_offset;
+        // Step 3: Allocate
+        let mut allocation = self.allocate(allocated_size, KALLOCATION_DYN_MMIO)?;
+        allocation.baseaddr_offset += allocation_offset;
+        Some(allocation)
     }
     
     /* Split the allocation into two separate allocations. The first one will contain bytes [0,n) (rounding up if not page aligned), and the second one will contain the rest.

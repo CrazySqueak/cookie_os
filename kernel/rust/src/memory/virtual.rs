@@ -6,7 +6,7 @@ use crate::logging::klog;
 #[cfg_attr(target_arch = "x86_64", path = "paging_x64.rs")]
 mod arch;
 
-pub use arch::{canonical_addr,crop_addr,ptaddr_virt_to_phys};
+pub use arch::{canonical_addr,crop_addr,ptaddr_virt_to_phys,MIN_PAGE_SIZE};
 
 #[path = "paging_firstfit.rs"]
 mod impl_firstfit;

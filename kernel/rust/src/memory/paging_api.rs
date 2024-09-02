@@ -648,8 +648,13 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
     pub fn end(&self) -> usize {
         canonical_addr(self.allocation.end_addr() + self.metadata.offset)
     }
+    /* The total size of this allocation from start to end (not adjusted by the "base" address) */
     pub fn size(&self) -> usize {
         self.allocation.size()
+    }
+    /* The length of this allocation following the base (i.e. from base to end)  */
+    pub fn length_after_base(&self) -> usize {
+        self.size() - self.baseaddr_offset
     }
     
     pub fn set_base_addr(&self, base_addr: usize, flags: PageFlags){

@@ -19,13 +19,13 @@ impl AcpiHandler for AcpiMemoryMapper {
         // Map the requested address
         // (we don't have to touch our physical map as ACPI tables are marked as RESERVED by the bootloader, and thus aren't included as "free memory" by our physical allocator)
         // These have to be dynamically allocated as the ACPI parser constantly allocates them in non-page-sized amounts
-        crate::logging::klog!(Info, ROOT, "acpi_pmap phys={:x} size={}", phys_addr, size);
+        //crate::logging::klog!(Info, ROOT, "acpi_pmap phys={:x} size={}", phys_addr, size);
         let allocation = MMIO_PTABLE.allocate_alignedoffset(size, KALLOCATION_DYN_MMIO, phys_addr).expect("Allocation for ACPI Tables failed?!");
         let virt_addr = allocation.base();
         allocation.set_base_addr(phys_addr, pageFlags!(m:PINNED));
         
         let virt_ptr = core::ptr::NonNull::new(virt_addr as *mut T).unwrap();
-        let allocated_size = allocation.size();
+        let allocated_size = allocation.length_after_base();
         
         // Store the allocation somewhere
         self.0.lock().push(AcpiMemoryAllocation { phys: phys_addr, virt: virt_addr, alloc: allocation });

@@ -132,9 +132,9 @@ pub mod contexts {
     def_context!(BOOT, ROOT);  // boot-time top-level progress messages
     def_context!(MEMORY, ROOT);
       def_context!(MEMORY_PAGING, MEMORY);
-        def_context!(MEMORY_PAGING_CONTEXT, MEMORY_PAGING, Debug);
+        def_context!(MEMORY_PAGING_CONTEXT, MEMORY_PAGING);
         def_context!(MEMORY_PAGING_GLOBALPAGES, MEMORY_PAGING);
-        def_context!(MEMORY_PAGING_ALLOCATOR, MEMORY_PAGING, Debug);
+        def_context!(MEMORY_PAGING_ALLOCATOR, MEMORY_PAGING);
           def_context!(MEMORY_PAGING_ALLOCATOR_MLFF, MEMORY_PAGING_ALLOCATOR);
         def_context!(MEMORY_PAGING_MAPPINGS, MEMORY_PAGING);
         def_context!(MEMORY_PAGING_TLB, MEMORY_PAGING, Info);

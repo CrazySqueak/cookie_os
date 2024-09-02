@@ -137,14 +137,14 @@ pub fn resume_context(task: Task) -> !{
 /* Initialise the scheduler for the current CPU, before creating a kernel task to represent the current stack.
     Once this has been called, it is ok to call yield_to_scheduler.
     (calling this again will discard a large amount of the scheduler's state for the current CPU, so uh, don't)*/
-pub fn init_scheduler(){
+pub fn init_scheduler(stack: Option<alloc::boxed::Box<dyn crate::memory::alloc_util::AnyAllocatedStack>>){
     let boot_task = _SCHEDULER_STATE.mutate(|state|{
         // initialise run queue?
         state.run_queue.reserve(8);
         
         // Initialise task
         // Note: resuming the task is undefined (however that is the same for all "currently active tasks" - as they must be paused first)
-        let task = unsafe { Task::new_with_rsp(TaskType::KernelTask, core::ptr::null_mut(), None) };
+        let task = unsafe { Task::new_with_rsp(TaskType::KernelTask, core::ptr::null_mut(), stack) };
         let task_id = task.task_id;
         
         // All gucci :)

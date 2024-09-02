@@ -1,6 +1,6 @@
 
-use core::sync::atomic::{AtomicU16,AtomicU64,Ordering};
-use crate::memory::alloc_util::GAllocatedStack;
+use core::sync::atomic::{AtomicU16,AtomicU64,AtomicPtr,Ordering};
+use crate::memory::alloc_util::{AnyAllocatedStack,GAllocatedStack};
 use crate::logging::klog;
 use super::system_apic;
 
@@ -15,14 +15,18 @@ extern "sysv64" {
 #[no_mangle]
 static next_processor_stack: AtomicU64 = AtomicU64::new(0);
 
+/// Address of the bootstrap stack allocation itself (taken by the bootstrapping CPU later on)
+static BOOTSTRAP_STACK_ALLOCATION: AtomicPtr<GAllocatedStack> = AtomicPtr::new(core::ptr::null_mut());
+
 /* Start the requested processor using the xAPIC. Blocks until this has completed.
     Note: This function is not re-entrant.*/
 pub unsafe fn start_processor_xapic(target_apic_id: system_apic::ApicID) -> Result<(),()> {
     use crate::multitasking::{yield_to_scheduler,SchedulerCommand};
     klog!(Info, CPU_MANAGEMENT_SMP, "Starting CPU with APIC ID {}", target_apic_id);
     // Allocate stack
-    let stack = GAllocatedStack::allocate_kboot().ok_or(())?;
-    next_processor_stack.store(stack.bottom_vaddr().try_into().unwrap(), Ordering::SeqCst);
+    let stack = alloc::boxed::Box::new(GAllocatedStack::allocate_kboot().ok_or(())?);
+    next_processor_stack.store(stack.bottom_vaddr().try_into().unwrap(), Ordering::Release);
+    BOOTSTRAP_STACK_ALLOCATION.store(alloc::boxed::Box::into_raw(stack), Ordering::Release);  // (we store the allocation itself separately as next_processor_stack is used when no stack is available yet, whereas BOOTSTRAP_STACK_ALLOCATION is used once safely in Rust code)
     
     // Send INIT-SIPI-SIPI
     let ipi_destination = system_apic::IPIDestination::APICId(target_apic_id);
@@ -55,12 +59,21 @@ pub unsafe fn start_processor_xapic(target_apic_id: system_apic::ApicID) -> Resu
     })?;
     
     // Wait for stack to be taken
-    while next_processor_stack.load(Ordering::Relaxed) != 0 { yield_to_scheduler(SchedulerCommand::PushBack)};
+    while next_processor_stack.load(Ordering::Relaxed) != 0 { yield_to_scheduler(SchedulerCommand::PushBack) };
+    while BOOTSTRAP_STACK_ALLOCATION.load(Ordering::Relaxed) != core::ptr::null_mut() { yield_to_scheduler(SchedulerCommand::PushBack) };
     // The stack has been taken, so it's now owned by the task we gave it to
-    core::mem::forget(stack);  // leak the stack as we have no way to deallocate it when that core's bootstrap task quits
     
     // OK!
     Ok(())
+}
+
+/// take ownership of the stack saved by start_processor_xapic
+/// This function itself is safe, however dropping the stack while it's still in use is undefined behaviour (which is why this function is unsafe)
+pub unsafe fn get_bootstrap_stack() -> Option<alloc::boxed::Box<dyn AnyAllocatedStack + 'static>> {
+    let ptr = BOOTSTRAP_STACK_ALLOCATION.swap(core::ptr::null_mut(), Ordering::AcqRel);
+    if ptr == core::ptr::null_mut() { return None; }
+    let stack = alloc::boxed::Box::from_raw(ptr);
+    Some(stack)
 }
 
 /// Send a Kernel Panic interrupt to all other CPUs, bringing them down

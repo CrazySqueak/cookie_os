@@ -7,6 +7,7 @@ mod smp;
 
 pub use lowlevel::{halt, without_interrupts};
 pub use smp::{start_processor_xapic,emit_panic};
+pub use smp::get_bootstrap_stack as _get_bootstrap_stack;
 
 use crate::coredrivers::system_apic;
 

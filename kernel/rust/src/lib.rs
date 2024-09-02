@@ -100,7 +100,7 @@ pub extern "sysv64" fn _kstart() -> ! {
         
         // Initialise scheduler
         klog!(Info, BOOT, "Configuring scheduler");
-        multitasking::scheduler::init_scheduler();
+        multitasking::scheduler::init_scheduler(None);
         // EARLY-MULTIPROGRAM
         klog!(Info, BOOT, "Entered multiprogram phase.");
         
@@ -128,6 +128,8 @@ pub extern "sysv64" fn _kstart_ap() -> ! {
         
         // Signal that we've started
         //TODO//multitasking::scheduler::PROCESSORS_READY.fetch_add(1, Ordering::Acquire);
+        // Take ownership of our bootstrap stack
+        let bootstrap_stack = unsafe{lowlevel::_get_bootstrap_stack()};
         // EARLY-BOOTSTRAP
         
         // Initialise CPU/system
@@ -143,7 +145,7 @@ pub extern "sysv64" fn _kstart_ap() -> ! {
         lowlevel::init2_ap();
         
         // Initialise scheduler
-        multitasking::scheduler::init_scheduler();
+        multitasking::scheduler::init_scheduler(bootstrap_stack);
         // EARLY-MULTIPROGRAM
     }
     klog!(Info, BOOT, "Secondary CPU successfully entered multiprogram phase. Executing _apmain().");

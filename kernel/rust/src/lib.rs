@@ -170,10 +170,6 @@ pub fn _kmain() -> ! {
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
     }
     
-    // test
-    multitasking::yield_to_scheduler(multitasking::SchedulerCommand::SleepNTicks(22));
-    panic!("beep");
-    
     // TODO
     // For the love of god, please let other tasks run instead of blocking
     // pre-emption hasn't been implemented yet

@@ -131,6 +131,8 @@ pub(in super) type TopLevelPageAllocator = X64Level4;
 
 // Kernel Stack: In the kernel page
 pub const KALLOCATION_KERNEL_STACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true), PageAllocationStrategy::new_default().reverse_order(true).spread_mode(true), PageAllocationStrategy::new_default().reverse_order(true)];
+// Kernel Dynamic Allocations in the MMIO Page: In the mmio page, in reverse order to avoid clashing with offset mapped stuff
+pub const KALLOCATION_DYN_MMIO: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true), PageAllocationStrategy::new_default()];
 
 // User Stack: R2L before the kernel pages, spread mode
 pub const ALLOCATION_USER_STACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true).max_page(255), PageAllocationStrategy::new_default().reverse_order(true).spread_mode(true), PageAllocationStrategy::new_default().reverse_order(true)];

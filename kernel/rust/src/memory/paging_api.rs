@@ -20,6 +20,45 @@ impl PageFlags {
     pub fn new(tflags: TransitivePageFlags, mflags: MappingSpecificPageFlags) -> Self {
         Self { tflags, mflags }
     }
+    pub fn empty() -> Self {
+        Self::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty())
+    }
+}
+impl core::ops::BitAnd<TransitivePageFlags> for PageFlags {
+    type Output = Self;
+    fn bitand(self, rhs: TransitivePageFlags) -> Self::Output {
+        Self::new(self.tflags & rhs, self.mflags)
+    }
+}
+impl core::ops::BitOr<TransitivePageFlags> for PageFlags {
+    type Output = Self;
+    fn bitor(self, rhs: TransitivePageFlags) -> Self::Output {
+        Self::new(self.tflags | rhs, self.mflags)
+    }
+}
+impl core::ops::BitAnd<MappingSpecificPageFlags> for PageFlags {
+    type Output = Self;
+    fn bitand(self, rhs: MappingSpecificPageFlags) -> Self::Output {
+        Self::new(self.tflags, self.mflags & rhs)
+    }
+}
+impl core::ops::BitOr<MappingSpecificPageFlags> for PageFlags {
+    type Output = Self;
+    fn bitor(self, rhs: MappingSpecificPageFlags) -> Self::Output {
+        Self::new(self.tflags, self.mflags | rhs)
+    }
+}
+impl core::ops::BitAnd<Self> for PageFlags {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self::new(self.tflags & rhs.tflags, self.mflags & rhs.mflags)
+    }
+}
+impl core::ops::BitOr<Self> for PageFlags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self::new(self.tflags | rhs.tflags, self.mflags | rhs.mflags)
+    }
 }
 bitflags::bitflags! {
     // These flags follow a "union" pattern - flags applied to upper levels will also override lower levels (the most restrictive version winning)
@@ -55,6 +94,14 @@ bitflags::bitflags! {
         const CACHE_WRITE_THROUGH = 1<<3;
     }
 }
+
+macro_rules! pageFlags {
+    ($($k:ident:$i:ident),*) => {{
+        use $crate::memory::paging::{PageFlags,TransitivePageFlags as t,MappingSpecificPageFlags as m};
+        PageFlags::empty() $(| $k::$i)+
+    }}
+}
+pub(crate) use pageFlags;
 
 // LOCKED PAGE ALLOCATOR
 #[derive(Debug,Clone,Copy)]
@@ -573,6 +620,13 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
     /* Find the start address of this allocation in VMem */
     pub fn start(&self) -> usize {
         canonical_addr(self.allocation.start_addr() + self.metadata.offset)
+    }
+    /* Find the "base" address of this allocation in VMem.
+        This will be different from start() if e.g. the address passed to allocate_at was not page aligned.
+        start() -> the very start of the allocation (including any padding added to ensure it is page-aligned).
+        base() -> the VMem address that was requested. */
+    pub fn base(&self) -> usize {
+        self.start()+self.baseaddr_offset
     }
     /* Find the end address of this allocation in VMem. (exclusive) */
     pub fn end(&self) -> usize {

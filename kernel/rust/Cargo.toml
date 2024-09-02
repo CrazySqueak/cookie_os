@@ -26,6 +26,7 @@ x86_64 = "0.15.1"
 pic8259 = "0.10.1"
 pc-keyboard = "0.7.0"
 raw-cpuid = { git = "https://github.com/CrazySqueak/rust-cpuid.git", branch = "os_test_2" }
+acpi = "5.0.0"
 
 [features]
 # Enables 1GiB Huge Pages on x86_64 systems. This is a relatively new feature and is not supported by all CPUs.

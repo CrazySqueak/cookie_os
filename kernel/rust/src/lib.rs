@@ -120,6 +120,7 @@ pub extern "sysv64" fn _kstart() -> ! {
     _kmain();
 }
 
+static AP_BOOT_PAGING_CONTEXT: sync::Mutex<Option<memory::paging::PagingContext>> = sync::Mutex::new(None);
 #[no_mangle]
 pub extern "sysv64" fn _kstart_ap() -> ! {
     multitasking::init_cpu_num();
@@ -137,8 +138,10 @@ pub extern "sysv64" fn _kstart_ap() -> ! {
         // BOOTSTRAP
         
         // Initialise paging
-        let page_table = memory::alloc_util::new_user_paging_context();
+        // (the paging context is shared between CPUs to avoid allocating a new one every time)
+        let page_table = AP_BOOT_PAGING_CONTEXT.lock().as_ref().map(memory::paging::PagingContext::clone_ref).unwrap_or_else(memory::alloc_util::new_user_paging_context);
         unsafe{page_table.activate();}
+        drop(page_table);  // (ensure paging context gets dropped once it's no longer active)
         // LATE-BOOTSTRAP
         
         // Initialise CPU/system (part II)
@@ -220,6 +223,11 @@ extern "sysv64" fn _start_processors_task() -> ! {
     };
     assert!(processor_info.boot_processor.local_apic_id == our_apic_id.into());
     
+    // Set up a paging context
+    let context = memory::alloc_util::new_user_paging_context();
+    *AP_BOOT_PAGING_CONTEXT.lock() = Some(context);
+    
+    // Start the CPUs
     let mut num_started = 0; let mut num_skipped = 0; let mut num_failed = 0;
     for processor in processor_info.application_processors.iter() {
         let Ok(apic_id): Result<u8,_> = processor.local_apic_id.try_into()  else {
@@ -240,6 +248,9 @@ extern "sysv64" fn _start_processors_task() -> ! {
             num_failed += 1;
         }
     }
+    
+    // Drop the paging context
+    *AP_BOOT_PAGING_CONTEXT.lock() = None;
     
     // Now terminate
     klog!(Info, BOOT, "Started {} secondary CPUs. ({} failed, {} skipped)", num_started, num_failed, num_skipped);

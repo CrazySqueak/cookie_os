@@ -1,4 +1,6 @@
-pub mod spin;
-pub use self::spin::{Mutex,MutexGuard,RwLock,RwLockReadGuard,RwLockWriteGuard,RwLockUpgradableGuard,SchedulerYield};
 
 pub mod cpulocal;
+
+pub mod condvar;
+
+pub mod kspin;

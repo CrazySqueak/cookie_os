@@ -1,5 +1,5 @@
 
-use core::sync::atomic::{AtomicU16,AtomicU64,AtomicPtr,Ordering};
+use core::sync::atomic::{AtomicU16,AtomicU64,AtomicBool,AtomicPtr,Ordering};
 use crate::memory::alloc_util::{AnyAllocatedStack,GAllocatedStack};
 use crate::logging::klog;
 use super::system_apic;

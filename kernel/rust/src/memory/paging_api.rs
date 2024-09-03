@@ -532,7 +532,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     pub(super) fn invalidate_tlb(&mut self, allocation: &PageAllocation<PFA>){
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
         let vmem_offset = allocation.start();  // (vmem offset is now added by PageAllocation itself)
-        inval_tlb_pg(vmem_offset, allocation.size(), self.options.is_global_page);
+        inval_tlb_pg(allocation.into(), allocation.metadata.offset, self.options.is_global_page, &[/*TODO*/]);
     }
 }
 

@@ -39,6 +39,10 @@ pub fn with_local_apic<R>(f: impl FnOnce(&LocalAPIC)->R)->R{
         f(apic)
     })
 }
+/* Returns true if the local APIC has been initialised (e.g. using init_local_apic) */
+pub fn is_local_apic_initialised() -> bool {
+    _LOCAL_APIC.inspect(|apic_o|apic_o.is_some())
+}
 
 // APIC ID
 pub type ApicID = u8;

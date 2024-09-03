@@ -118,7 +118,7 @@ pub fn init_msr(){
         feature_check!(required name="APIC", check_cpu_feature!(cpuid_f, has_apic); set (); else incompatible(failed,fail_reasons));  // no flag to set
         
         // INVLPGB
-        feature_check!(required name="INVLPGB Instruction", check_cpu_feature!(cpuid_pcfi, has_invlpgb); set (); else incompatible(failed,fail_reasons));
+        feature_check!(feature="enable_amd64_invlpgb" name="INVLPGB Instruction", check_cpu_feature!(cpuid_pcfi, has_invlpgb); set (); else warn);
         
         // == Handle success/failure
         if failed {

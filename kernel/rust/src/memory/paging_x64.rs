@@ -167,21 +167,36 @@ pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
     Cr3::write(PhysFrame::from_start_address(PhysAddr::new(phys_addr.try_into().unwrap())).expect("Page Table Address Not Aligned!"), cr3flags)
 }
 
-pub(super) fn inval_tlb_pg(vmem_start: usize, length: usize, include_global: bool){
+// allocation, voffset - define the vmem addresses to invalidate TLB mappings for
+// include_global - If true, include global pages as well
+// cpu_nums - CPUs to invalidate for
+pub(super) fn inval_tlb_pg(allocation: &super::PartialPageAllocation, voffset: usize, include_global: bool, cpu_nums: &[usize]){
     use x86_64::structures::paging::page::{Size4KiB,Size2MiB};
-    let vmem_end_xcl = vmem_start + length;
+    let vmem_start = allocation.start_addr()+voffset; let vmem_end_xcl = allocation.end_addr()+voffset; let length = vmem_end_xcl-vmem_start;
     klog!(Debug, MEMORY_PAGING_TLB, "Flushing TLB for 0x{:x}..0x{:x}", vmem_start, vmem_end_xcl);
     
-    // Determine page size to use
-    if vmem_start%X64Level2::PAGE_SIZE == 0 && length%X64Level2::PAGE_SIZE == 0 {
-        call_invlpgb::<Size2MiB>(vmem_start, vmem_end_xcl, include_global)
+    // Use INVLPGB instruction if enabled
+    if cfg!(feature = "enable_amd64_invlpgb") && INVLPGB.is_some() {
+        if vmem_start%X64Level2::PAGE_SIZE == 0 && length%X64Level2::PAGE_SIZE == 0 {
+            klog!(Debug, MEMORY_PAGING_TLB, "Flushing using call_invlpgb (size=2MiB).");
+            call_invlpgb::<Size2MiB>(vmem_start, vmem_end_xcl, include_global)
+        } else {
+            klog!(Debug, MEMORY_PAGING_TLB, "Flushing using call_invlpgb (size=4KiB).");
+            call_invlpgb::<Size4KiB>(vmem_start, vmem_end_xcl, include_global)
+        }
+    } else if crate::coredrivers::system_apic::is_local_apic_initialised() {
+        // Broadcast over APIC
+        todo!()
     } else {
-        call_invlpgb::<Size4KiB>(vmem_start, vmem_end_xcl, include_global)
+        // Invalidate using the old-fashioned way
+        klog!(Debug, MEMORY_PAGING_TLB, "Flushing locally using call_invlpg_recursive.");
+        call_invlpg_recursive(allocation, allocation.start_addr()+voffset);
+        //panic!("No supported TLB invalidation strategy enabled?!")
     }
 }
 
 lazy_static::lazy_static! {
-    static ref INVLPGB: x86_64::instructions::tlb::Invlpgb = x86_64::instructions::tlb::Invlpgb::new().unwrap();
+    static ref INVLPGB: Option<x86_64::instructions::tlb::Invlpgb> = x86_64::instructions::tlb::Invlpgb::new();
 }
 fn call_invlpgb<S: x86_64::structures::paging::page::NotGiantPageSize>(vmem_start: usize, vmem_end_xcl: usize, include_global: bool){
     use x86_64::addr::VirtAddr;
@@ -192,7 +207,25 @@ fn call_invlpgb<S: x86_64::structures::paging::page::NotGiantPageSize>(vmem_star
         end: Page::<S>::from_start_address(VirtAddr::new(vmem_end_xcl.try_into().unwrap())).expect("Provided TLB flush end address not page-aligned!"),
     };
     
-    let mut flush = INVLPGB.build().pages(range);
+    let mut flush = INVLPGB.as_ref().unwrap().build().pages(range);
     if include_global {flush.include_global();}
     flush.flush();
+}
+
+// TODO: broadcast this somehow?
+fn call_invlpg_recursive(allocation: &super::PartialPageAllocation, voffset: usize){
+    use x86_64::instructions::tlb::flush;
+    use x86_64::VirtAddr;
+    for item in allocation.entries() {
+        match item {
+            &PAllocItem::Page { index, offset } => {
+                klog!(Debug, MEMORY_PAGING_TLB_RECUR, "Flushing addr 0x{:x} (vo={:x} o={:x})", voffset+offset, voffset, offset);
+                flush(VirtAddr::new((voffset + offset).try_into().unwrap()));
+            },
+            &PAllocItem::SubTable { offset, alloc: ref suballocation, .. } => {
+                klog!(Debug, MEMORY_PAGING_TLB_RECUR, "Recursing with offset 0x{:x} (vo={:x} o={:x})", voffset+offset, voffset, offset);
+                call_invlpg_recursive(suballocation, voffset + offset);
+            },
+        }
+    }
 }

@@ -192,7 +192,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     }
     
     /* Write to a page table that is currently active, provided there are no other read/write locks.
-        Writes using this guard will automatically invalidate the TLB entries as needed for the current CPU (but currently not OTHERS!!! TODO).*/
+        Writes using this guard will automatically invalidate the TLB entries as needed.*/
     pub(super) fn write_when_active(&self) -> LPageAllocatorUnsafeWriteGuard<PFA> {
         // Acquire an upgradable read guard, to ensure that A. there are no writers, and B. there are no new readers while we're determining what to do
         let upgradable = self.0.upgradeable_read();
@@ -532,29 +532,8 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     pub(super) fn invalidate_tlb(&mut self, allocation: &PageAllocation<PFA>){
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
         let vmem_offset = allocation.start();  // (vmem offset is now added by PageAllocation itself)
-        Self::_inval_tlb_inner(allocation.into(), 0, vmem_offset);
+        inval_tlb_pg(vmem_offset, allocation.size(), self.options.is_global_page);
     }
-    fn _inval_tlb_inner(allocation: &PartialPageAllocation, parentoffset: usize, vmem_start: usize){
-            // Call on current-level entries
-            for item in allocation.entries() {
-                match item {
-                    &PAllocItem::Page { index, offset } => {
-                        let offset = parentoffset+offset;
-                        inval_tlb_pg(vmem_start + offset)
-                    },
-                    &PAllocItem::SubTable { .. } => {},
-                }
-            }
-            // Recurse into sub-allocators
-            for item in allocation.entries() {
-                if let &PAllocItem::SubTable { offset, alloc: ref suballocation, .. } = item {
-                    Self::_inval_tlb_inner(suballocation, parentoffset+offset, vmem_start);
-                }
-            }
-        }
-    //ppa_define_foreach!(: _inval_tlb_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, vmem_start: usize, {
-    //    inval_tlb_pg(vmem_start + offset)
-    //}, {});
 }
 
 pub struct ForcedUpgradeGuard<'a, T> {

@@ -88,6 +88,7 @@ pub fn init_msr(){
         let _cpuid_f    = cpu_id.get_feature_info()                              ; let cpuid_f = _cpuid_f.as_ref();
         let _cpuid_ef   = cpu_id.get_extended_feature_info()                     ; let cpuid_ef = _cpuid_ef.as_ref();
         let _cpuid_epfi = cpu_id.get_extended_processor_and_feature_identifiers(); let cpuid_epfi = _cpuid_epfi.as_ref();
+        let _cpuid_pcfi = cpu_id.get_processor_capacity_feature_info()           ; let cpuid_pcfi = _cpuid_pcfi.as_ref();
         
         let mut eferflags = Efer::read();
         let mut cr4flags = Cr4::read();
@@ -115,6 +116,9 @@ pub fn init_msr(){
         
         // APIC
         feature_check!(required name="APIC", check_cpu_feature!(cpuid_f, has_apic); set (); else incompatible(failed,fail_reasons));  // no flag to set
+        
+        // INVLPGB
+        feature_check!(required name="INVLPGB Instruction", check_cpu_feature!(cpuid_pcfi, has_invlpgb); set (); else incompatible(failed,fail_reasons));
         
         // == Handle success/failure
         if failed {

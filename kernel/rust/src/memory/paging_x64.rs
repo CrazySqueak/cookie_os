@@ -128,8 +128,8 @@ type X64Level3 = MLFFAllocator<X64Level2, X64PageTable<3>, true , true>;  // Pag
 type X64Level4 = MLFFAllocator<X64Level3, X64PageTable<4>, true , false>;  // Page Map Level 4
 
 pub(in super) type TopLevelPageAllocator = X64Level4;
-/// The size of the smallest possible page
-pub const MIN_PAGE_SIZE: usize = 4096;
+/// The range of memory covered by an entry in the lowest-level page table
+pub const MIN_PAGE_SIZE: usize = X64Level1::PAGE_SIZE;
 
 // Kernel Stack: In the kernel page
 pub const KALLOCATION_KERNEL_STACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true), PageAllocationStrategy::new_default().reverse_order(true).spread_mode(true), PageAllocationStrategy::new_default().reverse_order(true)];
@@ -167,9 +167,32 @@ pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
     Cr3::write(PhysFrame::from_start_address(PhysAddr::new(phys_addr.try_into().unwrap())).expect("Page Table Address Not Aligned!"), cr3flags)
 }
 
-pub(super) fn inval_tlb_pg(virt_addr: usize){
-    use x86_64::instructions::tlb::flush;
+pub(super) fn inval_tlb_pg(vmem_start: usize, length: usize, include_global: bool){
+    use x86_64::structures::paging::page::{Size4KiB,Size2MiB};
+    let vmem_end_xcl = vmem_start + length;
+    klog!(Debug, MEMORY_PAGING_TLB, "Flushing TLB for 0x{:x}..0x{:x}", vmem_start, vmem_end_xcl);
+    
+    // Determine page size to use
+    if vmem_start%X64Level2::PAGE_SIZE == 0 && length%X64Level2::PAGE_SIZE == 0 {
+        call_invlpgb::<Size2MiB>(vmem_start, vmem_end_xcl, include_global)
+    } else {
+        call_invlpgb::<Size4KiB>(vmem_start, vmem_end_xcl, include_global)
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref INVLPGB: x86_64::instructions::tlb::Invlpgb = x86_64::instructions::tlb::Invlpgb::new().unwrap();
+}
+fn call_invlpgb<S: x86_64::structures::paging::page::NotGiantPageSize>(vmem_start: usize, vmem_end_xcl: usize, include_global: bool){
     use x86_64::addr::VirtAddr;
-    klog!(Debug, MEMORY_PAGING_TLB, "Flushing TLB for 0x{:x}", virt_addr);
-    flush(VirtAddr::new_truncate(virt_addr.try_into().unwrap()))
+    use x86_64::structures::paging::page::{PageRange,Page};
+    use x86_64::instructions::tlb::InvlpgbFlushBuilder;
+    let range = PageRange {
+        start: Page::<S>::from_start_address(VirtAddr::new(vmem_start.try_into().unwrap())).expect("Provided TLB flush start address not page-aligned!"),
+        end: Page::<S>::from_start_address(VirtAddr::new(vmem_end_xcl.try_into().unwrap())).expect("Provided TLB flush end address not page-aligned!"),
+    };
+    
+    let mut flush = INVLPGB.build().pages(range);
+    if include_global {flush.include_global();}
+    flush.flush();
 }

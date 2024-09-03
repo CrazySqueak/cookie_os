@@ -12,6 +12,9 @@ pub struct WaitingListEntry {
 /// Tasks here will sleep until woken by a corresponding notify() call.
 pub struct WaitingList(KMutex<VecDeque<WaitingListEntry>>);
 impl WaitingList {
+    pub const fn new() -> Self {
+        Self(KMutex::new(VecDeque::new()))
+    }
     
     /// Yield to the scheduler, and wait until the thread is notified
     /// Note: This makes no guarantee that a notify hasn't happened in between you checking the predicate and calling wait()
@@ -32,7 +35,7 @@ impl WaitingList {
         true
     }
     /// A version of wait_ifnt that checks the predicate again after resuming, and keeps suspending until the predicate returns true
-    pub fn wait_while(&self, predicate: impl Fn()->bool + Copy) {
+    pub fn wait_until(&self, predicate: impl Fn()->bool + Copy) {
         // Keep trying until the predicate returns true (causing wait_ifnt to return false)
         while self.wait_ifnt(predicate){}
     }

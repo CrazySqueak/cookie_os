@@ -11,3 +11,6 @@ mod yspin;
 pub use yspin::*;
 mod wlock;
 pub use wlock::*;
+
+mod promise;
+pub use promise::*;

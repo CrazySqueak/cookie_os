@@ -102,6 +102,7 @@ mod sealed {
     }
     
     // (offset is the offset for the start of the frame/subpage in physmem, measured from the base physmem address)
+    #[derive(Clone)]
     pub enum PAllocItem {
         Page{index: usize, offset: usize},
         SubTable{index: usize, offset: usize, alloc: PartialPageAllocation}
@@ -123,6 +124,7 @@ mod sealed {
     // PartialPageAllocation stores the indicies and offsets of page allocations internally
     // (as it is not a generic class, it also stores the size of a "page", since otherwise address calculations are impossible without locking the original allocator or making questionable guesses)
     // Entries MUST be ordered in order of offset
+    #[derive(Clone)]
     pub struct PartialPageAllocation(Vec<PAllocItem>,usize);
     impl PartialPageAllocation {
         pub fn new(items: Vec<PAllocItem>, page_size: usize) -> Self {
@@ -294,3 +296,24 @@ pub use arch::{KALLOCATION_KERNEL_STACK,KALLOCATION_DYN_MMIO,ALLOCATION_USER_STA
 // The default strategy contains no restrictions or special behaviour
 // It is useful for e.g. calling allocate(ST::PAGE_SIZE) or if no strategy should be applied
 pub const ALLOCATION_DEFAULT: PageAllocationStrategies = &[PageAllocationStrategy::new_default()];
+
+// HANDLING TLB SHOOTDOWNS FROM OTHER CORES
+// Shootdown requests from other cores
+use crate::sync::cpulocal::CpuLocalLockedItem;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+//use sealed::PartialPageAllocation;
+static TLB_SHOOTDOWN_QUEUE: CpuLocalLockedItem<VecDeque<(Arc<PartialPageAllocation>,usize,bool)>> = CpuLocalLockedItem::new();
+pub(self) fn push_shootdown(cpu: usize, allocation: Arc<PartialPageAllocation>, voffset: usize, include_global: bool){
+    let ql = TLB_SHOOTDOWN_QUEUE.get_for(cpu);
+    let mut queue = ql.lock();
+    queue.push_back((allocation, voffset, include_global));
+}
+pub fn pop_shootdowns(){
+    use arch::inval_tlb_pg;
+    TLB_SHOOTDOWN_QUEUE.mutate(|queue|{
+        for (allocation, offset, global) in queue.drain(0..) {
+            inval_tlb_pg(&allocation, offset, global, None)
+        }
+    })
+}

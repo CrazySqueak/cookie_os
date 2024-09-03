@@ -187,6 +187,7 @@ pub(super) fn inval_tlb_pg(allocation: &super::PartialPageAllocation, voffset: u
     } else if crate::coredrivers::system_apic::is_local_apic_initialised() && cpu_nums.is_some() {
         // Broadcast invalidation over APIC (using interrupts)
         klog!(Debug, MEMORY_PAGING_TLB, "Flushing using APIC.");
+        let local_num = crate::multitasking::get_cpu_num();
         let cpu_nums = cpu_nums.unwrap();
         if include_global {
             // This affects all page mappings. No comparisons on CPU IDs need to be made
@@ -195,19 +196,25 @@ pub(super) fn inval_tlb_pg(allocation: &super::PartialPageAllocation, voffset: u
             call_invlpg_recursive(allocation, allocation.start_addr()+voffset);
             // Invalidate globally
             klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing global page for all other CPUs using APIC interrupt.");
-            todo!()
+            let al = alloc::sync::Arc::new(allocation.clone());
+            for cpu_num in cpu_nums.iter() {
+                if *cpu_num == local_num { continue; }
+                super::push_shootdown(*cpu_num,alloc::sync::Arc::clone(&al),voffset,include_global);
+            }
+            crate::lowlevel::broadcast_shootdown();
         } else {
             // Invalidate locally
-            let local_num = crate::multitasking::get_cpu_num();
             if cpu_nums.contains(&local_num) {
                 klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing locally for CPU{} using call_invlpg_recursive.", local_num);
                 call_invlpg_recursive(allocation, allocation.start_addr()+voffset);
             }
             // Broadcast to target CPUs over APIC
+            let al = alloc::sync::Arc::new(allocation.clone());
             for cpu_num in cpu_nums.iter() {
                 if *cpu_num == local_num { continue; }
                 klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing for CPU{} using APIC interrupt.", local_num);
-                todo!()
+                super::push_shootdown(*cpu_num,alloc::sync::Arc::clone(&al),voffset,include_global);
+                crate::lowlevel::send_shootdown_cpunum(*cpu_num);
             }
         }
     } else {
@@ -235,7 +242,6 @@ fn call_invlpgb<S: x86_64::structures::paging::page::NotGiantPageSize>(vmem_star
     flush.flush();
 }
 
-// TODO: broadcast this somehow?
 fn call_invlpg_recursive(allocation: &super::PartialPageAllocation, voffset: usize){
     use x86_64::instructions::tlb::flush;
     use x86_64::VirtAddr;

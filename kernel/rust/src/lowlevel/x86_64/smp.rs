@@ -84,3 +84,18 @@ pub unsafe fn emit_panic() {
         icr.send_ipi_raw(system_apic::InterProcessorInterrupt::Fixed(super::interrupts::KERNEL_PANIC_VECTOR), system_apic::IPIDestination::EveryoneButSelf);
     });
 }
+/// Send a TLB Shootdown interrupt to a given CPU
+pub fn send_shootdown_cpunum(cpu_num: usize) {
+    let apic_id = system_apic::get_apic_id_for(cpu_num);
+    system_apic::with_local_apic(|apic|{
+        let mut icr = apic.icr.lock();
+        icr.send_ipi(system_apic::InterProcessorInterrupt::Fixed(super::interrupts::TLB_SHOOTDOWN_VECTOR), system_apic::IPIDestination::APICId(apic_id));
+    });
+}
+/// Send a TLB Shootdown interrupt to all CPUs
+pub fn broadcast_shootdown() {
+    system_apic::with_local_apic(|apic|{
+        let mut icr = apic.icr.lock();
+        icr.send_ipi(system_apic::InterProcessorInterrupt::Fixed(super::interrupts::TLB_SHOOTDOWN_VECTOR), system_apic::IPIDestination::EveryoneButSelf);
+    });
+}

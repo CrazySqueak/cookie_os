@@ -163,14 +163,14 @@ impl InterruptCommandRegister {
     unsafe fn new(base:usize)->Self { Self(MMIORegister64::new(base, 0x300,0x310)) }
     /* Send an IPI, blocking until it has sent. */
     pub fn send_ipi(&mut self, ipi: InterProcessorInterrupt, dest: IPIDestination){
+        while self.0.read_raw()&0x1000 != 0 { crate::multitasking::spin_yield(); }  // wait until the ICR is ready
         klog!(Debug, COREDRIVERS_XAPIC, "Sending IPI {:?} to {:?}", ipi, dest);
         self.send_ipi_raw(ipi, dest);
         
-        // Wait for it to send
-        use crate::multitasking::{yield_to_scheduler,SchedulerCommand};
-        yield_to_scheduler(SchedulerCommand::PushBack);  // Ensure APIC has time to process our command
-        while self.0.read_raw()&0x1000 != 0 { yield_to_scheduler(SchedulerCommand::SleepNTicks(1)); }  // wait until the IPI has sent
-        // Done :)
+        // // Wait for it to send
+        // use crate::multitasking::{yield_to_scheduler,SchedulerCommand};
+        // //yield_to_scheduler(SchedulerCommand::PushBack);  // Ensure APIC has time to process our command
+        // // Done :)
     }
     /// Send an IPI without blocking or logging
     pub fn send_ipi_raw(&mut self, ipi: InterProcessorInterrupt, dest: IPIDestination){

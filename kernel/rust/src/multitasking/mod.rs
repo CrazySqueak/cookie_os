@@ -76,3 +76,17 @@ impl fmt::Display for ExecutionContext {
         Ok(())
     }
 }
+
+/// Either yield to the scheduler (if possible) or emit a PAUSE instruction - useful in spin loops
+#[inline(always)]
+pub fn spin_yield(){
+    // (don't yield if we're panicking or not executing a task)
+    if is_executing_task() && !crate::_ABORTING.load(core::sync::atomic::Ordering::Relaxed) {
+        // Yield
+        yield_to_scheduler(SchedulerCommand::PushBack)
+    } else {
+        // Spin and wait...
+        use spin::{Spin,RelaxStrategy};
+        Spin::relax();
+    }
+}

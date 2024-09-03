@@ -21,6 +21,9 @@ pub const APIC_TIMER_VECTOR: u8 = 0x20;
 // 0x21 - Kernel Panic
 /// May be emitted by the kernel in the case of an unrecoverable panic, to interrupt the other CPUs
 pub const KERNEL_PANIC_VECTOR: u8 = 0x21;
+// 0x22 - TLB Shootdown
+/// May be emitted by the kernel to notify a CPU of pending TLB shootdowns
+pub const TLB_SHOOTDOWN_VECTOR: u8 = 0x22;
 // ... available
 // 0xEX - Legacy PICs (shouldn't trigger but might)
 pub const PIC_1_OFFSET: u8 = 0xE0;
@@ -48,6 +51,8 @@ fn init_idt() {
     idt[SPURIOUS_INTERRUPT_VECTOR].set_handler_fn(spurious_interrupt_handler);
     // Handle panics
     idt[KERNEL_PANIC_VECTOR].set_handler_fn(kernel_panic_interrupt);
+    // Pro tip: remember to add your new interrupt handlers to the IDT as otherwise you'll get an unexplained double fault
+    idt[TLB_SHOOTDOWN_VECTOR].set_handler_fn(tlb_shootdown_handler);
     
     // // Timer
     // idt[PICInterrupt::Timer.as_u8()].set_handler_fn(timer_handler);
@@ -104,6 +109,17 @@ pub fn init_ap(){
     x86_64::instructions::interrupts::enable();
 }
 
+macro_rules! local_apic_interrupt_handler {
+    ($vector:expr, $name:ident, $sfname:ident, $body:block) => {
+        #[no_mangle]
+        extern "x86-interrupt" fn $name ($sfname: InterruptStackFrame) {
+            $body
+            
+            system_apic::with_local_apic(|apic|apic.eoi.signal_eoi());
+        }
+    }
+}
+
 #[no_mangle]
 extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode){
     use x86_64::registers::control::Cr2;
@@ -122,25 +138,18 @@ extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _er
     panic!("General Protection Fault!\n{:?}", stack_frame);
 }
 
-// Special
+// The kernel panic interrupt does not return, so we do not need to send an EOI.
 #[no_mangle]
 extern "x86-interrupt" fn kernel_panic_interrupt(_stack_frame: InterruptStackFrame){
     panic!("Received kernel panic from another CPU");
 }
 
-// APICs
-macro_rules! local_apic_interrupt_handler {
-    ($vector:expr, $name:ident, $sfname:ident, $body:block) => {
-        #[no_mangle]
-        extern "x86-interrupt" fn $name ($sfname: InterruptStackFrame) {
-            $body
-            
-            system_apic::with_local_apic(|apic|apic.eoi.signal_eoi());
-        }
-    }
-}
 local_apic_interrupt_handler!(APIC_TIMER_VECTOR, timer_handler, _stackframe, {
     crate::multitasking::scheduler::_scheduler_tick();
+});
+
+local_apic_interrupt_handler!(TLB_SHOOTDOWN_VECTOR, tlb_shootdown_handler, _stackframe, {
+    crate::memory::paging::pop_shootdowns();
 });
 
 #[no_mangle]

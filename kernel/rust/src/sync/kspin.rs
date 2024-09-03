@@ -6,7 +6,7 @@ use lock_api::{RawMutex,RawRwLock,GuardSend};
 use core::sync::atomic::*;
 use core::hint::spin_loop;
 
-struct KMutexRaw(AtomicBool);
+pub struct KMutexRaw(AtomicBool);
 unsafe impl RawMutex for KMutexRaw {
     type GuardMarker = GuardSend;
     const INIT: Self = Self(AtomicBool::new(false));
@@ -31,7 +31,7 @@ pub type MappedKMutexGuard<'a,T> = lock_api::MappedMutexGuard<'a,KMutexRaw,T>;
 const WRITER: usize = 1<<63;
 const UPGRADER: usize = 1<<62;
 const EXCLUSIVE_THRESHOLD: usize = 1<<61;
-struct KRwLockRaw(AtomicUsize);
+pub struct KRwLockRaw(AtomicUsize);
 unsafe impl RawRwLock for KRwLockRaw {
     type GuardMarker = GuardSend;
     const INIT: Self = Self(AtomicUsize::new(0));

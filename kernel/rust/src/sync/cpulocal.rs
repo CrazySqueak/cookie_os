@@ -37,14 +37,6 @@ impl<T: Default> CpuLocal<T> {
 
 // 'cl is CPULocal's lifetime
 pub type CpuLocalGuard<'c1,T> = MappedKRwLockReadGuard<'c1,T>;
-/*pub struct CpuLocalGuard<'cl,T>(KRwLockReadGuard<'cl,Vec<T>>,usize);
-impl<T> Deref for CpuLocalGuard<'_,T> {
-    type Target = T;
-    #[inline(always)]
-    fn deref(&self) -> &T {
-        &self.0[self.1]
-    }
-}*/
 
 
 // Utilities, since CpuLocal does not grant interior mutability due to obvious threading issues + borrow checker not liking nested guards
@@ -79,8 +71,8 @@ impl<L:lock_api::RawRwLock,T: Default> CpuLocalRWLockedItem<L,T> {
         mutator(&mut item)
     }
 }
-pub struct CpuLocalNoInterruptsLockedItem<L:lock_api::RawMutex,T: Default>(CpuLocalLockedItem<L,T>);
-impl<L:lock_api::RawMutex,T: Default> CpuLocalNoInterruptsLockedItem<L,T> {
+pub struct CpuLocalNoInterruptsLockedItem<T: Default>(pub CpuLocalLockedItem<super::KMutexRaw,T>);
+impl<T: Default> CpuLocalNoInterruptsLockedItem<T> {
     pub const fn new() -> Self { Self(CpuLocal::new()) }
     pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
         without_interrupts(||self.0.inspect(inspector))

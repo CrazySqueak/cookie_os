@@ -4,7 +4,9 @@ use super::{Task,TaskType};
 use alloc::collections::VecDeque;
 use crate::logging::klog;
 use crate::sync::cpulocal::{CpuLocal,CpuLocalGuard,CpuLocalLockedOption,CpuLocalLockedItem,CpuLocalNoInterruptsLockedItem};
+use crate::sync::KMutexRaw;
 use core::sync::atomic::{AtomicUsize,AtomicBool,Ordering};
+use crate::sync::{KMutexGuard,waitlist::WaitingListEntry};
 
 // Currently active task & run queue
 struct SchedulerState {
@@ -29,7 +31,7 @@ impl core::default::Default for SchedulerState {
 }
 // current_task is stored separately to the rest of the state as it is commonly accessed by logging methods,
 // and usually isn't held for very long. If it was part of _SCHEDULER_STATE, then logging during with_scheduler_state! would cause a deadlock
-static _CURRENT_TASK: CpuLocalLockedOption<Task> = CpuLocalLockedOption::new();
+static _CURRENT_TASK: CpuLocalLockedOption<KMutexRaw,Task> = CpuLocalLockedOption::new();
 static _SCHEDULER_STATE: CpuLocalNoInterruptsLockedItem<SchedulerState> = CpuLocalNoInterruptsLockedItem::new();
 static _SCHEDULER_TICKS: CpuLocal<AtomicUsize> = CpuLocal::new();
 
@@ -52,7 +54,7 @@ pub fn terminate_current_task() -> ! {
 
 /* The scheduler command given to _cs_push is then passed over to the scheduler.
     It is used to tell the scheduler what to do with the task that just finished. */
-pub enum SchedulerCommand {
+pub enum SchedulerCommand<'a> {
     /// Push the current task back to the run_queue, and run it again once it's time
     PushBack,
     /// Discard the current task - it has terminated. (this does not perform unwinding).
@@ -60,6 +62,9 @@ pub enum SchedulerCommand {
     Terminate,
     /// Sleep for the requested number of PIT ticks
     SleepNTicks(usize),
+    /// Push a waiting list entry to the given waiting list, then unlock the mutex by dropping the guard
+    /// (the Option<> is used internally, and must always be passed as Some(). Passing a None may (will) cause a kernel panic.
+    PushToWaitingList(core::cell::RefCell<Option<KMutexGuard<'a,VecDeque<WaitingListEntry>>>>),
 }
 
 /* Do not call this function yourself! (unless you know what you're doing). Use yield_to_scheduler instead!
@@ -87,6 +92,13 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
                 state.sleeping.push_back((current_task, wake_at));
             }
             
+            SchedulerCommand::PushToWaitingList(list) => {
+                // Construct and push a waiting list entry
+                let mut list = list.borrow_mut().take().unwrap();
+                klog!(Debug, SCHEDULER, "Task {} waiting on list.");
+                list.push_back(WaitingListEntry { cpu: super::get_cpu_num(), task: current_task });
+            }
+            
             _ => {
                 // Push back onto run queue
                 klog!(Debug, SCHEDULER, "Suspending task: {}", current_task.task_id);
@@ -112,8 +124,7 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
         } else {
             // No tasks to do
             // spin for now
-            use spin::RelaxStrategy;
-            spin::relax::Spin::relax();
+            core::hint::spin_loop();
         }
     }
 }
@@ -168,6 +179,11 @@ pub fn init_scheduler(stack: Option<alloc::boxed::Box<dyn crate::memory::alloc_u
 pub fn push_task(task: Task){
     klog!(Debug, SCHEDULER, "Pushing new task: {}", task.task_id);
     _SCHEDULER_STATE.mutate(|state|state.run_queue.push_back(task))
+}
+/* Push a new task to another scheduler's run queue. */
+pub fn push_task_to(cpu: usize, task: Task){
+    klog!(Debug, SCHEDULER, "Pushing new task to CPU {}: {}", cpu, task.task_id);
+    crate::lowlevel::without_interrupts(||_SCHEDULER_STATE.0.get_for(cpu).lock().run_queue.push_back(task));
 }
 
 /* Advances the scheduler's clock by 1 tick. Called by the PIT. */

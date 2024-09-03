@@ -1,7 +1,8 @@
 
 pub mod cpulocal;
 
-pub mod condvar;
+pub mod waitlist;
+pub use waitlist::WaitingList;
 
 mod kspin;
 pub use kspin::*;

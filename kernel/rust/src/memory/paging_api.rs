@@ -118,6 +118,9 @@ struct LPAInternal<PFA: PageFrameAllocator> {
     meta: LPAMetadata,
     // The number of times this is "active" - usually 1 for global tables, or <number of CPUs table is active for> for top-level contexts.
     active_count: AtomicU16,
+    // The IDs of the CPUs this is active on, used for flushing the TLB for the correct CPUs (if non-global. For global pages this is usually just the ID of the bootstrap processor and nothing else :-/)
+    // Note that if you just need to know the number of CPUs, active_count is likely to be more accurate (as it's intended for that rather than this which is just for the TLB invalidation process)
+    active_on: RwLock<Vec<usize>>,
 }
 impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
     fn new(alloc: PFA, meta: LPAMetadata) -> Self {
@@ -125,6 +128,7 @@ impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
             lock: RwLock::new(alloc),
             meta: meta,
             active_count: AtomicU16::new(0),
+            active_on: RwLock::new(Vec::new()),
         }
     }
     pub fn metadata(&self) -> LPAMetadata {
@@ -160,10 +164,19 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
         // Increment active count
         self.0.active_count.fetch_add(1, Ordering::Acquire);
+        // Add self to active_on
+        self.0.active_on.write().push(crate::multitasking::get_cpu_num());
         // Return
         alloc
     }
     pub(super) unsafe fn _end_active(&self){
+        // Remove from active_on
+        let mut wg = self.0.active_on.write();
+        let cpu_num = crate::multitasking::get_cpu_num();
+        if let Some(pos) = wg.iter().position(|x|*x==cpu_num) {
+            wg.swap_remove(pos);
+        }
+        drop(wg);
         // Decrement active count
         self.0.active_count.fetch_sub(1, Ordering::Release);
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
@@ -532,7 +545,8 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     pub(super) fn invalidate_tlb(&mut self, allocation: &PageAllocation<PFA>){
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
         let vmem_offset = allocation.start();  // (vmem offset is now added by PageAllocation itself)
-        inval_tlb_pg(allocation.into(), allocation.metadata.offset, self.options.is_global_page, &[/*TODO*/]);
+        let active_on = self.allocator.0.active_on.read(); // It's faster to hold the lock here than to clone as read/write contention on the same page allocator is negligble compared to contention on the heap allocator
+        inval_tlb_pg(allocation.into(), allocation.metadata.offset, self.options.is_global_page, Some(&*active_on));
     }
 }
 

@@ -169,14 +169,14 @@ pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
 
 // allocation, voffset - define the vmem addresses to invalidate TLB mappings for
 // include_global - If true, include global pages as well
-// cpu_nums - CPUs to invalidate for
-pub(super) fn inval_tlb_pg(allocation: &super::PartialPageAllocation, voffset: usize, include_global: bool, cpu_nums: &[usize]){
+// cpu_nums - If Some, assumed to be a broadcast, with the CPUs to invalidate for (if targets may be selected). If None, assumed to be local only (no broadcast is made)
+pub(super) fn inval_tlb_pg(allocation: &super::PartialPageAllocation, voffset: usize, include_global: bool, cpu_nums: Option<&[usize]>){
     use x86_64::structures::paging::page::{Size4KiB,Size2MiB};
     let vmem_start = allocation.start_addr()+voffset; let vmem_end_xcl = allocation.end_addr()+voffset; let length = vmem_end_xcl-vmem_start;
     klog!(Debug, MEMORY_PAGING_TLB, "Flushing TLB for 0x{:x}..0x{:x}", vmem_start, vmem_end_xcl);
     
-    // Use INVLPGB instruction if enabled
-    if cfg!(feature = "enable_amd64_invlpgb") && INVLPGB.is_some() {
+    if cfg!(feature = "enable_amd64_invlpgb") && INVLPGB.is_some() && cpu_nums.is_some() {
+        // Use INVLPGB instruction if enabled
         if vmem_start%X64Level2::PAGE_SIZE == 0 && length%X64Level2::PAGE_SIZE == 0 {
             klog!(Debug, MEMORY_PAGING_TLB, "Flushing using call_invlpgb (size=2MiB).");
             call_invlpgb::<Size2MiB>(vmem_start, vmem_end_xcl, include_global)
@@ -184,9 +184,32 @@ pub(super) fn inval_tlb_pg(allocation: &super::PartialPageAllocation, voffset: u
             klog!(Debug, MEMORY_PAGING_TLB, "Flushing using call_invlpgb (size=4KiB).");
             call_invlpgb::<Size4KiB>(vmem_start, vmem_end_xcl, include_global)
         }
-    } else if crate::coredrivers::system_apic::is_local_apic_initialised() {
-        // Broadcast over APIC
-        todo!()
+    } else if crate::coredrivers::system_apic::is_local_apic_initialised() && cpu_nums.is_some() {
+        // Broadcast invalidation over APIC (using interrupts)
+        klog!(Debug, MEMORY_PAGING_TLB, "Flushing using APIC.");
+        let cpu_nums = cpu_nums.unwrap();
+        if include_global {
+            // This affects all page mappings. No comparisons on CPU IDs need to be made
+            // Invalidate locally
+            klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing global page locally using call_invlpg_recursive.");
+            call_invlpg_recursive(allocation, allocation.start_addr()+voffset);
+            // Invalidate globally
+            klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing global page for all other CPUs using APIC interrupt.");
+            todo!()
+        } else {
+            // Invalidate locally
+            let local_num = crate::multitasking::get_cpu_num();
+            if cpu_nums.contains(&local_num) {
+                klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing locally for CPU{} using call_invlpg_recursive.", local_num);
+                call_invlpg_recursive(allocation, allocation.start_addr()+voffset);
+            }
+            // Broadcast to target CPUs over APIC
+            for cpu_num in cpu_nums.iter() {
+                if *cpu_num == local_num { continue; }
+                klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing for CPU{} using APIC interrupt.", local_num);
+                todo!()
+            }
+        }
     } else {
         // Invalidate using the old-fashioned way
         klog!(Debug, MEMORY_PAGING_TLB, "Flushing locally using call_invlpg_recursive.");

@@ -1,7 +1,6 @@
 //! Kernel Spin
 //! 
 //! K-locks are primitive spinlocks that loop indefinitely until the required condition is met.
-//! While locked, the current processor is set to ignore all maskable interrupts, and yielding with one of these active is an easy way to guarantee a deadlock.
 
 use lock_api::{RawMutex,RawRwLock,GuardSend};
 use core::sync::atomic::*;

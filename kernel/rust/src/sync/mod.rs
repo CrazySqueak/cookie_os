@@ -3,4 +3,5 @@ pub mod cpulocal;
 
 pub mod condvar;
 
-pub mod kspin;
+mod kspin;
+pub use kspin::*;

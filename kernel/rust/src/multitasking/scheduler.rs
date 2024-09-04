@@ -64,7 +64,7 @@ pub enum SchedulerCommand<'a> {
     SleepNTicks(usize),
     /// Push a waiting list entry to the given waiting list, then unlock the mutex by dropping the guard
     /// (the Option<> is used internally, and must always be passed as Some(). Passing a None may (will) cause a kernel panic.
-    PushToWaitingList(core::cell::RefCell<Option<KMutexGuard<'a,VecDeque<WaitingListEntry>>>>),
+    PushToWaitingList(core::cell::Cell<Option<KMutexGuard<'a,VecDeque<WaitingListEntry>>>>),
 }
 
 /* Do not call this function yourself! (unless you know what you're doing). Use yield_to_scheduler instead!
@@ -94,7 +94,7 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
             
             SchedulerCommand::PushToWaitingList(list) => {
                 // Construct and push a waiting list entry
-                let mut list = list.borrow_mut().take().unwrap();
+                let mut list = list.replace(None).expect("Schedule was passed PushToWaitingList(None)!");
                 klog!(Debug, SCHEDULER, "Task {} waiting on list.");
                 list.push_back(WaitingListEntry { cpu: super::get_cpu_num(), task: current_task });
             }

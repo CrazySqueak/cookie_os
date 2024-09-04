@@ -22,7 +22,7 @@ impl WaitingList {
     pub fn wait(&self) {
         let list = self.0.lock();
         // The scheduler takes ownership of the lock and drops it after pushing
-        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushToWaitingList(core::cell::RefCell::new(Some(list))));
+        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushToWaitingList(core::cell::Cell::new(Some(list))));
     }
     /// Lock the waiting list, then check the predicate, and then finally wait *iff* the predicate was false
     /// This method guarantees that notify() has not been called between checking the predicate and suspending the thread
@@ -31,7 +31,7 @@ impl WaitingList {
         let list = self.0.lock();
         if predicate() { return false; }  // Predicate returned true, so return early
         // The scheduler takes ownership of the lock and drops it after pushing
-        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushToWaitingList(core::cell::RefCell::new(Some(list))));
+        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushToWaitingList(core::cell::Cell::new(Some(list))));
         true
     }
     /// A version of wait_ifnt that checks the predicate again after resuming, and keeps suspending until the predicate returns true

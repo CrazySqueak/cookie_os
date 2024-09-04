@@ -1,7 +1,7 @@
 
 use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
-use crate::sync::{WRwLock as RwLock,WRwLockReadGuard as RwLockReadGuard,WRwLockWriteGuard as RwLockWriteGuard};
+use crate::sync::{WRwLock as RwLock,WRwLockReadGuard as RwLockReadGuard,WRwLockWriteGuard as RwLockWriteGuard,WRwLockUpgradableGuard as RwLockUpgradableGuard};
 use crate::sync::WMutex as Mutex;
 use crate::sync::cpulocal::{CpuLocal,CpuLocalLockedOption};
 
@@ -159,8 +159,9 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     /* Lock the allocator for reading until _end_active is called.
     This is intended to be used when the page table is possibly being read/cached by the CPU, as when locked by _begin_active, writes via write_when_active are still possible (as they flush the TLB). */
     pub(super) fn _begin_active(&self) -> &PFA {
-        // Lock
-        let alloc = RwLockReadGuard::leak(self.0.read());
+        // Lock (by obtaining then forgetting a read guard, and using the underlying ptr instead)
+        core::mem::forget(self.0.read());
+        let alloc = unsafe{ &*self.0.data_ptr() };  // SAFETY: We hold a read lock which we obtained (and then leaked) in the statement above
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
         // Increment active count
         self.0.active_count.fetch_add(1, Ordering::Acquire);
@@ -181,7 +182,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         self.0.active_count.fetch_sub(1, Ordering::Release);
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
         // Unlock
-        self.0.force_read_decrement();
+        self.0.force_unlock_read();  // this should really be called force_read_decrement tbh. would be much less ambiguous
     }
     
     pub(super) fn read(&self) -> RwLockReadGuard<PFA> {
@@ -208,7 +209,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         Writes using this guard will automatically invalidate the TLB entries as needed.*/
     pub(super) fn write_when_active(&self) -> LPageAllocatorUnsafeWriteGuard<PFA> {
         // Acquire an upgradable read guard, to ensure that A. there are no writers, and B. there are no new readers while we're determining what to do
-        let upgradable = self.0.upgradeable_read();
+        let upgradable = self.0.upgradable_read();
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
         
         // Ensure reader count matches our active_count
@@ -221,7 +222,8 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
            Note: Reader count was incremented by 1 when we took the upgradeable guard - so actually we should compare against active_count+1.
         */
         loop {
-            let reader_count = self.0.reader_count();
+            // Safety: .raw() shouldn't be unsafe due to allowing you to unlock it as the unlock...() functions are already unsafe! (as is poking at implementation details)
+            let reader_count = unsafe{self.0.raw()}.reader_count().unwrap_or(usize::MAX);
             core::sync::atomic::compiler_fence(Ordering::SeqCst);
             let active_count = self.0.active_count.load(Ordering::Acquire);
             if reader_count <= (active_count+1).into() {
@@ -560,7 +562,7 @@ impl<'a,T> ForcedUpgradeGuard<'a, T>{
         // 👻👻👻👻👻
         // TODO: Find a better alternative
         // This dirty hack gives me the creeps
-        let ptr = &mut *lock.as_mut_ptr();
+        let ptr = &mut *lock.data_ptr();
         Self {
             guard,
             ptr,
@@ -583,7 +585,7 @@ impl<T> core::ops::DerefMut for ForcedUpgradeGuard<'_, T>{
 // the currently active page table on each CPU
 use crate::sync::{KMutexRaw,KRwLockRaw};
 use crate::multitasking::without_interruptions;
-static _ACTIVE_PAGE_TABLE: CpuLocalLockedOption<PagingContext,KRwLockRaw,KMutexRaw> = CpuLocal::new();
+static _ACTIVE_PAGE_TABLE: CpuLocalLockedOption<PagingContext,KMutexRaw,KRwLockRaw> = CpuLocal::new();
 
 // = ALLOCATIONS =
 // Note: Allocations must be allocated/deallocated manually

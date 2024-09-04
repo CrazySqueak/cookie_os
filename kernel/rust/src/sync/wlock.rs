@@ -32,6 +32,14 @@ const UPGRADER: usize = 1<<49;
 const EXCLUSIVE_THRESHOLD: usize = 1<<48;
 // (lock, wait_shared, wait_exclusive)
 pub struct WRwLockRaw(AtomicUsize,WaitingList,WaitingList);
+impl WRwLockRaw {
+    /* If locked exclusively, returns Err(). Otherwise returns Ok(x) */
+    pub fn reader_count(&self) -> Result<usize,usize> {
+        let result = self.0.load(Ordering::Relaxed);
+        if result >= EXCLUSIVE_THRESHOLD { return Err(result); }
+        Ok(result)
+    }
+}
 unsafe impl RawRwLock for WRwLockRaw {
     type GuardMarker = GuardSend;
     const INIT: Self = Self(AtomicUsize::new(0),WaitingList::new(),WaitingList::new());

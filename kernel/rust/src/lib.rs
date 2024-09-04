@@ -60,6 +60,9 @@ pub extern "sysv64" fn _kstart() -> ! {
         lowlevel::init1_bsp();
         // BOOTSTRAP
         klog!(Info, BOOT, "Starting <OS_NAME> version <VERSION>...");
+        // Initialise scheduler
+        klog!(Info, BOOT, "Configuring scheduler");
+        multitasking::scheduler::init_scheduler(None);
         
         // Initialise physical memory
         klog!(Info, BOOT, "Reading memory map");
@@ -98,9 +101,6 @@ pub extern "sysv64" fn _kstart() -> ! {
         let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
         let _ = memory::kernel_heap::grow_kheap( 8*1024*1024);
         
-        // Initialise scheduler
-        klog!(Info, BOOT, "Configuring scheduler");
-        multitasking::scheduler::init_scheduler(None);
         // EARLY-MULTIPROGRAM
         klog!(Info, BOOT, "Entered multiprogram phase.");
         
@@ -136,6 +136,8 @@ pub extern "sysv64" fn _kstart_ap() -> ! {
         // Initialise CPU/system
         lowlevel::init1_ap();
         // BOOTSTRAP
+        // Initialise scheduler
+        multitasking::scheduler::init_scheduler(bootstrap_stack);
         
         // Initialise paging
         // (the paging context is shared between CPUs to avoid allocating a new one every time)
@@ -147,8 +149,6 @@ pub extern "sysv64" fn _kstart_ap() -> ! {
         // Initialise CPU/system (part II)
         lowlevel::init2_ap();
         
-        // Initialise scheduler
-        multitasking::scheduler::init_scheduler(bootstrap_stack);
         // EARLY-MULTIPROGRAM
     }
     klog!(Info, BOOT, "Secondary CPU successfully entered multiprogram phase. Executing _apmain().");

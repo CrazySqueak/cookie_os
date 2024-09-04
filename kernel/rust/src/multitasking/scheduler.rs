@@ -76,6 +76,7 @@ pub enum SchedulerCommand<'a> {
     This function happens after the previous context is saved, but before the next one is loaded. It's this function's job to determine what to run next (and then run it). */
 #[inline]
 pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
+    if crate::util::are_interruptions_disabled() { panic!("schedule() called when interruptions were disabled?"); }
     _IS_EXECUTING_TASK.get().store(false, Ordering::Release);
     _SCHEDULER_STATE.mutate(|state|{
         // Update current task

@@ -17,7 +17,6 @@ mod sync;
 mod logging;
 use logging::klog;
 mod util;
-use crate::util::{LockedWrite};
 
 mod coredrivers;
 use coredrivers::serial_uart::SERIAL1;

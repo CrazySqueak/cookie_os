@@ -46,7 +46,6 @@ impl LogFormatter for DefaultLogFormatter {
 }
 
 // LOG DESTINATIONS
-use crate::util::{LockedWrite,LockedWriteWrapper};
 
 // FORMATTER/DESTINATION SELECTION
 pub struct LoggingContext {
@@ -55,7 +54,8 @@ pub struct LoggingContext {
 }
 impl core::default::Default for LoggingContext {
     fn default() -> Self {
-        let serial1: Box<dyn core::fmt::Write + Send> = Box::new(LockedWriteWrapper(&*crate::coredrivers::serial_uart::SERIAL1));
+        // Note: the logger permanently locks serial1. Literally nothing else uses serial1 so it's fine.
+        let serial1 = Box::new(crate::coredrivers::serial_uart::SERIAL1.lock());
         Self {
             formatter: Box::new(DefaultLogFormatter()),
             destinations: Vec::from([serial1]),

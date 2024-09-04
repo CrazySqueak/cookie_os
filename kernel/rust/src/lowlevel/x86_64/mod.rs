@@ -5,7 +5,7 @@ mod lowlevel;
 mod featureflags; use featureflags::init_msr; use featureflags::init_msr_ap;
 mod smp;
 
-pub use lowlevel::{halt, without_interrupts};
+pub use lowlevel::{halt, without_interrupts as _without_interrupts};
 pub use smp::{start_processor_xapic,emit_panic};
 pub use smp::get_bootstrap_stack as _get_bootstrap_stack;
 

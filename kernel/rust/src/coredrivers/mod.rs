@@ -9,8 +9,8 @@ By the time the OS has finished booting, these should have been replaced with no
 #[path = "base/mmio32.rs"]
 pub mod util_mmio32;
 
-#[cfg_attr(target_arch = "x86_64", path = "keyboard/ps2_x86_64.rs")]
-pub mod keyboard_ps2;
+// #[cfg_attr(target_arch = "x86_64", path = "keyboard/ps2_x86_64.rs")]
+// pub mod keyboard_ps2;
 
 #[cfg_attr(target_arch = "x86_64", path = "serial/uart_x86_64.rs")]
 pub mod serial_uart;

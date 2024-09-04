@@ -51,6 +51,11 @@ pub fn terminate_current_task() -> ! {
     yield_to_scheduler(SchedulerCommand::Terminate);
     unreachable!();  // the scheduler will drop the task when yield is called with the Terminate command
 }
+/* Shorthand for yielding as part of a spinloop. */
+#[inline]
+pub fn spin_yield(){
+    yield_to_scheduler(SchedulerCommand::PushBack);
+}
 
 /* The scheduler command given to _cs_push is then passed over to the scheduler.
     It is used to tell the scheduler what to do with the task that just finished. */

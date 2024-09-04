@@ -95,10 +95,9 @@ pub extern "sysv64" fn _kstart() -> ! {
         lowlevel::init2_bsp();
         
         // Initialise kernel heap rescue
-        klog!(Info, BOOT, "Expanding kernel heap");
         unsafe{memory::kernel_heap::init_kheap_2();}
-        
         // Grow kernel heap by 16+8MiB for a total initial size of 32
+        klog!(Info, BOOT, "Expanding kernel heap");
         let _ = memory::kernel_heap::grow_kheap(16*1024*1024);
         let _ = memory::kernel_heap::grow_kheap( 8*1024*1024);
         

@@ -1,8 +1,8 @@
 
 use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
-use crate::sync::{RwLock,RwLockReadGuard,RwLockWriteGuard,RwLockUpgradableGuard};
-use crate::sync::Mutex;
+use crate::sync::{WRwLock as RwLock,WRwLockReadGuard as RwLockReadGuard,WRwLockWriteGuard as RwLockWriteGuard};
+use crate::sync::WMutex as Mutex;
 use crate::sync::cpulocal::{CpuLocal,CpuLocalLockedOption};
 
 use super::*;
@@ -238,8 +238,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
             } else {
                 // Relax
                 // 🛏☺☕ ahhh
-                use spin::RelaxStrategy;
-                crate::sync::SchedulerYield::relax();
+                crate::multitasking::scheduler::spin_yield();
             }
         }
     }

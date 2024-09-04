@@ -14,8 +14,8 @@ pub fn map_local_apic_mmio() -> Option<global_pages::GlobalPageAllocation> {
 }
 // Local APIC
 use crate::sync::cpulocal::{CpuLocalRWLockedItem,CpuLocalLockedOption};
-use crate::sync::Mutex;
-static _LOCAL_APIC: CpuLocalRWLockedItem<Option<LocalAPIC>> = CpuLocalRWLockedItem::new();
+use crate::sync::{WMutex,WRwLock,WMutexRaw,WRwLockRaw};
+static _LOCAL_APIC: CpuLocalRWLockedItem<WRwLockRaw,Option<LocalAPIC>> = CpuLocalRWLockedItem::new();
 /* Initialise the CPU's local APIC */
 pub fn init_local_apic(){
     klog!(Debug, COREDRIVERS_XAPIC, "Initialising local xAPIC");
@@ -46,7 +46,7 @@ pub fn is_local_apic_initialised() -> bool {
 
 // APIC ID
 pub type ApicID = u8;
-static _LOCAL_APIC_ID: CpuLocalLockedOption<ApicID> = CpuLocalLockedOption::new();
+static _LOCAL_APIC_ID: CpuLocalLockedOption<WMutexRaw,WRwLockRaw,ApicID> = CpuLocalLockedOption::new();
 /// Get the APIC Id for the given CPU
 #[inline]
 pub fn get_apic_id_for(cpu_num: usize) -> ApicID {
@@ -68,11 +68,11 @@ pub struct LocalVectorTable {
     pub thermal: LVTThermalSensor,
 }
 pub struct LocalAPIC {
-    pub config: Mutex<LocalAPICConfig>,
-    pub lvt: Mutex<LocalVectorTable>,
+    pub config: WMutex<LocalAPICConfig>,
+    pub lvt: WMutex<LocalVectorTable>,
     
-    pub icr: Mutex<InterruptCommandRegister>,
-    pub timer_counters: Mutex<TimerCounts>,
+    pub icr: WMutex<InterruptCommandRegister>,
+    pub timer_counters: WMutex<TimerCounts>,
     
     pub eoi: EndOfInterrupt,
 }
@@ -168,8 +168,8 @@ impl InterruptCommandRegister {
         
         // Wait for it to send
         use crate::multitasking::{yield_to_scheduler,SchedulerCommand};
-        yield_to_scheduler(SchedulerCommand::PushBack);  // Ensure APIC has time to process our command
-        while self.0.read_raw()&0x1000 != 0 { yield_to_scheduler(SchedulerCommand::SleepNTicks(1)); }  // wait until the IPI has sent
+        yield_to_scheduler(SchedulerCommand::PushBack);
+        while self.0.read_raw()&0x1000 != 0 { yield_to_scheduler(SchedulerCommand::PushBack); }  // wait until the IPI has sent
         // Done :)
     }
     /// Send an IPI without blocking or logging

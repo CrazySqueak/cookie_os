@@ -2,15 +2,15 @@ use crate::memory::paging::global_pages::{MMIO_PTABLE,MMIO_PTABLE_VADDR,GlobalPa
 use crate::memory::paging::{pageFlags,KALLOCATION_DYN_MMIO};
 use acpi::handler::{AcpiHandler,PhysicalMapping as AcpiPhysicalMapping};
 use alloc::{sync::Arc,vec::Vec};
-use crate::sync::Mutex;
+use crate::sync::WMutex;
 
 struct AcpiMemoryAllocation{ phys: usize, virt: usize, alloc: GlobalPageAllocation }
 
 #[derive(Clone)]
-pub struct AcpiMemoryMapper(Arc<Mutex<Vec<AcpiMemoryAllocation>>>);
+pub struct AcpiMemoryMapper(Arc<WMutex<Vec<AcpiMemoryAllocation>>>);
 impl AcpiMemoryMapper {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(Vec::new())))
+        Self(Arc::new(WMutex::new(Vec::new())))
     }
 }
 

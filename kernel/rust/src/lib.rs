@@ -106,13 +106,8 @@ pub extern "sysv64" fn _kstart() -> ! {
         
         // Begin waking processors
         klog!(Info, BOOT, "Starting CPU cores (executing in background)");
-        // TODO: create spawn() function that wraps task creation
-        {
-            let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
-            let task = multitasking::Task::new_kernel_task(_start_processors_task, alloc::boxed::Box::new(kstack));
-            multitasking::scheduler::push_task(task);
-            multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);  // yield immediately since starting processors is I/O-bound and will yield to us pretty soon
-        }
+        multitasking::util::spawn_kernel_task(_start_processors_task);
+        multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);  // yield immediately since starting processors is I/O-bound and will yield to us pretty soon
     }
     
     // Call kmain

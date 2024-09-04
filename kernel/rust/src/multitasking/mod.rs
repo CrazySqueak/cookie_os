@@ -3,6 +3,7 @@ use core::sync::atomic::Ordering;
 
 pub mod task;
 pub mod scheduler;
+pub mod util;
 
 crate::arch_specific_module!(mod arch);
 

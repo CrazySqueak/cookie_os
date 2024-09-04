@@ -58,7 +58,7 @@ impl core::default::Default for LoggingContext {
         let serial1 = Box::new(crate::coredrivers::serial_uart::SERIAL1.lock());
         Self {
             formatter: Box::new(DefaultLogFormatter()),
-            destinations: Vec::from([serial1]),
+            destinations: Vec::from([serial1 as Box<dyn Write + Send + 'static>]),
         }
     }
 }

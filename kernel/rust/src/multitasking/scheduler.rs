@@ -4,7 +4,7 @@ use super::{Task,TaskType};
 use alloc::collections::VecDeque;
 use crate::logging::klog;
 use crate::sync::cpulocal::{CpuLocal,CpuLocalGuard,CpuLocalLockedOption,CpuLocalLockedItem,CpuLocalNoInterruptsLockedItem};
-use crate::sync::KMutexRaw;
+use crate::sync::{KMutexRaw,KRwLockRaw};
 use core::sync::atomic::{AtomicUsize,AtomicBool,Ordering};
 use crate::sync::{KMutexGuard,waitlist::WaitingListEntry};
 
@@ -31,14 +31,14 @@ impl core::default::Default for SchedulerState {
 }
 // current_task is stored separately to the rest of the state as it is commonly accessed by logging methods,
 // and usually isn't held for very long. If it was part of _SCHEDULER_STATE, then logging during with_scheduler_state! would cause a deadlock
-static _CURRENT_TASK: CpuLocalLockedOption<KMutexRaw,Task> = CpuLocalLockedOption::new();
+static _CURRENT_TASK: CpuLocalLockedOption<Task,KMutexRaw,KRwLockRaw> = CpuLocalLockedOption::new();
 static _SCHEDULER_STATE: CpuLocalNoInterruptsLockedItem<SchedulerState> = CpuLocalNoInterruptsLockedItem::new();
-static _SCHEDULER_TICKS: CpuLocal<AtomicUsize> = CpuLocal::new();
+static _SCHEDULER_TICKS: CpuLocal<AtomicUsize,KRwLockRaw> = CpuLocal::new();
 
 // _IS_EXECUTING_TASK is a lock-free heuristic for checking if a task is not currently executing, even if the scheduler is not initialised yet on this CPU or if the scheduler is deadlocked
 // It is false when scheduler/bootstrap code is executing, and is true starting right before resume_context is called.
 // It is only intended as a heuristic. If you intend to interact with tasks properly, use a standard lock acquire and match statement.
-static _IS_EXECUTING_TASK: CpuLocal<AtomicBool> = CpuLocal::new();
+static _IS_EXECUTING_TASK: CpuLocal<AtomicBool,KRwLockRaw> = CpuLocal::new();
 
 pub type StackPointer = cswitch_impl::StackPointer;
 pub use cswitch_impl::yield_to_scheduler;

@@ -26,6 +26,9 @@ _cs_push:
     push R13
     push R14
     push R15
+    ; Save RDI and RSI (to allow cs_new to push values for them). We push RSI here to maintain alignment
+    push RDI
+    push RSI
     
     ; Save our own RBP as it's also the caller's RSP
     push RBP            ; our base pointer (as if in the function prologue). This is loaded as RSP in the epilogue (prior to returning)
@@ -45,6 +48,9 @@ _cs_push:
 .resume:
     ; Load Registers
     ; our RBP was already loaded by _cs_pop
+    pop RSI
+    pop RDI
+    
     pop R15
     pop R14
     pop R13
@@ -68,9 +74,9 @@ _cs_pop:
     jmp _cs_push.resume  ; Resume (effectively a "return" but always to the same place so we don't need to waste stack space)
 
 
-; extern "sysv64" _cs_new(entrypoint: extern "sysv64" fn() -> !, stack: *const u8) -> *const u8 (rsp)
-global _cs_new
-_cs_new:
+; extern "sysv64" _cs_newv(entrypoint: extern "sysv64" fn() -> !, stack: *const u8, task_args: *mut u8) -> *const u8 (rsp)
+global _cs_newv
+_cs_newv:
     ; prologue
     push RBP
     mov RBP, RSP
@@ -78,6 +84,7 @@ _cs_new:
     ; parameters
     ; rdi = entry point
     ; rsi = new stack
+    ; rdx = task first argument
     ; locals
     ; rbp (base pointer) = caller stack
     
@@ -93,6 +100,8 @@ _cs_new:
     push 0 ; R13
     push 0 ; R14
     push 0 ; R15
+    push RDX ; RDX becomes task's RDI
+    push RCX ; RCX becomes task's RSI (even though we don't intend to accept non-pointer-size task_arg values)
     push RSI  ; stack base as caller's RSP / _cs_push.resume's RBP
     
     ; save new stack's RSP as return value

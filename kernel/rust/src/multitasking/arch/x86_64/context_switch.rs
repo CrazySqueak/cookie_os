@@ -9,8 +9,13 @@ extern "sysv64" {
         It is recommended to save the current state with _cs_push, and have the scheduler call _cs_pop instead. */
     fn _cs_pop(rsp: *const u8) -> !;
     /* Initialise a new stack at the given address, which calls the given entry point.
-        For the entry point: The stack starts empty. Callee-saved registers (RBX,R12-15) are zeroed. The value of caller-saved registers are undefined. */
-    pub fn _cs_new(entrypoint: extern "sysv64" fn() -> !, stack: *const u8) -> *const u8;
+        For the entry point: The stack starts empty. Callee-saved registers (RBX,R12-15) are zeroed. The value of caller-saved registers are undefined.
+        task_args is owned by the receiving task. */
+    pub fn _cs_newv(entrypoint: extern "sysv64" fn(*mut u8) -> !, stack: *const u8, task_args: *mut u8) -> *const u8;
+}
+
+pub unsafe fn _cs_new(entrypoint: extern "sysv64" fn() -> !, stack: *const u8) -> *const u8 {
+    _cs_newv(core::mem::transmute(entrypoint), stack, core::ptr::null_mut())
 }
 
 pub type StackPointer = *const u8;

@@ -64,7 +64,7 @@ impl core::default::Default for LoggingContext {
 }
 
 lazy_static! {
-    static ref CONTEXT: crate::sync::Mutex<LoggingContext> = crate::sync::Mutex::default();
+    static ref CONTEXT: crate::sync::KMutex<LoggingContext> = crate::sync::KMutex::default();
 }
 
 pub fn _kernel_log(level: LogLevel, component: &str, msg: &(impl core::fmt::Display + ?Sized), file: &str, line: u32, column: u32){

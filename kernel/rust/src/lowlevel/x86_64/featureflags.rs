@@ -3,8 +3,8 @@ use raw_cpuid::CpuId;
 use x86_64::registers::model_specific::{Efer,EferFlags};
 use x86_64::registers::control::{Cr4,Cr4Flags};
 
-use crate::sync::RwLock;
-static _MSR_FLAGS: RwLock<Option<(EferFlags,Cr4Flags)>> = RwLock::new(None);
+use crate::sync::KRwLock;
+static _MSR_FLAGS: KRwLock<Option<(EferFlags,Cr4Flags)>> = KRwLock::new(None);
 
 use crate::logging::klog;
 

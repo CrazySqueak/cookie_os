@@ -3,10 +3,9 @@ use alloc::format;
 use lazy_static::lazy_static;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use pic8259::ChainedPics;
-use crate::sync::Mutex;
 
 use crate::util::LockedWrite;
-use crate::coredrivers::keyboard_ps2 as keyboard;
+//use crate::coredrivers::keyboard_ps2 as keyboard;
 use crate::coredrivers::display_vga::VGA_WRITER;
 
 use crate::coredrivers::system_apic;
@@ -150,7 +149,7 @@ extern "x86-interrupt" fn spurious_interrupt_handler(_stack_frame: InterruptStac
 }
 
 // PICs
-pub static LEGACY_PICS: Mutex<ChainedPics> = Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
+pub static LEGACY_PICS: crate::sync::YMutex<ChainedPics> = crate::sync::YMutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 //
 //#[repr(u8)]
 //pub enum PICInterrupt {

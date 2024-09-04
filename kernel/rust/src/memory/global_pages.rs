@@ -1,5 +1,4 @@
 use lazy_static::lazy_static;
-use crate::sync::RwLockReadGuard;
 
 use super::*;
 use super::arch;

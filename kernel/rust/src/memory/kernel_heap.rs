@@ -11,11 +11,11 @@ extern "C" {
 
 struct KernelHeap {
     heap: LockedHeap<32>,
-    rescue: Mutex<Option<RescueT>>,
+    rescue: KMutex<Option<RescueT>>,
 }
 impl KernelHeap {
     pub const fn new() -> Self {
-        Self { heap: LockedHeap::new(), rescue: Mutex::new(None), }
+        Self { heap: LockedHeap::new(), rescue: KMutex::new(None), }
     }
     
     pub unsafe fn init(&self, addr: usize, size: usize){
@@ -39,7 +39,9 @@ unsafe impl core::alloc::GlobalAlloc for KernelHeap {
         })
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.heap.dealloc(ptr, layout)
+        crate::lowlevel::without_interrupts(||{
+            self.heap.dealloc(ptr, layout)
+        })
     }
 }
 
@@ -106,12 +108,12 @@ use super::paging::PageAllocation;
 use super::physical::{palloc,PhysicalMemoryAllocation};
 use buddy_system_allocator::Heap;
 use core::alloc::Layout;
-use spin::Mutex;  // use a spinlock for the heap rather than scheduler yield - the scheduler could easily end up using the heap
+use crate::sync::KMutex;  // use a spinlock for the heap rather than scheduler yield - the scheduler could easily end up using the heap
 // As allocating new memory may require heap memory, we keep a 1MiB rescue section pre-allocated.
 const RESCUE_SIZE: usize = 1*1024*1024;  // 1MiB
 type RescueT = (PhysicalMemoryAllocation,PageAllocation<super::paging::global_pages::GlobalPTType>);
 
-fn on_oom(heap: &LockedHeap<32>, layout: &Layout, rescue: &Mutex<Option<RescueT>>){
+fn on_oom(heap: &LockedHeap<32>, layout: &Layout, rescue: &KMutex<Option<RescueT>>){
     unsafe {
         let mut rescue = rescue.lock();
         if _use_rescue(heap, &mut rescue).is_ok() {

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::default::Default;
 use crate::multitasking::get_cpu_num;
 use core::ops::{Deref,DerefMut};
-use crate::lowlevel::without_interrupts;
+use crate::multitasking::without_interruptions;
 
 pub struct CpuLocal<T: Default,L:RawRwLockDowngrade>(RwLock<L,Vec<T>>);
 impl<T: Default,L:RawRwLockDowngrade> CpuLocal<T,L> {
@@ -76,10 +76,10 @@ pub struct CpuLocalNoInterruptsLockedItem<T: Default>(pub CpuLocalLockedItem<T,s
 impl<T: Default> CpuLocalNoInterruptsLockedItem<T> {
     pub const fn new() -> Self { Self(CpuLocal::new()) }
     pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
-        without_interrupts(||self.0.inspect(inspector))
+        without_interruptions(||self.0.inspect(inspector))
     }
     pub fn mutate<R>(&self, mutator: impl FnOnce(&mut T)->R) -> R {
-        without_interrupts(||self.0.mutate(mutator))
+        without_interruptions(||self.0.mutate(mutator))
     }
 }
 

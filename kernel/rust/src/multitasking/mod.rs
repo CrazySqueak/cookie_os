@@ -4,11 +4,13 @@ use core::sync::atomic::Ordering;
 pub mod task;
 pub mod scheduler;
 pub mod util;
+pub mod interruptions;
 
 crate::arch_specific_module!(mod arch);
 
 pub use scheduler::{yield_to_scheduler,terminate_current_task,SchedulerCommand,get_executing_task_id};
 pub use task::{Task,TaskType};
+pub use interruptions::without_interruptions;
 
 static BSP_SCHEDULER_READY: AtomicBool = AtomicBool::new(false);
 

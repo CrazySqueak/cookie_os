@@ -4,7 +4,6 @@ use lazy_static::lazy_static;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use pic8259::ChainedPics;
 
-use crate::util::LockedWrite;
 //use crate::coredrivers::keyboard_ps2 as keyboard;
 use crate::coredrivers::display_vga::VGA_WRITER;
 

@@ -16,7 +16,6 @@ use alloc::format;
 mod sync;
 mod logging;
 use logging::klog;
-mod util;
 
 mod coredrivers;
 use coredrivers::serial_uart::SERIAL1;

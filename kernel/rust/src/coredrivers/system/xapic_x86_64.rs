@@ -15,7 +15,7 @@ pub fn map_local_apic_mmio() -> Option<global_pages::GlobalPageAllocation> {
 // Local APIC
 use crate::sync::cpulocal::{CpuLocalRWLockedItem,CpuLocalLockedOption};
 use crate::sync::{WMutex,WRwLock,WMutexRaw,WRwLockRaw};
-static _LOCAL_APIC: CpuLocalRWLockedItem<WRwLockRaw,Option<LocalAPIC>> = CpuLocalRWLockedItem::new();
+static _LOCAL_APIC: CpuLocalRWLockedItem<Option<LocalAPIC>,WRwLockRaw> = CpuLocalRWLockedItem::new();
 /* Initialise the CPU's local APIC */
 pub fn init_local_apic(){
     klog!(Debug, COREDRIVERS_XAPIC, "Initialising local xAPIC");
@@ -46,7 +46,7 @@ pub fn is_local_apic_initialised() -> bool {
 
 // APIC ID
 pub type ApicID = u8;
-static _LOCAL_APIC_ID: CpuLocalLockedOption<WMutexRaw,WRwLockRaw,ApicID> = CpuLocalLockedOption::new();
+static _LOCAL_APIC_ID: CpuLocalLockedOption<ApicID,WMutexRaw,WRwLockRaw> = CpuLocalLockedOption::new();
 /// Get the APIC Id for the given CPU
 #[inline]
 pub fn get_apic_id_for(cpu_num: usize) -> ApicID {

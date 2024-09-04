@@ -6,6 +6,7 @@ use lazy_static::lazy_static;
 
 use crate::multitasking::without_interruptions;
 use crate::sync::KMutex;
+use KMutex::lock;
 
 use core::fmt::write;
 use crate::logging::klog;
@@ -137,7 +138,7 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
 }
 pub type PFrameAllocator = BuddyAllocator<27,4096>;
 lazy_static! {
-    static ref PHYSMEM_ALLOCATOR: KMutex = KMutex::new(BuddyAllocator {
+    static ref PHYSMEM_ALLOCATOR: KMutex<BuddyAllocator> = KMutex::new(BuddyAllocator {
         free_blocks: core::array::from_fn(|_| Vec::new()),
         
         amount_allocated: 0,

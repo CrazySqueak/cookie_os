@@ -189,7 +189,7 @@ pub fn push_task(task: Task){
 /* Push a new task to another scheduler's run queue. */
 pub fn push_task_to(cpu: usize, task: Task){
     klog!(Debug, SCHEDULER, "Pushing new task to CPU {}: {}", cpu, task.task_id);
-    crate::lowlevel::without_interrupts(||_SCHEDULER_STATE.0.get_for(cpu).lock().run_queue.push_back(task));
+    super::without_interruptions(||_SCHEDULER_STATE.0.get_for(cpu).lock().run_queue.push_back(task));
 }
 
 /* Advances the scheduler's clock by 1 tick. Called by the PIT. */

@@ -113,7 +113,7 @@ pub extern "sysv64" fn _kstart() -> ! {
     _kmain();
 }
 
-static AP_BOOT_PAGING_CONTEXT: sync::Mutex<Option<memory::paging::PagingContext>> = sync::Mutex::new(None);
+static AP_BOOT_PAGING_CONTEXT: sync::KMutex<Option<memory::paging::PagingContext>> = sync::KMutex::new(None);
 #[no_mangle]
 pub extern "sysv64" fn _kstart_ap() -> ! {
     multitasking::init_cpu_num();
@@ -303,10 +303,10 @@ fn panic(_info: &PanicInfo) -> ! {
         
         // Forcefully acquire a reference to the current writer, bypassing the lock (which may have been locked at the time of the panic and will not unlock as we don't have stack unwinding)
         // Requires MMIO to be mapped - med risk
-        let mut writer = unsafe{let wm=core::mem::transmute::<&display_vga::LockedVGAConsoleWriter,&crate::sync::Mutex<display_vga::VGAConsoleWriter>>(&*VGA_WRITER);wm.force_unlock();wm.lock()};
-        writer.set_colour(display_vga::VGAColour::new(display_vga::BaseColour::LightGray,display_vga::BaseColour::Red,true,false));
-        // Write message and location to screen
-        let _ = write!(writer, "\n\nKERNEL PANICKED (@{}): {}", context, _info);
+        // TODO let mut writer = unsafe{let wm=core::mem::transmute::<&display_vga::LockedVGAConsoleWriter,&crate::sync::Mutex<display_vga::VGAConsoleWriter>>(&*VGA_WRITER);wm.force_unlock();wm.lock()};
+        // TODO writer.set_colour(display_vga::VGAColour::new(display_vga::BaseColour::LightGray,display_vga::BaseColour::Red,true,false));
+        // TODO // Write message and location to screen
+        // TODO let _ = write!(writer, "\n\nKERNEL PANICKED (@{}): {}", context, _info);
         
         // Attempt to perform backtrace
         

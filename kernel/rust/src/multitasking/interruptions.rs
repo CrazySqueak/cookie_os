@@ -14,5 +14,5 @@ pub fn without_interruptions<R>(closure: impl FnOnce()->R) -> R {
 }
 static INTERRUPTIONS_DISABLED: CpuLocal<AtomicBool,KRwLockRaw> = CpuLocal::new();
 pub fn are_interruptions_disabled() -> bool {
-    INTERRUPTIONS_DISABLED.get().load(Ordering::Relaxed);
+    INTERRUPTIONS_DISABLED.get().load(Ordering::Relaxed)
 }

@@ -1,6 +1,7 @@
 //! Kernel Spin
 //! 
 //! K-locks are primitive spinlocks that loop indefinitely until the required condition is met.
+//! It is recommended that you DO NOT YIELD the current task while you hold a K-lock, as doing so may deadlock the kernel.
 use super::spin::*;
 use core::hint::spin_loop;
 

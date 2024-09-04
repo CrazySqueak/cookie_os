@@ -1,48 +1,49 @@
-use super::{KRwLock,KRwLockReadGuard,MappedKRwLockReadGuard};
+//use super::{KRwLock,KRwLockReadGuard,MappedKRwLockReadGuard};
+use lock_api::{RawRwLockDowngrade,RwLock,RwLockReadGuard,MappedRwLockReadGuard};
 use alloc::vec::Vec;
 use core::default::Default;
 use crate::multitasking::get_cpu_num;
 use core::ops::{Deref,DerefMut};
 use crate::lowlevel::without_interrupts;
 
-pub struct CpuLocal<T: Default>(KRwLock<Vec<T>>);
-impl<T: Default> CpuLocal<T> {
+pub struct CpuLocal<T: Default,L:RawRwLockDowngrade>(RwLock<L,Vec<T>>);
+impl<T: Default,L:RawRwLockDowngrade> CpuLocal<T,L> {
     pub const fn new() -> Self {
-        Self(KRwLock::new(Vec::new()))
+        Self(RwLock::new(Vec::new()))
     }
     
-    fn _initialise_empty_values(&self, v: KRwLockReadGuard<Vec<T>>, id: usize) -> KRwLockReadGuard<Vec<T>> {
+    fn _initialise_empty_values(&self, v: RwLockReadGuard<L,Vec<T>>, id: usize) -> RwLockReadGuard<L,Vec<T>> {
         drop(v);  // Drop the old guard so it doesn't block us
         let mut vu = self.0.write();  // currently cannot grab an upgradeable read as that can cause deadlocks in some rare cases
         while vu.len() <= id { vu.push(T::default()) };  // push new values so that `id` is a valid index
-        vu.downgrade()  // downgrade back to a read guard now our job is done
+        lock_api::RwLockWriteGuard::downgrade(vu)  // downgrade back to a read guard now our job is done
     }
     
     /* Get the T for the CPU with the given number. */
     #[inline(always)]
-    pub fn get_for(&self, id: usize) -> CpuLocalGuard<T> {
+    pub fn get_for(&self, id: usize) -> CpuLocalGuard<T,L> {
         let v = self.0.read();
         let v = if v.len() <= id {
             self._initialise_empty_values(v,id)
         } else { v };
-        KRwLockReadGuard::map(v, ||v.get(id));
+        RwLockReadGuard::map(v, |v|&v[id])
     }
     
     /* Get the T for the current CPU. */
     #[inline(always)]
-    pub fn get(&self) -> CpuLocalGuard<T> {
+    pub fn get(&self) -> CpuLocalGuard<T,L> {
         self.get_for(get_cpu_num())
     }
 }
 
 // 'cl is CPULocal's lifetime
-pub type CpuLocalGuard<'c1,T> = MappedKRwLockReadGuard<'c1,T>;
+pub type CpuLocalGuard<'c1,T,L> = MappedRwLockReadGuard<'c1,L,T>;
 
 
 // Utilities, since CpuLocal does not grant interior mutability due to obvious threading issues + borrow checker not liking nested guards
 
-pub type CpuLocalLockedItem<L,T> = CpuLocal<lock_api::Mutex<L,T>>;
-impl<L:lock_api::RawMutex,T: Default> CpuLocalLockedItem<L,T> {
+pub type CpuLocalLockedItem<T,L,LR> = CpuLocal<lock_api::Mutex<L,T>,LR>;
+impl<L:lock_api::RawMutex,LR:RawRwLockDowngrade,T: Default> CpuLocalLockedItem<T,L,LR> {
     /// Inspect (but do not mutate) the locked item
     #[inline]
     pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
@@ -56,8 +57,8 @@ impl<L:lock_api::RawMutex,T: Default> CpuLocalLockedItem<L,T> {
         mutator(&mut item)
     }
 }
-pub type CpuLocalRWLockedItem<L,T> = CpuLocal<lock_api::RwLock<L,T>>;
-impl<L:lock_api::RawRwLock,T: Default> CpuLocalRWLockedItem<L,T> {
+pub type CpuLocalRWLockedItem<T,L> = CpuLocal<RwLock<L,T>,L>;
+impl<L:RawRwLockDowngrade,T: Default> CpuLocalRWLockedItem<T,L> {
     /// Inspect (but do not mutate) the locked item using a read guard
     #[inline]
     pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
@@ -71,7 +72,7 @@ impl<L:lock_api::RawRwLock,T: Default> CpuLocalRWLockedItem<L,T> {
         mutator(&mut item)
     }
 }
-pub struct CpuLocalNoInterruptsLockedItem<T: Default>(pub CpuLocalLockedItem<super::KMutexRaw,T>);
+pub struct CpuLocalNoInterruptsLockedItem<T: Default>(pub CpuLocalLockedItem<T,super::KMutexRaw,super::KRwLockRaw>);
 impl<T: Default> CpuLocalNoInterruptsLockedItem<T> {
     pub const fn new() -> Self { Self(CpuLocal::new()) }
     pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
@@ -82,8 +83,8 @@ impl<T: Default> CpuLocalNoInterruptsLockedItem<T> {
     }
 }
 
-pub type CpuLocalLockedOption<L,T> = CpuLocalLockedItem<L,Option<T>>;
-impl<L:lock_api::RawMutex,T> CpuLocalLockedOption<L,T> {
+pub type CpuLocalLockedOption<T,L,LR> = CpuLocalLockedItem<Option<T>,L,LR>;
+impl<L:lock_api::RawMutex,LR:RawRwLockDowngrade,T> CpuLocalLockedOption<T,L,LR> {
     /// Equivalent of Option.insert(...), but does not return a mutable reference as doing that would violate lifetime rules
     #[inline]
     pub fn insert(&self, item: T){

@@ -12,9 +12,11 @@ impl Relax for SchedulerYield {
     }
 }
 
+pub type YMutexRaw = SpinMutexRaw<SchedulerYield>;
 pub type YMutex<T> = SpinMutex<T,SchedulerYield>;
 pub type YMutexGuard<'a,T> = SpinMutexGuard<'a,T,SchedulerYield>;
 pub type MappedYMutexGuard<'a,T> = MappedSpinMutexGuard<'a,T,SchedulerYield>;
+pub type YRwLockRaw = SpinRwLockRaw<SchedulerYield>;
 pub type YRwLock<T> = SpinRwLock<T,SchedulerYield>;
 pub type YRwLockReadGuard<'a,T> = SpinRwLockReadGuard<'a,T,SchedulerYield>;
 pub type YRwLockWriteGuard<'a,T> = SpinRwLockWriteGuard<'a,T,SchedulerYield>;

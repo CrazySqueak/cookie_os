@@ -11,9 +11,11 @@ impl Relax for CpuSpin {
     }
 }
 
+pub type KMutexRaw = SpinMutexRaw<CpuSpin>;
 pub type KMutex<T> = SpinMutex<T,CpuSpin>;
 pub type KMutexGuard<'a,T> = SpinMutexGuard<'a,T,CpuSpin>;
 pub type MappedKMutexGuard<'a,T> = MappedSpinMutexGuard<'a,T,CpuSpin>;
+pub type KRwLockRaw = SpinRwLockRaw<CpuSpin>;
 pub type KRwLock<T> = SpinRwLock<T,CpuSpin>;
 pub type KRwLockReadGuard<'a,T> = SpinRwLockReadGuard<'a,T,CpuSpin>;
 pub type KRwLockWriteGuard<'a,T> = SpinRwLockWriteGuard<'a,T,CpuSpin>;

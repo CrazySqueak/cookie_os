@@ -28,9 +28,6 @@ impl WaitingList {
     /// This method guarantees that notify() has not been called between checking the predicate and suspending the thread
     /// Returns true if the thread was suspended, false if the predicate returned true early.
     pub fn wait_ifnt(&self, predicate: impl FnOnce()->bool) -> bool {
-        self.wait_ifnt_inner(&predicate)
-    }
-    pub fn wait_ifnt_inner(&self, predicate: &impl FnOnce()->bool) -> bool {
         let list = self.0.lock();
         if predicate() { return false; }  // Predicate returned true, so return early
         // The scheduler takes ownership of the lock and drops it after pushing
@@ -38,9 +35,9 @@ impl WaitingList {
         true
     }
     /// A version of wait_ifnt that checks the predicate again after resuming, and keeps suspending until the predicate returns true
-    pub fn wait_until(&self, predicate: impl Fn()->bool) {
+    pub fn wait_until(&self, predicate: impl Fn()->bool + Copy) {
         // Keep trying until the predicate returns true (causing wait_ifnt to return false)
-        while self.wait_ifnt_inner(&predicate){}
+        while self.wait_ifnt(predicate){}
     }
     
     fn notify_inner(&self, list: &mut super::KMutexGuard<'_,VecDeque<WaitingListEntry>>) -> bool {

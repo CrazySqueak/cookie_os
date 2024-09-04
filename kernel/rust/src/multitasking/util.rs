@@ -22,6 +22,7 @@ pub fn spawn_kernel_task_v<T:Sized>(entry: TaskEntryPointV<T>, arg: *mut T) -> u
 macro_rules! def_task_fn {
     {$vis:vis task fn $name:ident($($arg:ident : $argty:ty),*) $body:block} => {
         $vis mod $name {
+            use super::*;
             use $crate::multitasking::scheduler::terminate_current_task;
             use alloc::boxed::Box;
             pub struct Args { $($arg : $argty),* }

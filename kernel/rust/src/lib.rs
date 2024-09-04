@@ -27,6 +27,7 @@ use coredrivers::system_apic;
 mod memory;
 mod descriptors;
 mod multitasking;
+use multitasking::util::def_task_fn;
 
 // arch-specific code lives either in "lowlevel", or in "x::arch" for stuff specific to certain modules
 macro_rules! arch_specific_module {
@@ -106,7 +107,7 @@ pub extern "sysv64" fn _kstart() -> ! {
         
         // Begin waking processors
         klog!(Info, BOOT, "Starting CPU cores (executing in background)");
-        multitasking::util::spawn_kernel_task(_start_processors_task);
+        _start_processors_task::spawn(); //multitasking::util::spawn_kernel_task(_start_processors_task);
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);  // yield immediately since starting processors is I/O-bound and will yield to us pretty soon
     }
     
@@ -163,9 +164,10 @@ pub fn _kmain() -> ! {
     
     // test
     for i in 0..3 {
-        let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
-            let task = multitasking::Task::new_kernel_task(test, alloc::boxed::Box::new(kstack));
-        multitasking::scheduler::push_task(task);
+        //let kstack = memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
+        //    let task = multitasking::Task::new_kernel_task(test, alloc::boxed::Box::new(kstack));
+        //multitasking::scheduler::push_task(task);
+        test_task::spawn(i*3 +2);
         
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
     }
@@ -183,38 +185,38 @@ pub fn _apmain() -> ! {
     multitasking::terminate_current_task();
 }
 
-extern "sysv64" fn test() -> ! {
-    for i in 0..5 {
+def_task_fn!{ task fn test_task(x:usize) {
+    for i in 0..x {
         klog!(Info,ROOT,"{}", i);
         multitasking::yield_to_scheduler(multitasking::SchedulerCommand::PushBack);
     }
-    multitasking::terminate_current_task();
-}
+}}
 
-extern "sysv64" fn _start_processors_task() -> ! {
-    //! Attempt to start all available processors on the system, one-by-one
+def_task_fn! {
+ task fn _start_processors_task() {
+    // Attempt to start all available processors on the system, one-by-one
     let our_apic_id = coredrivers::system_apic::get_apic_id_for(multitasking::get_cpu_num());
     
     // Parse ACPI tables
     use coredrivers::parse_acpi_tables;
     let Some(acpi_tables) = parse_acpi_tables::parse_tables_multiboot() else {
         klog!(Severe, BOOT, "Failed to parse ACPI tables: No RSDP found!");
-        multitasking::terminate_current_task();
+        return;
     };
     let Ok(acpi_tables) = acpi_tables else {
         let Err(err) = acpi_tables else {unreachable!()};
         klog!(Severe, BOOT, "Failed to parse ACPI tables: Got Err({:?})!", err);
-        multitasking::terminate_current_task();
+        return;
     };
     let    acpi_info  = acpi_tables.platform_info();
     let Ok(acpi_info) = acpi_info else {
         let Err(err) = acpi_info else {unreachable!()};
         klog!(Severe, BOOT, "Failed to parse ACPI tables: Got Err({:?})!", err);
-        multitasking::terminate_current_task();
+        return;
     };
     let Some(processor_info) = acpi_info.processor_info else {
         klog!(Severe, BOOT, "No processor info found in ACPI tables!");
-        multitasking::terminate_current_task();
+        return;
     };
     assert!(processor_info.boot_processor.local_apic_id == our_apic_id.into());
     
@@ -249,7 +251,8 @@ extern "sysv64" fn _start_processors_task() -> ! {
     
     // Now terminate
     klog!(Info, BOOT, "Started {} secondary CPUs. ({} failed, {} skipped)", num_started, num_failed, num_skipped);
-    multitasking::terminate_current_task();
+    return;
+ }
 }
 
 /// This function is called on panic.

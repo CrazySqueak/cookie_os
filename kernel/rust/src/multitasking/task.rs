@@ -37,6 +37,13 @@ impl Task {
             Self::new_with_rsp(TaskType::KernelTask, rsp, Some(stack))
         }
     }
+    pub fn new_kernel_task_v<T:Sized>(entry_point: extern "sysv64" fn(*mut T) -> !, stack: Box<dyn AnyAllocatedStack>, arg1: *mut T) -> Task {
+        unsafe {
+            // SAFETY: It's fine to cast *mut T to *mut u8 as we've already checked that the arg1 pointer and the argument in the fn(...) are the same type
+            let rsp = super::arch::context_switch::_cs_newv(core::mem::transmute(entry_point), stack.bottom_vaddr() as *const u8, arg1 as *mut u8);
+            Self::new_with_rsp(TaskType::KernelTask, rsp, Some(stack))
+        }
+    }
     
     pub fn task_id(&self) -> usize { self.task_id }
     pub fn task_type(&self) -> &TaskType {

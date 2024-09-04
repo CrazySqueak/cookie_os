@@ -284,7 +284,7 @@ impl PagingContext {
          * All kernel code you plan to call must be at the same addresses in both the old and new tables. Most important are INTERRUPT HANDLERS and the PANIC HANDLER (as well as common utilities such as klog). This also includes the activate() function and the function you called it from. (and the static variable that stores the page table)
          The easiest way to achieve the above three points is to map the kernel to the same position in every page table. This is why the kernel lives in the higher half - it should never be necessary to change its location in virtual memory.
          */
-    pub unsafe fn activate(&self){
+    pub unsafe fn activate(&self){without_interruptions(||{
         // Leak read guard (as the TLB will cache the page table as needed, thus meaning it should not be modified without careful consideration)
         let allocator = self.0._begin_active();
         
@@ -304,7 +304,7 @@ impl PagingContext {
         if let Some(old_table) = oldpt { unsafe {
             old_table.0._end_active();
         }}
-    }
+    })}
 }
 impl core::ops::Deref for PagingContext {
     type Target = LockedPageAllocator<BaseTLPageAllocator>;
@@ -581,7 +581,9 @@ impl<T> core::ops::DerefMut for ForcedUpgradeGuard<'_, T>{
 
 // = ACTIVE OR SMTH? =
 // the currently active page table on each CPU
-static _ACTIVE_PAGE_TABLE: CpuLocalLockedOption<PagingContext> = CpuLocal::new();
+use crate::sync::{KMutexRaw,KRwLockRaw};
+use crate::multitasking::without_interruptions;
+static _ACTIVE_PAGE_TABLE: CpuLocalLockedOption<PagingContext,KRwLockRaw,KMutexRaw> = CpuLocal::new();
 
 // = ALLOCATIONS =
 // Note: Allocations must be allocated/deallocated manually

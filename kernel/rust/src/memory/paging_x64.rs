@@ -175,7 +175,7 @@ pub(super) fn inval_tlb_pg(allocation: &super::PartialPageAllocation, voffset: u
     let vmem_start = allocation.start_addr()+voffset; let vmem_end_xcl = allocation.end_addr()+voffset; let length = vmem_end_xcl-vmem_start;
     klog!(Debug, MEMORY_PAGING_TLB, "Flushing TLB for 0x{:x}..0x{:x}", vmem_start, vmem_end_xcl);
     
-    if cfg!(feature = "enable_amd64_invlpgb") && INVLPGB.is_some() && cpu_nums.is_some() {
+    if false && cfg!(feature = "enable_amd64_invlpgb") && INVLPGB.is_some() && cpu_nums.is_some() {
         // Use INVLPGB instruction if enabled
         if vmem_start%X64Level2::PAGE_SIZE == 0 && length%X64Level2::PAGE_SIZE == 0 {
             klog!(Debug, MEMORY_PAGING_TLB, "Flushing using call_invlpgb (size=2MiB).");
@@ -184,7 +184,7 @@ pub(super) fn inval_tlb_pg(allocation: &super::PartialPageAllocation, voffset: u
             klog!(Debug, MEMORY_PAGING_TLB, "Flushing using call_invlpgb (size=4KiB).");
             call_invlpgb::<Size4KiB>(vmem_start, vmem_end_xcl, include_global)
         }
-    } else if crate::coredrivers::system_apic::is_local_apic_initialised() && cpu_nums.is_some() {
+    } else if false && crate::coredrivers::system_apic::is_local_apic_initialised() && cpu_nums.is_some() {
         // Broadcast invalidation over APIC (using interrupts)
         klog!(Debug, MEMORY_PAGING_TLB, "Flushing using APIC.");
         let cpu_nums = cpu_nums.unwrap();

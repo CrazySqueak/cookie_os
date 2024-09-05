@@ -46,6 +46,31 @@ impl LogFormatter for DefaultLogFormatter {
 }
 
 // LOG DESTINATIONS
+pub struct GuardFmtWriter<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>>(G,core::marker::PhantomData<T>);
+impl<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>> GuardFmtWriter<T,G> {
+    pub fn new(guard: G) -> Self {
+        Self(guard, core::marker::PhantomData)
+    }
+    pub fn into_guard(self) -> G {
+        self.0
+    }
+}
+impl<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>> core::fmt::Write for GuardFmtWriter<T,G> {
+    fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error> {
+        self.0.write_str(s)
+    }
+}
+impl<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>> core::ops::Deref for GuardFmtWriter<T,G> {
+    type Target = G;
+    fn deref(&self) -> &G {
+        &self.0
+    }
+}
+impl<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>> core::ops::DerefMut for GuardFmtWriter<T,G> {
+    fn deref_mut(&mut self) -> &mut G {
+        &mut self.0
+    }
+}
 
 // FORMATTER/DESTINATION SELECTION
 pub struct LoggingContext {
@@ -55,7 +80,7 @@ pub struct LoggingContext {
 impl core::default::Default for LoggingContext {
     fn default() -> Self {
         // Note: the logger permanently locks serial1. Literally nothing else uses serial1 so it's fine.
-        let serial1 = Box::new(crate::coredrivers::serial_uart::SERIAL1.lock());
+        let serial1 = Box::new(GuardFmtWriter::new(crate::coredrivers::serial_uart::SERIAL1.lock()));
         Self {
             formatter: Box::new(DefaultLogFormatter()),
             destinations: Vec::from([serial1 as Box<dyn core::fmt::Write + Send + 'static>]),

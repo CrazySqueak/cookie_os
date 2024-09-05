@@ -78,12 +78,12 @@ pub struct LocalAPIC {
 }
 impl LocalAPIC {
     unsafe fn new(base:usize)->Self { Self {
-        config: Mutex::new(LocalAPICConfig {
+        config: WMutex::new(LocalAPICConfig {
             local_id: LocalAPICId::new(base),
             siv: SpuriousInterruptVector::new(base),
         }),
         
-        lvt: Mutex::new(LocalVectorTable {
+        lvt: WMutex::new(LocalVectorTable {
             timer: LVTTimer::new(base),
             cmci: LVTCMCI::new(base),
             lint0: LVTLINT0::new(base),
@@ -93,8 +93,8 @@ impl LocalAPIC {
             thermal: LVTThermalSensor::new(base),
         }),
         
-        icr: Mutex::new(InterruptCommandRegister::new(base)),
-        timer_counters: Mutex::new(TimerCounts::new(base)),
+        icr: WMutex::new(InterruptCommandRegister::new(base)),
+        timer_counters: WMutex::new(TimerCounts::new(base)),
         
         eoi: EndOfInterrupt::new(base),
     }}

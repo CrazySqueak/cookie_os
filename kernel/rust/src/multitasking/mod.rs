@@ -10,7 +10,7 @@ crate::arch_specific_module!(mod arch);
 
 pub use scheduler::{yield_to_scheduler,terminate_current_task,SchedulerCommand,get_executing_task_id};
 pub use task::{Task,TaskType};
-pub use interruptions::without_interruptions;
+pub use interruptions::{without_interruptions,are_interruptions_disabled};
 
 static BSP_SCHEDULER_READY: AtomicBool = AtomicBool::new(false);
 

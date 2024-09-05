@@ -58,7 +58,7 @@ impl core::default::Default for LoggingContext {
         let serial1 = Box::new(crate::coredrivers::serial_uart::SERIAL1.lock());
         Self {
             formatter: Box::new(DefaultLogFormatter()),
-            destinations: Vec::from([serial1 as Box<dyn Write + Send + 'static>]),
+            destinations: Vec::from([serial1 as Box<dyn core::fmt::Write + Send + 'static>]),
         }
     }
 }
@@ -99,8 +99,8 @@ pub(crate) use klog;
 // generally if you're using this function, shit is fucked and the program should be due to abort any second now
 macro_rules! emergency_kernel_log {
     ($($msg:tt)*) => {
-        crate::lowlevel::without_interrupts(||{
-            use crate::coredrivers::serial_uart::SERIAL1;
+        $crate::multitasking::without_interruptions(||{
+            use $crate::coredrivers::serial_uart::SERIAL1;
             use core::fmt::Write;
             let mut serial = unsafe { loop { match SERIAL1.try_lock() {
                     Some(lock) => break lock,

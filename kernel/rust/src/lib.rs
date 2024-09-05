@@ -152,12 +152,14 @@ pub extern "sysv64" fn _kstart_ap() -> ! {
 
 #[no_mangle]
 pub fn _kmain() -> ! {
-    VGA_WRITER.write_string("OKAY!! 👌👌👌👌");
+    let mut writer = VGA_WRITER.lock();
+    writer.write_string("OKAY!! 👌👌👌👌");
     
-    VGA_WRITER.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
+    writer.write_string("\n\nAccording to all known laws of aviation, there is no possible way for a bee to be able to fly. Its wings are too small to get its fat little body off the ground. The bee, of course, flies anyway, because bees don't care what humans think is impossible.");
     
     let s = format!("\n\nKernel bounds: {:x?}", memory::physical::get_kernel_bounds());
-    VGA_WRITER.write_string(&s);
+    writer.write_string(&s);
+    drop(writer);
     
     // test
     for i in 0..3 {
@@ -303,10 +305,10 @@ fn panic(_info: &PanicInfo) -> ! {
         
         // Forcefully acquire a reference to the current writer, bypassing the lock (which may have been locked at the time of the panic and will not unlock as we don't have stack unwinding)
         // Requires MMIO to be mapped - med risk
-        // TODO let mut writer = unsafe{let wm=core::mem::transmute::<&display_vga::LockedVGAConsoleWriter,&crate::sync::Mutex<display_vga::VGAConsoleWriter>>(&*VGA_WRITER);wm.force_unlock();wm.lock()};
-        // TODO writer.set_colour(display_vga::VGAColour::new(display_vga::BaseColour::LightGray,display_vga::BaseColour::Red,true,false));
-        // TODO // Write message and location to screen
-        // TODO let _ = write!(writer, "\n\nKERNEL PANICKED (@{}): {}", context, _info);
+        let mut writer = unsafe{let wm=&*VGA_WRITER;wm.force_unlock();wm.lock()};
+        writer.set_colour(display_vga::VGAColour::new(display_vga::BaseColour::LightGray,display_vga::BaseColour::Red,true,false));
+        // Write message and location to screen
+        let _ = write!(writer, "\n\nKERNEL PANICKED (@{}): {}", context, _info);
         
         // Attempt to perform backtrace
         

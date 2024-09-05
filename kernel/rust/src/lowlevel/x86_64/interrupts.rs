@@ -11,6 +11,7 @@ use crate::coredrivers::system_apic;
 
 use alloc::boxed::Box;
 use crate::sync::cpulocal::CpuLocalLockedOption;
+use crate::sync::{KRwLockRaw,KMutexRaw};
 
 // 0x0X and 0x1X - CPU Exceptions
 
@@ -28,7 +29,7 @@ pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 /// Must not send an EOI, and the handler should ideally just ignore these.
 pub const SPURIOUS_INTERRUPT_VECTOR: u8 = 0xFF;
 
-static _LOCAL_IDT: CpuLocalLockedOption<&'static InterruptDescriptorTable> = CpuLocalLockedOption::new();
+static _LOCAL_IDT: CpuLocalLockedOption<&'static InterruptDescriptorTable,KMutexRaw,KRwLockRaw> = CpuLocalLockedOption::new();
 fn init_idt() {
     let idt = Box::leak(Box::new(InterruptDescriptorTable::new()));
         
@@ -54,7 +55,7 @@ fn init_idt() {
     // keyboard::set_key_callback(print_key);
     
     // Install and load IDT
-    _LOCAL_IDT.insert_and(idt, |idt|idt.load());
+    crate::multitasking::without_interruptions(||_LOCAL_IDT.insert_and(idt, |idt|idt.load()));
 }
 
 fn init_xapic(){

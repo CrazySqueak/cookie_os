@@ -33,10 +33,11 @@ const EXCLUSIVE_THRESHOLD: usize = 1<<48;
 // (lock, wait_shared, wait_exclusive)
 pub struct WRwLockRaw(AtomicUsize,WaitingList,WaitingList);
 impl WRwLockRaw {
-    /* If locked exclusively, returns Err(). Otherwise returns Ok(x) */
+    /* If locked exclusively, returns Err(num_readers). Otherwise returns Ok(num_readers).
+    Upgradeable locks (despite being readers) do not count towards this total. */
     pub fn reader_count(&self) -> Result<usize,usize> {
         let result = self.0.load(Ordering::Relaxed);
-        if result >= EXCLUSIVE_THRESHOLD { return Err(result); }
+        if result >= EXCLUSIVE_THRESHOLD { return Err(result%EXCLUSIVE_THRESHOLD); }
         Ok(result)
     }
 }

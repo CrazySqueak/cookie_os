@@ -219,11 +219,11 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
            Similarly, active_count must be decremented before reader_count in _end_active. If a race occurs during _end_active, then reader_count > active_count, which means a lock is not acquired blah blah blah
            We also read reader_count before active_count, to ensure that in a race with _end_active, we will end up with reader_count > active_count (since active_count is decremented first).
            
-           Note: Reader count was incremented by 1 when we took the upgradeable guard - so actually we should compare against active_count+1.
+           Note: Reader count no longer includes the upgradeable guard (however since we have an upgradeable guard, this returns Err(x))
         */
         loop {
             // Safety: .raw() shouldn't be unsafe due to allowing you to unlock it as the unlock...() functions are already unsafe! (as is poking at implementation details)
-            let reader_count = unsafe{self.0.raw()}.reader_count().unwrap_or(usize::MAX);
+            let reader_count = unsafe{self.0.raw()}.reader_count().err().unwrap();
             core::sync::atomic::compiler_fence(Ordering::SeqCst);
             let active_count = self.0.active_count.load(Ordering::Acquire);
             if reader_count <= (active_count+1).into() {

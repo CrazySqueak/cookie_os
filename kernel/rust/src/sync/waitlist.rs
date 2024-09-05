@@ -4,8 +4,8 @@ use crate::multitasking::scheduler;
 use crate::multitasking::without_interruptions;
 
 pub struct WaitingListEntry {
-    task: crate::multitasking::Task,
-    cpu: usize,
+    pub task: crate::multitasking::Task,
+    pub cpu: usize,
 }
 
 /// A scheduler-based waiting list

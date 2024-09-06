@@ -1,15 +1,17 @@
 //use super::{KRwLock,KRwLockReadGuard,MappedKRwLockReadGuard};
 use lock_api::{RawRwLockDowngrade,RwLock,RwLockReadGuard,MappedRwLockReadGuard};
+use crate::sync::kspin::KRwLock;
 use alloc::vec::Vec;
+use alloc::boxed::Box;
 use core::default::Default;
 use crate::multitasking::get_cpu_num;
 use core::ops::{Deref,DerefMut};
 use crate::multitasking::without_interruptions;
 
-pub struct CpuLocal<T: Default,L:RawRwLockDowngrade>(RwLock<L,Vec<T>>);
+pub struct CpuLocal<T: Default>(KRwLock<Vec<&'static T>>);
 impl<T: Default,L:RawRwLockDowngrade> CpuLocal<T,L> {
     pub const fn new() -> Self {
-        Self(RwLock::new(Vec::new()))
+        Self(KRwLock::new(Vec::new()))
     }
     
     fn _initialise_empty_values(&self, v: RwLockReadGuard<L,Vec<T>>, id: usize) -> RwLockReadGuard<L,Vec<T>> {
@@ -37,7 +39,7 @@ impl<T: Default,L:RawRwLockDowngrade> CpuLocal<T,L> {
 }
 
 // 'cl is CPULocal's lifetime
-pub type CpuLocalGuard<'c1,T,L> = MappedRwLockReadGuard<'c1,L,T>;
+pub type CpuLocalGuard<'c1,T,> = MappedRwLockReadGuard<'c1,T>;
 
 
 // Utilities, since CpuLocal does not grant interior mutability due to obvious threading issues + borrow checker not liking nested guards

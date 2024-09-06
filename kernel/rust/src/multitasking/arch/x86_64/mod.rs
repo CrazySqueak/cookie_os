@@ -1,1 +1,1 @@
-pub mod cpunum;
+pub mod fixedcpulocal;

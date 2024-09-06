@@ -31,6 +31,12 @@ pub(crate) use arch_specific_module;
 
 #[no_mangle]
 pub extern "sysv64" fn _kstart() -> ! {
+    // Initialise heap
+    unsafe { memory::kernel_heap::init_kheap(); }
+    // Initialise Fixed CPU Locals
+    multitasking::fixedcpulocal::init_fixed_cpu_locals();
+    // :)
+    let test = core::hint::black_box(multitasking::fixedcpulocal::get_fixed_cpu_locals());
     todo!()
 }
 #[no_mangle]
@@ -49,3 +55,11 @@ static _PANICKING_CPU: AtomicUsize = AtomicUsize::new(0xFF69420101);  // whateve
 fn panic(_info: &PanicInfo) -> ! {
     todo!()
 }
+
+// fixme
+#[no_mangle]
+#[used]
+static next_processor_stack: u8 = 0xaa;
+#[no_mangle]
+#[used]
+static contextswitch_scheduler_cb: u8 = 0xaa;

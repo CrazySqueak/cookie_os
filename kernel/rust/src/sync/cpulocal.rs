@@ -72,7 +72,7 @@ impl<L:RawRwLockDowngrade,T: Default> CpuLocalRWLockedItem<T,L> {
         mutator(&mut item)
     }
 }
-pub struct CpuLocalNoInterruptsLockedItem<T: Default>(pub CpuLocalLockedItem<T,super::KMutexRaw,super::KRwLockRaw>);
+pub struct CpuLocalNoInterruptsLockedItem<T: Default>(pub CpuLocalLockedItem<T,super::kspin::KMutexRaw,super::kspin::KRwLockRaw>);
 impl<T: Default> CpuLocalNoInterruptsLockedItem<T> {
     pub const fn new() -> Self { Self(CpuLocal::new()) }
     pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {

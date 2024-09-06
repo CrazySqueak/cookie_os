@@ -1,4 +1,4 @@
-use super::{KMutex};
+use super::{YMutex};
 use alloc::collections::VecDeque;
 use crate::multitasking::scheduler;
 use crate::multitasking::without_interruptions;
@@ -10,10 +10,10 @@ pub struct WaitingListEntry {
 
 /// A scheduler-based waiting list
 /// Tasks here will sleep until woken by a corresponding notify() call.
-pub struct WaitingList(KMutex<VecDeque<WaitingListEntry>>);
+pub struct WaitingList(YMutex<VecDeque<WaitingListEntry>>);
 impl WaitingList {
     pub const fn new() -> Self {
-        Self(KMutex::new(VecDeque::new()))
+        Self(YMutex::new(VecDeque::new()))
     }
     
     /// Yield to the scheduler, and wait until the thread is notified
@@ -40,7 +40,7 @@ impl WaitingList {
         while self.wait_ifnt(predicate){}
     }
     
-    fn notify_inner(&self, list: &mut super::KMutexGuard<'_,VecDeque<WaitingListEntry>>) -> bool {
+    fn notify_inner(&self, list: &mut super::YMutexGuard<'_,VecDeque<WaitingListEntry>>) -> bool {
         match list.pop_front() {
             Some(entry) => {
                 scheduler::push_task_to(entry.cpu, entry.task);

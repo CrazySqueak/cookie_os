@@ -4,9 +4,9 @@ use super::{Task,TaskType};
 use alloc::collections::VecDeque;
 use crate::logging::klog;
 use crate::sync::cpulocal::{CpuLocal,CpuLocalGuard,CpuLocalLockedOption,CpuLocalLockedItem,CpuLocalNoInterruptsLockedItem};
-use crate::sync::{KMutexRaw,KRwLockRaw};
+use crate::sync::kspin::{KMutexRaw,KRwLockRaw};
 use core::sync::atomic::{AtomicUsize,AtomicBool,Ordering};
-use crate::sync::{KMutexGuard,waitlist::WaitingListEntry};
+use crate::sync::{YMutexGuard,waitlist::WaitingListEntry};
 
 // Currently active task & run queue
 struct SchedulerState {
@@ -16,16 +16,15 @@ struct SchedulerState {
     /// This will eventually be superseded by a proper "sleep" system
     sleeping: VecDeque<(Task,usize)>,
     
-    // Attempting to drop the most recent task causes an exception because its stack may still be in use
-    // so instead we store it here V and drop it later on
-    deferred_drop: Option<Task>,
+    // We can't drop tasks in scheduler code because the memory allocators use Y/WLocks
+    deferred_drop: alloc::vec::Vec<Task>,
 }
 impl core::default::Default for SchedulerState {
     fn default() -> Self {
         Self {
             run_queue: VecDeque::new(),
             sleeping: VecDeque::new(),
-            deferred_drop: None,
+            deferred_drop: alloc::vec::Vec::new(),
         }
     }
 }
@@ -69,7 +68,7 @@ pub enum SchedulerCommand<'a> {
     SleepNTicks(usize),
     /// Push a waiting list entry to the given waiting list, then unlock the mutex by dropping the guard
     /// (the Option<> is used internally, and must always be passed as Some(). Passing a None may (will) cause a kernel panic.
-    PushToWaitingList(core::cell::Cell<Option<KMutexGuard<'a,VecDeque<WaitingListEntry>>>>),
+    PushToWaitingList(core::cell::Cell<Option<YMutexGuard<'a,VecDeque<WaitingListEntry>>>>),
 }
 
 /* Do not call this function yourself! (unless you know what you're doing). Use yield_to_scheduler instead!
@@ -77,18 +76,21 @@ pub enum SchedulerCommand<'a> {
 #[inline]
 pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
     if super::are_interruptions_disabled() { panic!("schedule() called when interruptions were disabled?"); }
-    _IS_EXECUTING_TASK.get().store(false, Ordering::Release);
+    super::without_interruptions(||_IS_EXECUTING_TASK.get().store(false, Ordering::Release));
     _SCHEDULER_STATE.mutate(|state|{
         // Update current task
         let mut current_task = _CURRENT_TASK.take().expect("schedule() called but no task currently active?");
         current_task.set_rsp(rsp);
+        
+        // FIXME: DO NOT allocate/deallocate phys/virt memory while inside the scheduler!
+        // PagingContexts and the physical memory allocator both use WLocks!!
         
         // Push previous task back onto the run queue
         match &command {
             SchedulerCommand::Terminate => {
                 // Terminate the task
                 klog!(Debug, SCHEDULER, "Terminating task: {}", current_task.task_id);
-                state.deferred_drop = Some(current_task)
+                state.deferred_drop.push(current_task)
             }
             
             SchedulerCommand::SleepNTicks(ticks) => {
@@ -143,14 +145,17 @@ pub fn resume_context(task: Task) -> !{
     // set paging context and stuff if applicable
     
     // set active task
-    {
-        _CURRENT_TASK.insert(task);
-    }  // <- lock gets dropped here
-    _IS_EXECUTING_TASK.get().store(true, Ordering::Release);
+    super::without_interruptions(||{
+        {
+            _CURRENT_TASK.insert(task);
+        }  // <- lock gets dropped here
+        _IS_EXECUTING_TASK.get().store(true, Ordering::Release);
+    });
     // resume task
     unsafe { cswitch_impl::resume_context(rsp) };
 }
 
+// Note: Anything called inside SCHEDULER_STATE.mutate/inspect is automatically called inside without_interruptions
 /* Initialise the scheduler for the current CPU, before creating a kernel task to represent the current stack.
     Once this has been called, it is ok to call yield_to_scheduler.
     (calling this again will discard a large amount of the scheduler's state for the current CPU, so uh, don't)*/
@@ -189,7 +194,7 @@ pub fn push_task(task: Task){
 /* Push a new task to another scheduler's run queue. */
 pub fn push_task_to(cpu: usize, task: Task){
     klog!(Debug, SCHEDULER, "Pushing new task to CPU {}: {}", cpu, task.task_id);
-    super::without_interruptions(||_SCHEDULER_STATE.0.get_for(cpu).lock().run_queue.push_back(task));
+    _SCHEDULER_STATE.0.get_for(cpu).lock().run_queue.push_back(task);
 }
 
 /* Advances the scheduler's clock by 1 tick. Called by the PIT. */
@@ -216,17 +221,17 @@ pub fn _scheduler_tick(){
 /* Returns true if the scheduler is currently executing a task. Returns false otherwise (i.e. it's instead executing bootstrap or scheduler code). */
 #[inline(always)]
 pub fn is_executing_task() -> bool {
-    _IS_EXECUTING_TASK.get().load(Ordering::Relaxed) && _CURRENT_TASK.inspect(|ot|ot.is_some())
+    super::without_interruptions(|| _IS_EXECUTING_TASK.get().load(Ordering::Relaxed) && _CURRENT_TASK.inspect(|ot|ot.is_some()) )
 }
 /* Get the ID of the current task, or None if the scheduler is running right now instead of a specific task. */
 #[inline(always)]
 pub fn get_executing_task_id() -> Option<usize> {
-    _CURRENT_TASK.inspect(|ot|ot.as_ref().map(|t|t.task_id))
+    super::without_interruptions(|| _CURRENT_TASK.inspect(|ot|ot.as_ref().map(|t|t.task_id)) )
 }
 /* Get the current tick count on the current CPU's scheduler.
 This may differ between CPUs, and is not a good way of keeping time, but is lowlevel and does not rely on the RTC or anything complicated like that. 
 Will probably be deprecated once support for actual time is added. */
 #[inline(always)]
 pub fn get_scheduler_ticks() -> usize {
-    _SCHEDULER_TICKS.get().load(Ordering::Relaxed)
+    super::without_interruptions(|| _SCHEDULER_TICKS.get().load(Ordering::Relaxed) )
 }

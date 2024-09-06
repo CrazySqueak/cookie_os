@@ -11,7 +11,7 @@ use crate::coredrivers::system_apic;
 
 use alloc::boxed::Box;
 use crate::sync::cpulocal::CpuLocalLockedOption;
-use crate::sync::{KRwLockRaw,KMutexRaw};
+use crate::sync::kspin::{KRwLockRaw,KMutexRaw};
 
 // 0x0X and 0x1X - CPU Exceptions
 

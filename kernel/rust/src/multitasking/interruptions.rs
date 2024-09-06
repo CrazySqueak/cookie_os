@@ -1,4 +1,4 @@
-use crate::sync::{cpulocal::CpuLocal,KRwLockRaw};
+use crate::sync::{cpulocal::CpuLocal,kspin::KRwLockRaw};
 use core::sync::atomic::{AtomicBool,Ordering};
 
 /// Perform the inner actions without interruptions
@@ -14,5 +14,5 @@ pub fn without_interruptions<R>(closure: impl FnOnce()->R) -> R {
 }
 static INTERRUPTIONS_DISABLED: CpuLocal<AtomicBool,KRwLockRaw> = CpuLocal::new();
 pub fn are_interruptions_disabled() -> bool {
-    INTERRUPTIONS_DISABLED.get().load(Ordering::Relaxed)
+    crate::lowlevel::_without_interrupts(||INTERRUPTIONS_DISABLED.get().load(Ordering::Relaxed))
 }

@@ -1,11 +1,11 @@
 
-use super::{WaitingList,KMutex};
+use super::{WaitingList,YMutex};
 use alloc::collections::VecDeque;
 
 /// A synchronized queue.
 pub struct WQueue<T> {
     waiters: WaitingList,
-    queue: KMutex<VecDeque<T>>,  // (we use a kmutex because push/pop operations should be relatively fast, so the lock may be in high contention with fast operations where a YMutex or WMutex would slow things further)
+    queue: YMutex<VecDeque<T>>,
 }
 impl<T> WQueue<T> {
     /// Get an item from the queue, blocking until one is available

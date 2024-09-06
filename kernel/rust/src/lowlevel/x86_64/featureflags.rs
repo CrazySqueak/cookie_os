@@ -3,7 +3,8 @@ use raw_cpuid::CpuId;
 use x86_64::registers::model_specific::{Efer,EferFlags};
 use x86_64::registers::control::{Cr4,Cr4Flags};
 
-use crate::sync::KRwLock;
+use crate::sync::kspin::KRwLock;
+// Note: _MSR_FLAGS is used before scheduler/interrupts are configured
 static _MSR_FLAGS: KRwLock<Option<(EferFlags,Cr4Flags)>> = KRwLock::new(None);
 
 use crate::logging::klog;

@@ -5,8 +5,8 @@ pub mod waitlist;
 pub use waitlist::WaitingList;
 
 pub mod spin;
-mod kspin;
-pub use kspin::*;
+// Note: kspin has special rules for its usage to avoid deadlocks. See kspin's documentation for details.
+pub mod kspin;
 mod yspin;
 pub use yspin::*;
 mod wlock;

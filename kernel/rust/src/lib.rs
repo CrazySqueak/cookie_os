@@ -113,7 +113,7 @@ pub extern "sysv64" fn _kstart() -> ! {
     _kmain();
 }
 
-static AP_BOOT_PAGING_CONTEXT: sync::KMutex<Option<memory::paging::PagingContext>> = sync::KMutex::new(None);
+static AP_BOOT_PAGING_CONTEXT: sync::YMutex<Option<memory::paging::PagingContext>> = sync::YMutex::new(None);
 #[no_mangle]
 pub extern "sysv64" fn _kstart_ap() -> ! {
     multitasking::init_cpu_num();

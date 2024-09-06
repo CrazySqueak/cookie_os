@@ -89,20 +89,20 @@ impl core::default::Default for LoggingContext {
 }
 
 lazy_static! {
-    static ref CONTEXT: crate::sync::KMutex<LoggingContext> = crate::sync::KMutex::default();
+    static ref CONTEXT: crate::sync::kspin::KMutex<LoggingContext> = crate::sync::kspin::KMutex::default();
 }
 
-pub fn _kernel_log(level: LogLevel, component: &str, msg: &(impl core::fmt::Display + ?Sized), file: &str, line: u32, column: u32){
+pub fn _kernel_log(level: LogLevel, component: &str, msg: &(impl core::fmt::Display + ?Sized), file: &str, line: u32, column: u32){crate::multitasking::without_interruptions(||{
     let mut context = CONTEXT.lock();
     let formatted = context.formatter.format_log_message(level, component, &format!("{}",msg), file, line, column);
     for dest in context.destinations.iter_mut() {
         let _=write!(dest,"{}\r\n",formatted);
     }
-}
-pub fn update_logging_context(updater: impl FnOnce(&mut LoggingContext)) {
+})}
+pub fn update_logging_context(updater: impl FnOnce(&mut LoggingContext)){crate::multitasking::without_interruptions(||{
     let mut context = CONTEXT.lock();
     updater(&mut context);
-}
+})}
 
 macro_rules! klog {
     ($level: ident, $component:ident, $template:literal, $($x:expr),*) => {

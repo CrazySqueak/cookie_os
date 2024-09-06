@@ -7,7 +7,7 @@ use x86_64::VirtAddr;
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::structures::gdt::{GlobalDescriptorTable, Descriptor, SegmentSelector};
 use lazy_static::lazy_static;
-use crate::sync::{KMutexRaw,KRwLockRaw};
+use crate::sync::kspin::{KMutexRaw,KRwLockRaw};
 
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 
@@ -22,6 +22,7 @@ pub struct GDTSegments {
 }
 static _LOCAL_GDT: CpuLocalLockedOption<GDTSegments,KMutexRaw,KRwLockRaw> = CpuLocalLockedOption::new();
 
+// Note: The GDT is initialised before interruptions/scheduler
 fn _init_local_gdt(){
     // ===TSS
     let tss = Box::leak(Box::new(TaskStateSegment::new()));

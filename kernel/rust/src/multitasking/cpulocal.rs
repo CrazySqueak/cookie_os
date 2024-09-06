@@ -17,6 +17,7 @@ impl<'a,T: Default + ?Sized + 'a,const SHARED: bool> CpuLocal<'a,T,SHARED> {
         Self(RwLock::new(Vec::new()))
     }
     
+    #[inline]
     fn _initialise_empty(&self, up_to_id_inclusive: usize) {
         let mut references = self.0.write();
         while references.len() <= up_to_id_inclusive {
@@ -34,7 +35,6 @@ impl<'a,T: Default + ?Sized + 'a,const SHARED: bool> CpuLocal<'a,T,SHARED> {
         }
     }
     
-    #[inline(always)]
     fn _get_for_inner(&self, id: usize) -> &'a T {
         let rg = self.0.read();
         let item = if rg.len() <= id {
@@ -47,20 +47,21 @@ impl<'a,T: Default + ?Sized + 'a,const SHARED: bool> CpuLocal<'a,T,SHARED> {
         item
     }
     #[inline(always)]
-    pub fn get(&self) -> &'a T {
-        self._get_for_inner(get_cpu_num())
+    pub fn get_current(x: &CpuLocal<'a,T,SHARED>) -> &'a T {
+        x._get_for_inner(get_cpu_num())
     }
 }
 impl<'a,T: Default + ?Sized + 'a> CpuLocal<'a,T,true> {
     #[inline(always)]
-    pub fn get_for(&self, id: usize) -> &'a T {
-        self._get_for_inner(id)
+    pub fn get_for(x: &CpuLocal<'a,T,true>, id: usize) -> &'a T {
+        x._get_for_inner(id)
     }
 }
 impl<'a,T: Default + ?Sized,const SHARED: bool> core::ops::Deref for CpuLocal<'a,T,SHARED> where Self: 'a {
     type Target = T;
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        self.get()
+        Self::get_current(self)
     }
 }
 

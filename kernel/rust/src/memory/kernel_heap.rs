@@ -1,8 +1,10 @@
 
+use core::alloc::Layout;
 use buddy_system_allocator::LockedHeap;
-use crate::lowlevel::_without_interrupts;
 
-use crate::logging::klog;
+// use crate::lowlevel::_without_interrupts;
+// 
+// use crate::logging::klog;
 
 extern "C" {
     // Provided by longmode.intel.asm (64-bit)
@@ -19,15 +21,13 @@ impl KernelHeap {
     }
     
     pub unsafe fn init(&self, addr: usize, size: usize){
-        // NOTE: It is IMPOSSIBLE to disable interruptions here, as the "interruptions disabled" flag is a CpuLocal, which uses a Vec internally...
         self.heap.lock().init(addr, size)
     }
 }
 unsafe impl core::alloc::GlobalAlloc for KernelHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // We MUST not be interrupted while the heap is locked
-        // (we can't use without_interruptions as that involves a cpulocal)
-        _without_interrupts(||{
+        // _without_interrupts(||{
             let result = self.heap.lock().alloc(layout);
             match result {
                 Ok(result)=>result.as_ptr(),
@@ -38,13 +38,12 @@ unsafe impl core::alloc::GlobalAlloc for KernelHeap {
                     self.heap.alloc(layout)
                 }
             }
-        })
+        // })
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // (we can't use without_interruptions as that involves a cpulocal)
-        _without_interrupts(||{
+        // _without_interrupts(||{
             self.heap.dealloc(ptr, layout)
-        })
+        // })
     }
 }
 
@@ -56,14 +55,19 @@ pub unsafe fn init_kheap(){
     KHEAP_ALLOCATOR.init(kheap_initial_addr as usize,kheap_initial_size as usize);
     
     // Success
-    klog!(Info, MEMORY_KHEAP, "Initialised kernel heap with {} bytes.", kheap_initial_size);
+    // klog!(Info, MEMORY_KHEAP, "Initialised kernel heap with {} bytes.", kheap_initial_size);
 }
 
 pub unsafe fn init_kheap_2(){
     // Init rescue
-    _reinit_rescue::spawn();
+    // _reinit_rescue::spawn();
 }
 
+unsafe fn on_oom(heap: &LockedHeap<32>, layout: &Layout) {
+    todo!()
+}
+
+/*
 /* Allocate some extra physical memory to the kernel heap.
     (note: the kernel heap's PhysicalMemoryAllocations are currently not kept anywhere, so they cannot be freed again. Use this function with care.)
     Size is in bytes.
@@ -161,3 +165,4 @@ def_task_fn!(task fn _reinit_rescue(){
         },
     }
 });
+*/

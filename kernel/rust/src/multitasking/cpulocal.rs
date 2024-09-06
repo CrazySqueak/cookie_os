@@ -1,4 +1,70 @@
 //use super::{KRwLock,KRwLockReadGuard,MappedKRwLockReadGuard};
+
+use alloc::vec::Vec;
+use alloc::boxed::Box;
+use core::default::Default;
+use super::get_cpu_num;
+// TODO: Mutex once i implement proper sync primitives
+type RwLock<T> = spin::RwLock<T>;
+
+/// T - the type of the value
+/// 'a - the lifetime of the value
+/// SHARED - If true, other CPUs may use get_for to acquire a reference to the value for another CPU
+/// (items must still be Sync as multiple threads may run on the same CPU)
+pub struct CpuLocal<'a, T: Default + ?Sized + 'a, const SHARED: bool>(RwLock<Vec<&'a T>>);
+impl<'a,T: Default + ?Sized + 'a,const SHARED: bool> CpuLocal<'a,T,SHARED> {
+    pub const fn new() -> Self {
+        Self(RwLock::new(Vec::new()))
+    }
+    
+    fn _initialise_empty(&self, up_to_id_inclusive: usize) {
+        let mut references = self.0.write();
+        while references.len() <= up_to_id_inclusive {
+            // Create a new item in a box
+            let item_box = Box::new(T::default());
+            // Leak and reborrow as immutable
+            let item_ref: &'a T = &*Box::leak(item_box);
+            // Push to our vec
+            references.push(item_ref);
+            
+            // CpuLocals have generally been used in statics, where their values live for the remainder of the program
+            // Therefore, by allocating on the heap and storing a shared reference, we only need to keep a read guard long enough to obtain a reference
+            // Rather than having to keep it for the duration we spend referencing the value
+            // (thus reducing contention)
+        }
+    }
+    
+    #[inline(always)]
+    fn _get_for_inner(&self, id: usize) -> &'a T {
+        let rg = self.0.read();
+        let item = if rg.len() <= id {
+            drop(rg);
+            self._initialise_empty(id);
+            (self.0.read())[id]
+        } else {
+            rg[id]
+        };
+        item
+    }
+    #[inline(always)]
+    pub fn get(&self) -> &'a T {
+        self._get_for_inner(get_cpu_num())
+    }
+}
+impl<'a,T: Default + ?Sized + 'a> CpuLocal<'a,T,true> {
+    #[inline(always)]
+    pub fn get_for(&self, id: usize) -> &'a T {
+        self._get_for_inner(id)
+    }
+}
+impl<'a,T: Default + ?Sized,const SHARED: bool> core::ops::Deref for CpuLocal<'a,T,SHARED> where Self: 'a {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.get()
+    }
+}
+
+/*
 use lock_api::{RawRwLockDowngrade,RwLock,RwLockReadGuard,MappedRwLockReadGuard};
 use crate::sync::kspin::KRwLock;
 use alloc::vec::Vec;
@@ -117,3 +183,5 @@ impl<L:lock_api::RawMutex,LR:RawRwLockDowngrade,T> CpuLocalLockedOption<T,L,LR> 
         self.inspect(|opt|inspector(opt.as_ref().expect(errmsg)))
     }
 }
+
+*/

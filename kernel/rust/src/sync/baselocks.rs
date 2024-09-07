@@ -165,3 +165,11 @@ unsafe impl<S:RwLockStrategy> lock_api::RawRwLockUpgradeDowngrade for BaseRwLock
         self.1.on_downgrade_w2u();
     }
 }
+
+
+pub type BaseRwLock<T,S> = lock_api::RwLock<BaseRwLockRaw<S>,T>;
+pub type BaseRwLockReadGuard<'a,T,S> = lock_api::RwLockReadGuard<'a,BaseRwLockRaw<S>,T>;
+pub type BaseRwLockWriteGuard<'a,T,S> = lock_api::RwLockWriteGuard<'a,BaseRwLockRaw<S>,T>;
+pub type BaseRwLockUpgradableGuard<'a,T,S> = lock_api::RwLockUpgradableReadGuard<'a,BaseRwLockRaw<S>,T>;
+pub type MappedBaseRwLockReadGuard<'a,T,S> = lock_api::MappedRwLockReadGuard<'a,BaseRwLockRaw<S>,T>;
+pub type MappedBaseRwLockWriteGuard<'a,T,S> = lock_api::MappedRwLockWriteGuard<'a,BaseRwLockRaw<S>,T>;

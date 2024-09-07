@@ -84,6 +84,13 @@ impl<T,S:MutexStrategy> NIMutex<T,S> {
     pub const fn new(val:T) -> Self {
         Self(BaseMutex::new(val))
     }
+    pub fn raw(&self) -> &super::baselocks::BaseMutexRaw<S> {
+        // SAFETY: .raw() being unsafe is redundant since raw().unlock() is already unsafe
+        unsafe { self.0.raw() }
+    }
+    pub fn is_locked(&self) -> bool {
+        self.raw().is_locked()
+    }
     
     ni_wrap_lock!(pub fn lock(&self) -> wrap(BaseMutexGuard<'_,T,S>));
     ni_wrap_lock!(pub fn try_lock(&self) -> wrap_Option(BaseMutexGuard<'_,T,S>));
@@ -103,6 +110,16 @@ impl<T,S:RwLockStrategy> NIRwLock<T,S> {
     pub const fn new(val:T) -> Self {
         Self(BaseRwLock::new(val))
     }
+    pub fn raw(&self) -> &super::baselocks::BaseRwLockRaw<S> {
+        // SAFETY: .raw() being unsafe is redundant since raw().unlock() is already unsafe
+        unsafe { self.0.raw() }
+    }
+    pub fn reader_count(&self) -> Result<usize,usize> {
+        self.raw().reader_count()
+    }
+    pub fn is_locked_exclusively(&self) -> bool {
+        self.raw().is_locked_exclusively()
+    }
     
     ni_wrap_lock!(pub fn read(&self) -> wrap(BaseRwLockReadGuard<'_,T,S>));
     ni_wrap_lock!(pub fn try_read(&self) -> wrap_Option(BaseRwLockReadGuard<'_,T,S>));
@@ -113,11 +130,13 @@ impl<T,S:RwLockStrategy> NIRwLock<T,S> {
 }
 
 impl<'a,T,S:RwLockStrategy> NoInterruptionsGuardWrapper<BaseRwLockUpgradableGuard<'a,T,S>> {
+    pub fn rwlock_raw(s: &Self) -> &'a super::baselocks::BaseRwLockRaw<S> { unsafe{BaseRwLockUpgradableGuard::rwlock(&s.lock_guard).raw()} }  // SAFETY: raw() being unsafe is redundant
     ni_wrap_upgrade!(pub fn upgrade(s: Self) -> wrap(BaseRwLockUpgradableGuard -> BaseRwLockWriteGuard, <'a,T,S>));
     ni_wrap_upgrade!(pub fn try_upgrade(s: Self) -> wrap_Result(BaseRwLockUpgradableGuard -> BaseRwLockWriteGuard, <'a,T,S>));
     ni_wrap_upgrade!(pub fn downgrade(s: Self) -> wrap(BaseRwLockUpgradableGuard -> BaseRwLockReadGuard, <'a,T,S>));
 }
 impl<'a,T,S:RwLockStrategy> NoInterruptionsGuardWrapper<BaseRwLockWriteGuard<'a,T,S>> {
+    pub fn rwlock_raw(s: &Self) -> &'a super::baselocks::BaseRwLockRaw<S> { unsafe{BaseRwLockWriteGuard::rwlock(&s.lock_guard).raw()} }  // SAFETY: raw() being unsafe is redundant
     ni_wrap_upgrade!(pub fn downgrade(s: Self) -> wrap(BaseRwLockWriteGuard -> BaseRwLockReadGuard, <'a,T,S>));
     ni_wrap_upgrade!(pub fn downgrade_to_upgradable(s: Self) -> wrap(BaseRwLockWriteGuard -> BaseRwLockUpgradableGuard, <'a,T,S>));
     
@@ -129,6 +148,7 @@ impl<'a,T,S:RwLockStrategy> NoInterruptionsGuardWrapper<MappedBaseRwLockWriteGua
     ni_wrap_map!(pub fn try_map(s:Self,f:F) -> wrap_Result(MappedBaseRwLockWriteGuard->MappedBaseRwLockWriteGuard<'a,&mut T=>&mut U=(U),S>));
 }
 impl<'a,T,S:RwLockStrategy> NoInterruptionsGuardWrapper<BaseRwLockReadGuard<'a,T,S>> {
+    pub fn rwlock_raw(s: &Self) -> &'a super::baselocks::BaseRwLockRaw<S> { unsafe{BaseRwLockReadGuard::rwlock(&s.lock_guard).raw()} }  // SAFETY: raw() being unsafe is redundant
     ni_wrap_map!(pub fn map(s:Self,f:F) -> wrap(BaseRwLockReadGuard->MappedBaseRwLockReadGuard<'a,&T=>&U=(U),S>));
     ni_wrap_map!(pub fn try_map(s:Self,f:F) -> wrap_Result(BaseRwLockReadGuard->MappedBaseRwLockReadGuard<'a,&T=>&U=(U),S>));
 }

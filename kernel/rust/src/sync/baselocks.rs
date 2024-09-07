@@ -11,6 +11,11 @@ pub trait MutexStrategy {
 }
 
 pub struct BaseMutexRaw<S:MutexStrategy>(AtomicBool,S);
+impl<S:MutexStrategy> BaseMutexRaw<S> {
+    pub fn is_locked(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
 unsafe impl<S:MutexStrategy> RawMutex for BaseMutexRaw<S> {
     type GuardMarker = GuardSend;
     const INIT: Self = Self(AtomicBool::new(false),S::INIT);
@@ -75,6 +80,10 @@ impl<S:RwLockStrategy> BaseRwLockRaw<S> {
         let result = self.0.load(Ordering::Relaxed);
         if result >= EXCLUSIVE_THRESHOLD { return Err(result%EXCLUSIVE_THRESHOLD); }
         Ok(result)
+    }
+    /* If locked exclusively, returns true. Otherwise, returns false. */
+    pub fn is_locked_exclusively(&self) -> bool {
+        self.0.load(Ordering::Relaxed) >= EXCLUSIVE_THRESHOLD
     }
 }
 unsafe impl<S:RwLockStrategy> RawRwLock for BaseRwLockRaw<S> {

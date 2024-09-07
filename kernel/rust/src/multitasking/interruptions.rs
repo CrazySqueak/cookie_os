@@ -4,7 +4,7 @@
 
 use alloc::vec::Vec;
 use core::ptr::null;
-use spin::Mutex;
+use crate::sync::llspin::LLMutex;  // we have to use LLMutexes as KMutex depends on disable_interruptions()
 use super::fixedcpulocal::get_fixed_cpu_locals;
 
 pub struct NoInterruptionsGuard(usize);
@@ -65,6 +65,6 @@ fn enable_interruptions(index: usize) {
     super::arch::enable_interrupts::restore_interrupts(&interrupt_state);
 }
 
-pub type FCLCurrentNIGuard = Mutex<Vec<NoInterruptionsStateContainer>>;
+pub type FCLCurrentNIGuard = LLMutex<Vec<NoInterruptionsStateContainer>>;
 #[allow(non_upper_case_globals)]
-pub const FCLCurrentNIGuardDefault: FCLCurrentNIGuard = Mutex::new(Vec::new());
+pub const FCLCurrentNIGuardDefault: FCLCurrentNIGuard = LLMutex::new(Vec::new());

@@ -5,7 +5,7 @@ impl spin::relax::RelaxStrategy for SchedulerYield {
         todo!()  // scheduler yield
     }
 }
-pub type YieldSpin = super::spinlocks::SpinLockStrategy<SchedulerYield>;
+pub type YieldSpin = SchedulerYield;
 
 pub type YMutex<T> = super::spinlocks::BaseSpinMutex<T,YieldSpin>;
 pub type YMutexGuard<'a,T> = super::spinlocks::BaseSpinMutexGuard<'a,T,YieldSpin>;

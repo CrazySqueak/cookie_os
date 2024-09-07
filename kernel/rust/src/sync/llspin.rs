@@ -1,5 +1,5 @@
 
-pub type BlockingSpin = super::spinlocks::SpinLockStrategy<spin::relax::Spin>;
+pub type BlockingSpin = spin::relax::Spin;
 
 pub type LLMutex<T> = super::spinlocks::BaseSpinMutex<T,BlockingSpin>;
 pub type LLMutexGuard<'a,T> = super::spinlocks::BaseSpinMutexGuard<'a,T,BlockingSpin>;

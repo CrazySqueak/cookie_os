@@ -4,7 +4,8 @@ use alloc::vec::Vec;
 use alloc::boxed::Box;
 use core::default::Default;
 use super::get_cpu_num;
-// TODO: Mutex once i implement proper sync primitives
+// TODO: KMutex once i implement proper sync primitives
+//      (we don't need to use LLMutex as LLMutex indirectly depends on fixedcpulocal, not dynamic cpu locals
 type RwLock<T> = spin::RwLock<T>;
 
 /// T - the type of the value

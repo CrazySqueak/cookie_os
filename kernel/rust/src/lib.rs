@@ -3,7 +3,7 @@
 #![feature(negative_impls)]
 #![feature(sync_unsafe_cell)]
 #![feature(box_into_inner)]
-#![feature(new_uninit)]
+#![feature(vec_pop_if)]
 
 // i'm  exhausted by these warnings jeez
 #![allow(unused_imports)]

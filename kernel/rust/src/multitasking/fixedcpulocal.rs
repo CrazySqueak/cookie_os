@@ -5,7 +5,8 @@ use super::arch::fixedcpulocal as arch;
 
 pub struct FixedCpuLocals {
     pub cpu_id: usize,
-    pub current_ni_guard: super::interruptions::FCLCurrentNIGuard,
+    
+    pub current_nointerruptions_state: super::interruptions::FCLCurrentNIGuard,
 }
 /* Call once per CPU, early on. */
 pub fn init_fixed_cpu_locals(){
@@ -14,7 +15,8 @@ pub fn init_fixed_cpu_locals(){
     // Store
     arch::_set_fixed_cpu_locals(FixedCpuLocals {
         cpu_id: cpu_id,
-        current_ni_guard: super::interruptions::FCLCurrentNIGuardDefault,
+        
+        current_nointerruptions_state: super::interruptions::FCLCurrentNIGuardDefault,
     });
 }
 #[inline(always)]

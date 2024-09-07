@@ -1,5 +1,6 @@
 pub mod baselocks;
 pub mod spinlocks;
+pub mod nointerruptionslocks;
 
 /// llspin - Low-level spin locks (used for implementing no_interruptions and cpulocals)
 pub mod llspin;

@@ -5,7 +5,7 @@ pub mod nointerruptionslocks;
 /// llspin - Low-level spin locks (used for implementing no_interruptions and cpulocals)
 pub mod llspin;
 // kspin - Kernel Spin (similar to llspin but wraps the guard with a no_interruptions guard to disable interrupts and yielding while held)
-
+pub mod kspin;
 /// yspin - Yield Spin (yields to scheduler, task only)
 pub mod yspin;
 // wlock - Waiting List Locks (ticket mutexes using WaitingLists)

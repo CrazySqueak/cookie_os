@@ -5,7 +5,7 @@
 use alloc::vec::Vec;
 use core::ptr::null;
 use crate::sync::llspin::LLMutex;  // we have to use LLMutexes as KMutex depends on disable_interruptions()
-use super::fixedcpulocal::get_fixed_cpu_locals;
+use super::fixedcpulocal::fixed_cpu_local;
 
 pub struct NoInterruptionsGuard(usize);
 impl core::ops::Drop for NoInterruptionsGuard {
@@ -39,7 +39,7 @@ pub fn disable_interruptions() -> NoInterruptionsGuard {
         state: ni_state,
     };
     // Push it
-    let mut guard = get_fixed_cpu_locals().current_nointerruptions_state.lock();
+    let mut guard = CURRENT_NOINTERRUPTIONS_STATE::get().lock();//get_fixed_cpu_locals().current_nointerruptions_state.lock();
     let index = guard.len(); guard.push(state);
     drop(guard);
     // And return a guard
@@ -50,7 +50,7 @@ fn enable_interruptions(index: usize) {
     let mut interrupt_state = super::arch::enable_interrupts::clear_interrupts();
     
     // Set the given state to "false"
-    let mut guard = get_fixed_cpu_locals().current_nointerruptions_state.lock();
+    let mut guard = CURRENT_NOINTERRUPTIONS_STATE::get().lock();//get_fixed_cpu_locals().current_nointerruptions_state.lock();
     guard[index].active = false;
     
     // And restore any that need it
@@ -65,6 +65,7 @@ fn enable_interruptions(index: usize) {
     super::arch::enable_interrupts::restore_interrupts(&interrupt_state);
 }
 
-pub type FCLCurrentNIGuard = LLMutex<Vec<NoInterruptionsStateContainer>>;
-#[allow(non_upper_case_globals)]
-pub const FCLCurrentNIGuardDefault: FCLCurrentNIGuard = LLMutex::new(Vec::new());
+fixed_cpu_local!(pub fixedcpulocal static CURRENT_NOINTERRUPTIONS_STATE: LLMutex<Vec<NoInterruptionsStateContainer>> = LLMutex::new(Vec::new()));
+// pub type FCLCurrentNIGuard = LLMutex<Vec<NoInterruptionsStateContainer>>;
+// #[allow(non_upper_case_globals)]
+// pub const FCLCurrentNIGuardDefault: FCLCurrentNIGuard = LLMutex::new(Vec::new());

@@ -1,6 +1,7 @@
 use super::scheduler::StackPointer;
 
-use crate::memory::alloc_util::AnyAllocatedStack;
+// (placeholder)
+trait AnyAllocatedStack { fn bottom_vaddr(&self) -> usize; } //use crate::memory::alloc_util::AnyAllocatedStack;
 use alloc::boxed::Box;
 
 static NEXT_ID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);

@@ -6,7 +6,7 @@ use core::default::Default;
 use super::get_cpu_num;
 // TODO: KMutex once i implement proper sync primitives
 //      (we don't need to use LLMutex as LLMutex indirectly depends on fixedcpulocal, not dynamic cpu locals
-type RwLock<T> = spin::RwLock<T>;
+type RwLock<T> = crate::sync::kspin::KRwLock<T>;
 
 /// T - the type of the value
 /// 'a - the lifetime of the value

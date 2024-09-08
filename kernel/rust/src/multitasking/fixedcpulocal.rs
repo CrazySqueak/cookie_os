@@ -6,7 +6,10 @@ use super::arch::fixedcpulocal as arch;
 pub struct FixedCpuLocals {
     pub cpu_id: usize,
     
-    pub current_nointerruptions_state: super::interruptions::FCLCurrentNIGuard,
+    pub current_task: crate::multitasking::scheduler::FCLCurrentTask,
+    pub is_executing_task: crate::multitasking::scheduler::FCLIsExecutingTask,
+    
+    pub current_nointerruptions_state: crate::multitasking::interruptions::FCLCurrentNIGuard,
 }
 /* Call once per CPU, early on. */
 pub fn init_fixed_cpu_locals(){
@@ -16,7 +19,10 @@ pub fn init_fixed_cpu_locals(){
     arch::_set_fixed_cpu_locals(FixedCpuLocals {
         cpu_id: cpu_id,
         
-        current_nointerruptions_state: super::interruptions::FCLCurrentNIGuardDefault,
+        current_task: crate::multitasking::scheduler::FCLCurrentTaskDefault,
+        is_executing_task: crate::multitasking::scheduler::FCLIsExecutingTaskDefault,
+        
+        current_nointerruptions_state: crate::multitasking::interruptions::FCLCurrentNIGuardDefault,
     });
 }
 #[inline(always)]

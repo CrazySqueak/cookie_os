@@ -2,11 +2,14 @@
 use super::arch::{context_switch as cswitch_impl};
 use super::{Task,TaskType};
 use alloc::collections::VecDeque;
-use crate::logging::klog;
-use crate::sync::cpulocal::{CpuLocal,CpuLocalGuard,CpuLocalLockedOption,CpuLocalLockedItem,CpuLocalNoInterruptsLockedItem};
-use crate::sync::kspin::{KMutexRaw,KRwLockRaw};
+macro_rules! klog { ($($x:tt)*)=>{} }//use crate::logging::klog;
+use super::cpulocal::CpuLocal;
+use super::fixedcpulocal::get_fixed_cpu_locals;
+
+//use crate::sync::kspin::{KMutexRaw,KRwLockRaw};
+use crate::sync::kspin::KMutex;
 use core::sync::atomic::{AtomicUsize,AtomicBool,Ordering};
-use crate::sync::{YMutexGuard,waitlist::WaitingListEntry};
+//use crate::sync::{YMutexGuard,waitlist::WaitingListEntry};
 
 // Currently active task & run queue
 struct SchedulerState {
@@ -30,14 +33,19 @@ impl core::default::Default for SchedulerState {
 }
 // current_task is stored separately to the rest of the state as it is commonly accessed by logging methods,
 // and usually isn't held for very long. If it was part of _SCHEDULER_STATE, then logging during with_scheduler_state! would cause a deadlock
-static _CURRENT_TASK: CpuLocalLockedOption<Task,KMutexRaw,KRwLockRaw> = CpuLocalLockedOption::new();
-static _SCHEDULER_STATE: CpuLocalNoInterruptsLockedItem<SchedulerState> = CpuLocalNoInterruptsLockedItem::new();
-static _SCHEDULER_TICKS: CpuLocal<AtomicUsize,KRwLockRaw> = CpuLocal::new();
+pub type FCLCurrentTask = KMutex<Option<Task>>;
+pub const FCLCurrentTaskDefault = KMutex::new(None);
+// static _CURRENT_TASK: CpuLocalLockedOption<Task,KMutexRaw,KRwLockRaw> = CpuLocalLockedOption::new();
+
+static _SCHEDULER_STATE: CpuLocal<KMutex<SchedulerState>> = CpuLocal::new();
+static _SCHEDULER_TICKS: CpuLocal<AtomicUsize> = CpuLocal::new();
 
 // _IS_EXECUTING_TASK is a lock-free heuristic for checking if a task is not currently executing, even if the scheduler is not initialised yet on this CPU or if the scheduler is deadlocked
 // It is false when scheduler/bootstrap code is executing, and is true starting right before resume_context is called.
 // It is only intended as a heuristic. If you intend to interact with tasks properly, use a standard lock acquire and match statement.
-static _IS_EXECUTING_TASK: CpuLocal<AtomicBool,KRwLockRaw> = CpuLocal::new();
+// static _IS_EXECUTING_TASK: CpuLocal<AtomicBool,KRwLockRaw> = CpuLocal::new();
+pub type FCLIsExecutingTask = AtomicBool;
+pub const FCLIsExecutingTaskDefault = AtomicBool::new(false);
 
 pub type StackPointer = cswitch_impl::StackPointer;
 pub use cswitch_impl::yield_to_scheduler;
@@ -221,7 +229,7 @@ pub fn _scheduler_tick(){
 /* Returns true if the scheduler is currently executing a task. Returns false otherwise (i.e. it's instead executing bootstrap or scheduler code). */
 #[inline(always)]
 pub fn is_executing_task() -> bool {
-    super::without_interruptions(|| _IS_EXECUTING_TASK.get().load(Ordering::Relaxed) && _CURRENT_TASK.inspect(|ot|ot.is_some()) )
+    // super::without_interruptions(|| _IS_EXECUTING_TASK.get().load(Ordering::Relaxed) && _CURRENT_TASK.inspect(|ot|ot.is_some()) )
 }
 /* Get the ID of the current task, or None if the scheduler is running right now instead of a specific task. */
 #[inline(always)]

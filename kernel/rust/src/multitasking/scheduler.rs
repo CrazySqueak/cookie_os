@@ -1,13 +1,14 @@
 
 use super::arch::{context_switch as cswitch_impl};
-use super::{Task,TaskType};
+use super::task::{Task,TaskType};
 use alloc::collections::VecDeque;
-macro_rules! klog { ($($x:tt)*)=>{} }//use crate::logging::klog;
+macro_rules! klog { ($($x:tt)*)=>{} }//FIXME use crate::logging::klog;
 use super::cpulocal::CpuLocal;
-use super::fixedcpulocal::get_fixed_cpu_locals;
+use super::fixedcpulocal::{get_fixed_cpu_locals,fixed_cpu_local};
+use super::interruptions::disable_interruptions;
 
 //use crate::sync::kspin::{KMutexRaw,KRwLockRaw};
-use crate::sync::kspin::KMutex;
+use crate::sync::kspin::{KMutex,KMutexGuard};
 use core::sync::atomic::{AtomicUsize,AtomicBool,Ordering};
 //use crate::sync::{YMutexGuard,waitlist::WaitingListEntry};
 
@@ -33,19 +34,16 @@ impl core::default::Default for SchedulerState {
 }
 // current_task is stored separately to the rest of the state as it is commonly accessed by logging methods,
 // and usually isn't held for very long. If it was part of _SCHEDULER_STATE, then logging during with_scheduler_state! would cause a deadlock
-pub type FCLCurrentTask = KMutex<Option<Task>>;
-pub const FCLCurrentTaskDefault = KMutex::new(None);
-// static _CURRENT_TASK: CpuLocalLockedOption<Task,KMutexRaw,KRwLockRaw> = CpuLocalLockedOption::new();
+static _CURRENT_TASK: CpuLocal<KMutex<Option<Task>>,false> = CpuLocal::new();
 
-static _SCHEDULER_STATE: CpuLocal<KMutex<SchedulerState>> = CpuLocal::new();
-static _SCHEDULER_TICKS: CpuLocal<AtomicUsize> = CpuLocal::new();
+static _SCHEDULER_STATE: CpuLocal<KMutex<SchedulerState>,true> = CpuLocal::new();
+static _SCHEDULER_TICKS: CpuLocal<AtomicUsize,false> = CpuLocal::new();
 
 // _IS_EXECUTING_TASK is a lock-free heuristic for checking if a task is not currently executing, even if the scheduler is not initialised yet on this CPU or if the scheduler is deadlocked
 // It is false when scheduler/bootstrap code is executing, and is true starting right before resume_context is called.
 // It is only intended as a heuristic. If you intend to interact with tasks properly, use a standard lock acquire and match statement.
 // static _IS_EXECUTING_TASK: CpuLocal<AtomicBool,KRwLockRaw> = CpuLocal::new();
-pub type FCLIsExecutingTask = AtomicBool;
-pub const FCLIsExecutingTaskDefault = AtomicBool::new(false);
+fixed_cpu_local!(fixedcpulocal static _IS_EXECUTING_TASK: AtomicBool = AtomicBool::new(false));
 
 pub type StackPointer = cswitch_impl::StackPointer;
 pub use cswitch_impl::yield_to_scheduler;
@@ -83,11 +81,12 @@ pub enum SchedulerCommand<'a> {
     This function happens after the previous context is saved, but before the next one is loaded. It's this function's job to determine what to run next (and then run it). */
 #[inline]
 pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
-    if super::are_interruptions_disabled() { panic!("schedule() called when interruptions were disabled?"); }
-    super::without_interruptions(||_IS_EXECUTING_TASK.get().store(false, Ordering::Release));
-    _SCHEDULER_STATE.mutate(|state|{
+    if super::interruptions::is_sched_yield_disabled() { panic!("schedule() called when interruptions were disabled?"); }
+    _IS_EXECUTING_TASK.get().store(false, Ordering::Release);
+    let mut current_task = _CURRENT_TASK.lock().take().expect("schedule() called but no task currently active?");
+    {
+        let mut state = _SCHEDULER_STATE.lock();
         // Update current task
-        let mut current_task = _CURRENT_TASK.take().expect("schedule() called but no task currently active?");
         current_task.set_rsp(rsp);
         
         // FIXME: DO NOT allocate/deallocate phys/virt memory while inside the scheduler!
@@ -121,22 +120,23 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
                 state.run_queue.push_back(current_task);
             }
         }
-    });
+    };  // <-- lock is released here
     
     // Pick the next task off of the run queue
     loop {
-        let next_task: Option<Task> = _SCHEDULER_STATE.mutate(|state|{
-            match &command {
+        let next_task = {
+            let mut state = _SCHEDULER_STATE.lock();
+            (match &command {
                 _ => {
                     // Take next task
                     state.run_queue.pop_front()
                 }
-            }
-        });
+            }).map(|task|(task, state))
+        };
         
-        if let Some(next_task) = next_task {
+        if let Some((next_task, state_guard)) = next_task {
             klog!(Debug, SCHEDULER, "Resuming task: {}", next_task.task_id);
-            resume_context(next_task)
+            resume_context(next_task, state_guard)
         } else {
             // No tasks to do
             // spin for now
@@ -147,28 +147,31 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
 
 /* Resume the requested task, discarding the current one (if any). */
 #[inline]
-pub fn resume_context(task: Task) -> !{
+pub fn resume_context(task: Task, state_guard: KMutexGuard<SchedulerState>) -> !{
+    // Note: state_guard contains a no-interruptions guard within it, ensuring we're not interrupted
     let rsp = task.get_rsp();
+    
+    // set active task
+    _CURRENT_TASK.lock().insert(task);
+    _IS_EXECUTING_TASK.store(true, Ordering::Release);
+    
+    // we're now "in" the task (even if we're not executing its code yet)
+    todo!();  // we need to switch stacks before we enable interruptions as otherwise a race condition could screw us
+    drop(state_guard);  // activating the paging context will require interruptions to be enabled, so we drop the guard and enable them here
     
     // set paging context and stuff if applicable
     
-    // set active task
-    super::without_interruptions(||{
-        {
-            _CURRENT_TASK.insert(task);
-        }  // <- lock gets dropped here
-        _IS_EXECUTING_TASK.get().store(true, Ordering::Release);
-    });
     // resume task
     unsafe { cswitch_impl::resume_context(rsp) };
 }
 
-// Note: Anything called inside SCHEDULER_STATE.mutate/inspect is automatically called inside without_interruptions
+// NOTE: Anything done while _SCHEDULER_STATE is locked will be done with interruptions_disabled (because of how KMutexes work)
 /* Initialise the scheduler for the current CPU, before creating a kernel task to represent the current stack.
     Once this has been called, it is ok to call yield_to_scheduler.
     (calling this again will discard a large amount of the scheduler's state for the current CPU, so uh, don't)*/
 pub fn init_scheduler(stack: Option<alloc::boxed::Box<dyn crate::memory::alloc_util::AnyAllocatedStack>>){
-    let boot_task = _SCHEDULER_STATE.mutate(|state|{
+    let boot_task = {
+        let mut state = _SCHEDULER_STATE.lock();
         // initialise run queue?
         state.run_queue.reserve(8);
         
@@ -185,7 +188,7 @@ pub fn init_scheduler(stack: Option<alloc::boxed::Box<dyn crate::memory::alloc_u
         super::BSP_SCHEDULER_READY.store(true,core::sync::atomic::Ordering::Release);
         // Return the task
         task
-    });
+    };
     
     // Set current task
     // We should not be holding any locks once we initialise the current task to a non-None value,
@@ -197,7 +200,7 @@ pub fn init_scheduler(stack: Option<alloc::boxed::Box<dyn crate::memory::alloc_u
 /* Push a new task to the current scheduler's run queue. */
 pub fn push_task(task: Task){
     klog!(Debug, SCHEDULER, "Pushing new task: {}", task.task_id);
-    _SCHEDULER_STATE.mutate(|state|state.run_queue.push_back(task))
+    _SCHEDULER_STATE.lock().run_queue.push_back(task);
 }
 /* Push a new task to another scheduler's run queue. */
 pub fn push_task_to(cpu: usize, task: Task){
@@ -207,8 +210,9 @@ pub fn push_task_to(cpu: usize, task: Task){
 
 /* Advances the scheduler's clock by 1 tick. Called by the PIT. */
 pub fn _scheduler_tick(){
-    _SCHEDULER_STATE.mutate(|state|{
-        let current_ticks = _SCHEDULER_TICKS.get().fetch_add(1, Ordering::SeqCst)+1;
+    {
+        let mut state = _SCHEDULER_STATE.lock();
+        let current_ticks = _SCHEDULER_TICKS.fetch_add(1, Ordering::SeqCst)+1;
         
         // wake tasks sleeping on clock ticks
         // We go in reverse order to ensure that the indexes still line up 
@@ -223,12 +227,13 @@ pub fn _scheduler_tick(){
                 state.run_queue.push_back(task);
             }
         }
-    });
+    }
 }
 
 /* Returns true if the scheduler is currently executing a task. Returns false otherwise (i.e. it's instead executing bootstrap or scheduler code). */
 #[inline(always)]
 pub fn is_executing_task() -> bool {
+    todo!()
     // super::without_interruptions(|| _IS_EXECUTING_TASK.get().load(Ordering::Relaxed) && _CURRENT_TASK.inspect(|ot|ot.is_some()) )
 }
 /* Get the ID of the current task, or None if the scheduler is running right now instead of a specific task. */
@@ -241,5 +246,5 @@ This may differ between CPUs, and is not a good way of keeping time, but is lowl
 Will probably be deprecated once support for actual time is added. */
 #[inline(always)]
 pub fn get_scheduler_ticks() -> usize {
-    super::without_interruptions(|| _SCHEDULER_TICKS.get().load(Ordering::Relaxed) )
+    _SCHEDULER_TICKS.load(Ordering::Relaxed)
 }

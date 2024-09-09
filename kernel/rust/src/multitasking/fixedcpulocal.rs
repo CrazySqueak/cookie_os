@@ -14,7 +14,7 @@ macro_rules! fixed_cpu_local {
         // Lazy-static does this internally
         // Idk why the fuck this is allowed but it's convenient here (and it's abstracted away anyhow)
         #[allow(non_camel_case_types)]
-        $vis struct $name {}
+        pub struct $name {}
         impl $crate::multitasking::fixedcpulocal::FixedCpuLocalDef for $name {
             type Type = $type;
             #[inline(always)]
@@ -66,6 +66,8 @@ def_cl_struct! {
     pub struct FixedCpuLocals (init fn init_fixed_cpu_locals, temp mod _fclm) {
         use crate::multitasking::fixedcpulocal::CPU_ID as CPU_ID,
         use crate::multitasking::interruptions::CURRENT_NOINTERRUPTIONS_STATE as CURRENT_NOINTERRUPTIONS_STATE,
+        use crate::multitasking::interruptions::SCHEDULER_YIELD_DISABLED as SCHEDULER_YIELD_DISABLED,
+        use crate::multitasking::scheduler::_IS_EXECUTING_TASK as _IS_EXECUTING_TASK,
     }
 }
 // pub struct FixedCpuLocals {

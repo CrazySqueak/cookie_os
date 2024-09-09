@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use core::ptr::null;
 use crate::sync::llspin::LLMutex;  // we have to use LLMutexes as KMutex depends on disable_interruptions()
 use super::fixedcpulocal::fixed_cpu_local;
+use core::sync::atomic::{AtomicBool,Ordering};
 
 pub struct NoInterruptionsGuard(usize);
 impl core::ops::Drop for NoInterruptionsGuard {
@@ -16,6 +17,7 @@ impl core::ops::Drop for NoInterruptionsGuard {
 
 struct NoInterruptionsState {
     interrupt_state: super::arch::enable_interrupts::InterruptState,
+    yield_state: bool,
 }
 pub struct NoInterruptionsStateContainer {
     active: bool,
@@ -26,12 +28,13 @@ pub fn disable_interruptions() -> NoInterruptionsGuard {
     // Disable interrupts first of all, to prevent us from being interrupted
     let interrupt_state = super::arch::enable_interrupts::clear_interrupts();
     
-    // Disable further interruptions
-    // TODO
+    // Disable scheduler_yield
+    let yield_state = SCHEDULER_YIELD_DISABLED.swap(true, Ordering::AcqRel);  // idk what ordering to use
     
     // Create state object
     let ni_state = NoInterruptionsState {
         interrupt_state,
+        yield_state,
     };
     // Create state container
     let state = NoInterruptionsStateContainer {
@@ -55,8 +58,8 @@ fn enable_interruptions(index: usize) {
     
     // And restore any that need it
     while let Some(restore_state) = guard.pop_if(|sc|!sc.active).map(|sc|sc.state) {
-        // Other interruptions
-        // TODO
+        // Scheduler yield
+        SCHEDULER_YIELD_DISABLED.store(restore_state.yield_state, Ordering::AcqRel);
         // Interrupts (interrupts are only enabled once, right at the very end)
         interrupt_state = restore_state.interrupt_state;
     }
@@ -65,7 +68,13 @@ fn enable_interruptions(index: usize) {
     super::arch::enable_interrupts::restore_interrupts(&interrupt_state);
 }
 
-fixed_cpu_local!(pub fixedcpulocal static CURRENT_NOINTERRUPTIONS_STATE: LLMutex<Vec<NoInterruptionsStateContainer>> = LLMutex::new(Vec::new()));
+fixed_cpu_local!(fixedcpulocal static CURRENT_NOINTERRUPTIONS_STATE: LLMutex<Vec<NoInterruptionsStateContainer>> = LLMutex::new(Vec::new()));
+fixed_cpu_local!(fixedcpulocal static SCHEDULER_YIELD_DISABLED: AtomicBool = AtomicBool::new(false));
 // pub type FCLCurrentNIGuard = LLMutex<Vec<NoInterruptionsStateContainer>>;
 // #[allow(non_upper_case_globals)]
 // pub const FCLCurrentNIGuardDefault: FCLCurrentNIGuard = LLMutex::new(Vec::new());
+
+/// Return true if scheduler_yield has been disabled by disable_interruptions
+pub fn is_sched_yield_disabled() -> bool {
+    SCHEDULER_YIELD_DISABLED.load(Ordering::Relaxed)
+}

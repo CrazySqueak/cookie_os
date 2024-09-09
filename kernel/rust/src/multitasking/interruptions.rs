@@ -72,7 +72,7 @@ fn enable_interruptions(index: usize) {
     super::arch::enable_interrupts::restore_interrupts(&interrupt_state);
 }
 
-/// Call the given closure without interruptions, and without allocating on the heap. (used only in the heap allocator)
+/// Call the given closure without interruptions, and without allocating on the heap. (used only in the heap allocator and emergency_kernel_log)
 /// Safety: Calling disable_interruptions and enable_interruptions during this function's execution (on the same CPU) must be done with care to ensure proper ordering is retained.
 ///          - The interruption state must be left exactly the same at the end of the function as it was before.
 ///          - The no-interruptions stack must be returned to exactly the same state at the end of the function as it was at the start.

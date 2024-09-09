@@ -124,7 +124,7 @@ pub(crate) use klog;
 // generally if you're using this function, shit is fucked and the program should be due to abort any second now
 macro_rules! emergency_kernel_log {
     ($($msg:tt)*) => {
-        $crate::multitasking::without_interruptions(||{
+        unsafe{$crate::multitasking::interruptions::_without_interruptions_noalloc(||{
             use $crate::coredrivers::serial_uart::SERIAL1;
             use core::fmt::Write;
             let mut serial = unsafe { loop { match SERIAL1.try_lock() {
@@ -133,7 +133,7 @@ macro_rules! emergency_kernel_log {
                 }
             }};
             let _ = write!(serial, $($msg)*);
-        })
+        })}
     }
 }
 pub(crate) use emergency_kernel_log;

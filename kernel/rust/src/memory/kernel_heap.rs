@@ -56,7 +56,8 @@ pub unsafe fn init_kheap(){
     KHEAP_ALLOCATOR.init(kheap_initial_addr as usize,kheap_initial_size as usize);
     
     // Success
-    klog!(Info, MEMORY_KHEAP, "Initialised kernel heap with {} bytes.", kheap_initial_size);
+    // Note: Logging would be unsafe here as the CPU locals have not been initialised yet (including the CPU number, which is referenced by the logger)
+    //klog!(Info, MEMORY_KHEAP, "Initialised kernel heap with {} bytes.", kheap_initial_size);
 }
 
 pub unsafe fn init_kheap_2(){

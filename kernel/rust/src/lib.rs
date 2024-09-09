@@ -18,6 +18,8 @@ pub mod sync;
 pub mod coredrivers;
 
 pub mod logging;
+use logging::{klog,emergency_kernel_log};
+pub mod panic;
 
 // arch-specific code lives in "x::arch" for some modules
 macro_rules! arch_specific_module {
@@ -40,24 +42,18 @@ pub extern "sysv64" fn _kstart() -> ! {
     unsafe { memory::kernel_heap::init_kheap(); }
     // Initialise Fixed CPU Locals
     multitasking::fixedcpulocal::init_fixed_cpu_locals();
+    // LATE BOOTSTRAP - The bare minimum is ready for rust code to execute
+    klog!(Info, BOOT, "COOKIE version 0.0.2");
+    klog!(Info, BOOT, "\"Now with less asbestos!\"");
+    klog!(Info, BOOT, "=========================");
+    klog!(Info, MEMORY_KHEAP, "Kernel heap initialised with {} bytes.", memory::kernel_heap::kheap_initial_size);
     // Initialise scheduler
     multitasking::scheduler::init_scheduler(None);
+    
     todo!()
 }
 #[no_mangle]
 pub extern "sysv64" fn _kstart_ap() -> ! {
-    todo!()
-}
-
-use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicBool,AtomicUsize,Ordering};
-// This variable tracks if we are already aborting due to a panic
-// If this is true when a panic occurs, the panic handler simply halts (detecting that an infinite panic loop has occurred)
-static _ABORTING: AtomicBool = AtomicBool::new(false);
-// To avoid contention issues but keep the utility, only the panicking CPU will print the "end of panic" messages
-static _PANICKING_CPU: AtomicUsize = AtomicUsize::new(0xFF69420101);  // whatever value I put here as the default won't be read anyway, so might as well make it something significant
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
     todo!()
 }
 

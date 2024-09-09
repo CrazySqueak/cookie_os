@@ -1,11 +1,11 @@
 
-use crate::multitasking::scheduler::{yield_to_scheduler,SchedulerCommand};
+use crate::multitasking::scheduler::spin_yield;
 
 pub struct SchedulerYield;
 impl spin::relax::RelaxStrategy for SchedulerYield {
     #[inline]
     fn relax(){
-        yield_to_scheduler(SchedulerCommand::PushBack)
+        spin_yield()
     }
 }
 pub type YieldSpin = SchedulerYield;

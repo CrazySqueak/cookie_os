@@ -1,7 +1,7 @@
-use super::{YMutex};
+use super::YMutex;
 use alloc::collections::VecDeque;
 use crate::multitasking::scheduler;
-use crate::multitasking::without_interruptions;
+// TODO: figure out why disable_interruptions was needed and how to add it if it was // use crate::multitasking::disable_interruptions;
 
 pub struct WaitingListEntry {
     pub task: crate::multitasking::Task,
@@ -51,14 +51,14 @@ impl WaitingList {
     }
     /// Wake up one thread waiting on this list
     /// Returns true if one was waiting, false otherwise
-    pub fn notify_one(&self) -> bool { without_interruptions(||{
+    pub fn notify_one(&self) -> bool {
         let mut list = self.0.lock();
         self.notify_inner(&mut list)
-    })}
+    }
     /// Wake up all threads waiting on this list
-    pub fn notify_all(&self) { without_interruptions(||{
+    pub fn notify_all(&self) {
         let mut list = self.0.lock();
         // As notify_inner returns true on each success, we can just do this.
         while self.notify_inner(&mut list){}
-    })}
+    }
 }

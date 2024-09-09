@@ -51,7 +51,7 @@ impl<T> Promise<T> {
     /// Returns true if the promise is not yet fulfilled or cancelled (i.e. it's pending, and a call to get() would block)
     /// Note: No synchronization guarantees are made by this method. To try and get the value, failing if pending, use try_get().
     pub fn is_pending(&self) -> bool {
-        self.0.state.load(Ordering::Acquire)!=PROMISE_COMPLETE
+        self.0.state.load(Ordering::Relaxed)!=PROMISE_COMPLETE
     }
 }
 impl<T> core::clone::Clone for Promise<T> {

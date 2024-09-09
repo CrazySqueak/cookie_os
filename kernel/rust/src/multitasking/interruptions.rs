@@ -39,7 +39,7 @@ pub fn disable_interruptions() -> NoInterruptionsGuard {
         state: ni_state,
     };
     // Push it
-    let mut guard = CURRENT_NOINTERRUPTIONS_STATE::get().lock();//get_fixed_cpu_locals().current_nointerruptions_state.lock();
+    let mut guard = CURRENT_NOINTERRUPTIONS_STATE.lock();
     let index = guard.len(); guard.push(state);
     drop(guard);
     // And return a guard
@@ -50,7 +50,7 @@ fn enable_interruptions(index: usize) {
     let mut interrupt_state = super::arch::enable_interrupts::clear_interrupts();
     
     // Set the given state to "false"
-    let mut guard = CURRENT_NOINTERRUPTIONS_STATE::get().lock();//get_fixed_cpu_locals().current_nointerruptions_state.lock();
+    let mut guard = CURRENT_NOINTERRUPTIONS_STATE.lock();
     guard[index].active = false;
     
     // And restore any that need it

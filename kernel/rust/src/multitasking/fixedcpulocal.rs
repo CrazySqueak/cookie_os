@@ -3,25 +3,37 @@
 //! This makes it useful for values such as the cpu number, and so on.
 use super::arch::fixedcpulocal as arch;
 
+pub trait FixedCpuLocalDef {
+    type Type;
+    fn default() -> Self::Type;
+    fn get() -> &'static Self::Type;
+}
 macro_rules! fixed_cpu_local {
     ($vis:vis fixedcpulocal static $name:ident: $type:ty = $default:expr) => {
-        #[allow(non_snake_case)]
-        $vis mod $name {
-            use super::*;
-            pub type Type = $type;
-            
-            // Generation utils
+        // You can define a struct with the same name as a static, provided the struct is a {} struct or a () struct (not a blank one with just a ;).
+        // Lazy-static does this internally
+        // Idk why the fuck this is allowed but it's convenient here (and it's abstracted away anyhow)
+        #[allow(non_camel_case_types)]
+        $vis struct $name {}
+        impl $crate::multitasking::fixedcpulocal::FixedCpuLocalDef for $name {
+            type Type = $type;
             #[inline(always)]
-            pub fn default() -> Type {
+            fn default() -> Self::Type  {
                 $default
             }
-            
-            // Getter
             #[inline(always)]
-            pub fn get() -> &'static Type {
+            fn get() -> &'static Self::Type {
                 &$crate::multitasking::fixedcpulocal::get_fixed_cpu_locals().$name
             }
         }
+        impl core::ops::Deref for $name {
+            type Target = $type;
+            #[inline(always)]
+            fn deref(&self) -> &Self::Target {
+                <Self as $crate::multitasking::fixedcpulocal::FixedCpuLocalDef>::get()
+            }
+        }
+        $vis static $name: $name = $name{};
     }
 }
 pub(crate) use fixed_cpu_local;
@@ -30,18 +42,19 @@ macro_rules! def_cl_struct {
     {$vis:vis struct $sn:ident (init fn $fn:ident, temp mod $fclm:ident) { $(use $mp:path as $i:ident),* $(,)? } } => {
         mod $fclm {
             #![allow(non_snake_case)]
+            use $crate::multitasking::fixedcpulocal::FixedCpuLocalDef;
             $(
                 use $mp as $i;
             )*
             $vis struct $sn {
                 $(
-                    pub $i: $i::Type
+                    pub $i: <$i as FixedCpuLocalDef>::Type
                 ),*
             }
             
             $vis fn $fn() {
                 super::arch::_set_fixed_cpu_locals($sn {
-                    $($i: $i::default()),*
+                    $($i: <$i as FixedCpuLocalDef>::default()),*
                 });
             }
         }

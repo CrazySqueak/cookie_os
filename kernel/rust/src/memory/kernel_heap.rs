@@ -2,8 +2,6 @@
 use core::alloc::Layout;
 use buddy_system_allocator::LockedHeap;
 
-// use crate::lowlevel::_without_interrupts;
-// 
 use crate::logging::klog;
 use crate::multitasking::interruptions::_without_interruptions_noalloc;
 
@@ -39,7 +37,7 @@ unsafe impl core::alloc::GlobalAlloc for KernelHeap {
                     self.heap.alloc(layout)
                 }
             }
-        });
+        })
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         _without_interruptions_noalloc(||unsafe{

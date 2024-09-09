@@ -46,7 +46,7 @@ pub extern "sysv64" fn _kstart() -> ! {
     klog!(Info, BOOT, "COOKIE version 0.0.2");
     klog!(Info, BOOT, "\"Now with less asbestos!\"");
     klog!(Info, BOOT, "=========================");
-    klog!(Info, MEMORY_KHEAP, "Kernel heap initialised with {} bytes.", memory::kernel_heap::kheap_initial_size);
+    klog!(Info, MEMORY_KHEAP, "Kernel heap initialised with {} bytes.", unsafe{memory::kernel_heap::kheap_initial_size});
     // Initialise scheduler
     multitasking::scheduler::init_scheduler(None);
     
@@ -61,6 +61,3 @@ pub extern "sysv64" fn _kstart_ap() -> ! {
 #[no_mangle]
 #[used]
 static next_processor_stack: u8 = 0xaa;
-#[no_mangle]
-#[used]
-static contextswitch_scheduler_cb: u8 = 0xaa;

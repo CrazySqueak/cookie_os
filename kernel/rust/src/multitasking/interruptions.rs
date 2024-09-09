@@ -63,7 +63,7 @@ fn enable_interruptions(index: usize) {
     // And restore any that need it
     while let Some(restore_state) = guard.pop_if(|sc|!sc.active).map(|sc|sc.state) {
         // Scheduler yield
-        SCHEDULER_YIELD_DISABLED.store(restore_state.yield_state, Ordering::AcqRel);
+        SCHEDULER_YIELD_DISABLED.store(restore_state.yield_state, Ordering::Release);
         // Interrupts (interrupts are only enabled once, right at the very end)
         interrupt_state = restore_state.interrupt_state;
     }
@@ -77,14 +77,16 @@ fn enable_interruptions(index: usize) {
 ///          - The interruption state must be left exactly the same at the end of the function as it was before.
 ///          - The no-interruptions stack must be returned to exactly the same state at the end of the function as it was at the start.
 ///         This means that KMutex and so on are safe provided you drop their guards before the end of the function. However leaking guards or dropping guards obtained before this function executed is not safe and may lead to an inconsistent state.
-pub unsafe fn _without_interruptions_noalloc(closure: impl FnOnce()->()) {
+pub unsafe fn _without_interruptions_noalloc<R>(closure: impl FnOnce()->R) -> R {
     // Disable interruptions
     let state = _disable_interruptions_internal();
     // Call closure
-    closure();
+    let r = closure();
     // Enable interruptions
-    SCHEDULER_YIELD_DISABLED.store(state.yield_state,Ordering::AcqRel);
+    SCHEDULER_YIELD_DISABLED.store(state.yield_state,Ordering::Release);
     super::arch::enable_interrupts::restore_interrupts(&state.interrupt_state);
+    // Return
+    r
 }
 
 fixed_cpu_local!(fixedcpulocal static CURRENT_NOINTERRUPTIONS_STATE: LLMutex<Vec<NoInterruptionsStateContainer>> = LLMutex::new(Vec::new()));

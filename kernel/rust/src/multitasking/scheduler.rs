@@ -82,7 +82,7 @@ pub enum SchedulerCommand<'a> {
 #[inline]
 pub(super) fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
     if super::interruptions::is_sched_yield_disabled() { panic!("schedule() called when interruptions were disabled?"); }
-    _IS_EXECUTING_TASK.get().store(false, Ordering::Release);
+    _IS_EXECUTING_TASK.store(false, Ordering::Release);
     let mut current_task = _CURRENT_TASK.lock().take().expect("schedule() called but no task currently active?");
     {
         let mut state = _SCHEDULER_STATE.lock();
@@ -148,7 +148,7 @@ pub(super) fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
 
 /* Resume the requested task, discarding the current one (if any). */
 #[inline]
-pub fn resume_context(task: Task, state_guard: KMutexGuard<SchedulerState>) -> !{
+pub fn resume_context(task: Task, state_guard: NoInterruptionsGuard) -> !{
     // Note: state_guard contains a no-interruptions guard within it, ensuring we're not interrupted
     let rsp = task.get_rsp();
     
@@ -162,7 +162,7 @@ pub(super) fn __resume_callback(args: (Task,NoInterruptionsGuard)){
     let (task, ni) = args;
     
     // set active task
-    _CURRENT_TASK.lock().insert(task);
+    *_CURRENT_TASK.lock() = Some(task);
     _IS_EXECUTING_TASK.store(true, Ordering::Release);
     
     // TODO: Switch paging context if necessary?
@@ -200,7 +200,7 @@ pub fn init_scheduler(stack: Option<alloc::boxed::Box<dyn crate::memory::alloc_u
     // We should not be holding any locks once we initialise the current task to a non-None value,
     // as otherwise any unexpected event (or held lock) would attempt to yield to the scheduler
     // (which cannot be done if the scheduler lock is held, causing what I think is a stack overflow)
-    _CURRENT_TASK.insert(boot_task);
+    *_CURRENT_TASK.lock() = Some(boot_task);
 }
 /// If true, then the scheduler has been initialised on the bootstrap processor
 static BSP_SCHEDULER_READY: AtomicBool = AtomicBool::new(false);
@@ -213,7 +213,7 @@ pub fn push_task(task: Task){
 /* Push a new task to another scheduler's run queue. */
 pub fn push_task_to(cpu: usize, task: Task){
     klog!(Debug, SCHEDULER, "Pushing new task to CPU {}: {}", cpu, task.task_id);
-    _SCHEDULER_STATE.0.get_for(cpu).lock().run_queue.push_back(task);
+    CpuLocal::get_for(&_SCHEDULER_STATE, cpu).lock().run_queue.push_back(task);
 }
 
 /* Advances the scheduler's clock by 1 tick. Called by the PIT. */

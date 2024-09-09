@@ -43,5 +43,5 @@ pub fn yield_to_scheduler(command: cswitch_api::SchedulerCommand) -> () {
 /* Finish a context switch by resuming with the given stack pointer. */
 #[inline]
 pub unsafe fn resume_context(rsp: StackPointer, cb_args: impl core::any::Any) -> ! {
-    _cs_pop(rsp, Box::into_raw(Box::new(cb_args)))
+    _cs_pop(rsp, Box::into_raw(Box::new(cb_args)) as *mut u8)
 }

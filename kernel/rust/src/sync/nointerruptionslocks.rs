@@ -93,12 +93,16 @@ impl<T,S:MutexStrategy> NIMutex<T,S> {
         self.raw().is_locked()
     }
     
+    pub unsafe fn force_unlock(&self) {
+        self.0.force_unlock()
+    }
+    
     ni_wrap_lock!(pub fn lock(&self) -> wrap(BaseMutexGuard<'_,T,S>));
     ni_wrap_lock!(pub fn try_lock(&self) -> wrap_Option(BaseMutexGuard<'_,T,S>));
 }
 impl<T,S:MutexStrategy> Default for NIMutex<T,S> where BaseMutex<T,S>: Default {
     fn default() -> Self {
-        Self::new(BaseMutex::default())
+        Self(BaseMutex::default())
     }
 }
 
@@ -136,7 +140,7 @@ impl<T,S:RwLockStrategy> NIRwLock<T,S> {
 }
 impl<T,S:RwLockStrategy> Default for NIRwLock<T,S> where BaseRwLock<T,S>: Default {
     fn default() -> Self {
-        Self::new(BaseRwLock::default())
+        Self(BaseRwLock::default())
     }
 }
 

@@ -127,11 +127,11 @@ macro_rules! emergency_kernel_log {
         unsafe{$crate::multitasking::interruptions::_without_interruptions_noalloc(||{
             use $crate::coredrivers::serial_uart::SERIAL1;
             use core::fmt::Write;
-            let mut serial = unsafe { loop { match SERIAL1.try_lock() {
+            let mut serial = loop { match SERIAL1.try_lock() {
                     Some(lock) => break lock,
                     None => SERIAL1.force_unlock(),
                 }
-            }};
+            };
             let _ = write!(serial, $($msg)*);
         })}
     }

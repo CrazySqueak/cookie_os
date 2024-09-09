@@ -24,18 +24,22 @@ pub struct NoInterruptionsStateContainer {
     state: NoInterruptionsState,
 }
 
-pub fn disable_interruptions() -> NoInterruptionsGuard {
+fn _disable_interruptions_internal() -> NoInterruptionsState {
     // Disable interrupts first of all, to prevent us from being interrupted
     let interrupt_state = super::arch::enable_interrupts::clear_interrupts();
     
     // Disable scheduler_yield
     let yield_state = SCHEDULER_YIELD_DISABLED.swap(true, Ordering::AcqRel);  // idk what ordering to use
     
-    // Create state object
-    let ni_state = NoInterruptionsState {
+    // Return state object
+    NoInterruptionsState {
         interrupt_state,
         yield_state,
-    };
+    }
+}
+
+pub fn disable_interruptions() -> NoInterruptionsGuard {
+    let ni_state = _disable_interruptions_internal();
     // Create state container
     let state = NoInterruptionsStateContainer {
         active: true,
@@ -66,6 +70,21 @@ fn enable_interruptions(index: usize) {
     drop(guard);
     // Enable interrupts (if applicable)
     super::arch::enable_interrupts::restore_interrupts(&interrupt_state);
+}
+
+/// Call the given closure without interruptions, and without allocating on the heap. (used only in the heap allocator)
+/// Safety: Calling disable_interruptions and enable_interruptions during this function's execution (on the same CPU) must be done with care to ensure proper ordering is retained.
+///          - The interruption state must be left exactly the same at the end of the function as it was before.
+///          - The no-interruptions stack must be returned to exactly the same state at the end of the function as it was at the start.
+///         This means that KMutex and so on are safe provided you drop their guards before the end of the function. However leaking guards or dropping guards obtained before this function executed is not safe and may lead to an inconsistent state.
+pub unsafe fn _without_interruptions_noalloc(closure: impl FnOnce()->()) {
+    // Disable interruptions
+    let state = _disable_interruptions_internal();
+    // Call closure
+    closure();
+    // Enable interruptions
+    SCHEDULER_YIELD_DISABLED.store(state.yield_state,Ordering::AcqRel);
+    super::arch::enable_interrupts::restore_interrupts(&state.interrupt_state);
 }
 
 fixed_cpu_local!(fixedcpulocal static CURRENT_NOINTERRUPTIONS_STATE: LLMutex<Vec<NoInterruptionsStateContainer>> = LLMutex::new(Vec::new()));

@@ -35,12 +35,12 @@ impl PageAllocationStrategy {
 // Each level you descend in the table uses the next one along in the slice. The final one is used repeatedly if needed.
 pub type PageAllocationStrategies<'a> = &'a [PageAllocationStrategy];
 #[inline(always)]
-pub(self) fn pas_next_level_down<'a>(strat: PageAllocationStrategies<'a>) -> PageAllocationStrategies<'a> {
+pub(in super) fn pas_next_level_down<'a>(strat: PageAllocationStrategies<'a>) -> PageAllocationStrategies<'a> {
     if strat.len() > 1 { &strat[1..] }
     else { strat }
 }
 #[inline(always)]
-pub(self) fn pas_current<'a>(strat: PageAllocationStrategies<'a>) -> &'a PageAllocationStrategy {
+pub(in super) fn pas_current<'a>(strat: PageAllocationStrategies<'a>) -> &'a PageAllocationStrategy {
     &strat[0]
 }
 

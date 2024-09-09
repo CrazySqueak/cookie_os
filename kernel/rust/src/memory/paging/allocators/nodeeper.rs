@@ -1,5 +1,5 @@
 
-use super::*;
+use crate::memory::paging::*;
 
 macro_rules! nope {
     () => { panic!("Subtables are not supported for this type! (this method should not have been called)"); }

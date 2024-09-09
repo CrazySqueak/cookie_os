@@ -1,3 +1,5 @@
+use super::*;
+use alloc::vec::Vec;
 
 pub trait PageFrameAllocatorImpl {
     const NPAGES: usize;

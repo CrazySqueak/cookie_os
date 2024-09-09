@@ -1,9 +1,11 @@
 
+use ::x86_64 as x86_64;
 use x86_64::structures::paging::page_table::{PageTable,PageTableEntry,PageTableFlags};
 use x86_64::addr::PhysAddr;
 
-use super::*;
-use super::impl_firstfit::MLFFAllocator;
+use crate::memory::paging as paging_root;
+use paging_root::*;
+use paging_root::impl_firstfit::MLFFAllocator;
 use crate::logging::klog;
 
 const PF_PINNED: PageTableFlags = PageTableFlags::BIT_9;
@@ -127,7 +129,7 @@ type X64Level3 = MLFFAllocator<X64Level2, X64PageTable<3>, true , true>;  // Pag
 
 type X64Level4 = MLFFAllocator<X64Level3, X64PageTable<4>, true , false>;  // Page Map Level 4
 
-pub(in super) type TopLevelPageAllocator = X64Level4;
+pub type TopLevelPageAllocator = X64Level4;
 /// The range of memory covered by an entry in the lowest-level page table
 pub const MIN_PAGE_SIZE: usize = X64Level1::PAGE_SIZE;
 
@@ -148,7 +150,7 @@ pub fn crop_addr(addr: usize) -> usize {
 }
 /* Convert a virtual address to a physical address, for use with pointing the CPU to page tables. */
 pub fn ptaddr_virt_to_phys(vaddr: usize) -> usize {
-    vaddr-super::global_pages::KERNEL_PTABLE_VADDR // note: this will break if the area where the page table lives is not offset-mapped (or if the address has been cropped to hold all 0s for non-canonical bits)
+    vaddr-paging_root::global_pages::KERNEL_PTABLE_VADDR // note: this will break if the area where the page table lives is not offset-mapped (or if the address has been cropped to hold all 0s for non-canonical bits)
 }
 
 /* Ensure a virtual address is canonical */
@@ -157,7 +159,7 @@ pub const fn canonical_addr(vaddr: usize) -> usize {
     x86_64::VirtAddr::new_truncate(vaddr as u64).as_u64() as usize
 }
 
-pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
+pub unsafe fn set_active_page_table(phys_addr: usize){
     use x86_64::addr::PhysAddr;
     use x86_64::structures::paging::frame::PhysFrame;
     use x86_64::registers::control::Cr3;
@@ -170,12 +172,12 @@ pub(in super) unsafe fn set_active_page_table(phys_addr: usize){
 // allocation, voffset - define the vmem addresses to invalidate TLB mappings for
 // include_global - If true, include global pages as well
 // cpu_nums - If Some, assumed to be a broadcast, with the CPUs to invalidate for (if targets may be selected). If None, assumed to be local only (no broadcast is made)
-pub(super) fn inval_tlb_pg(allocation: &super::PartialPageAllocation, voffset: usize, include_global: bool, cpu_nums: Option<&[usize]>){
+pub fn inval_tlb_pg(allocation: &paging_root::PartialPageAllocation, voffset: usize, include_global: bool, cpu_nums: Option<&[usize]>){
     use x86_64::structures::paging::page::{Size4KiB,Size2MiB};
     let vmem_start = allocation.start_addr()+voffset; let vmem_end_xcl = allocation.end_addr()+voffset; let length = vmem_end_xcl-vmem_start;
     klog!(Debug, MEMORY_PAGING_TLB, "Flushing TLB for 0x{:x}..0x{:x}", vmem_start, vmem_end_xcl);
     
-    if false && cfg!(feature = "enable_amd64_invlpgb") && INVLPGB.is_some() && cpu_nums.is_some() {
+    /*if false && cfg!(feature = "enable_amd64_invlpgb") && INVLPGB.is_some() && cpu_nums.is_some() {
         // Use INVLPGB instruction if enabled
         if vmem_start%X64Level2::PAGE_SIZE == 0 && length%X64Level2::PAGE_SIZE == 0 {
             klog!(Debug, MEMORY_PAGING_TLB, "Flushing using call_invlpgb (size=2MiB).");
@@ -210,7 +212,7 @@ pub(super) fn inval_tlb_pg(allocation: &super::PartialPageAllocation, voffset: u
                 todo!()
             }
         }
-    } else {
+    } else */{
         // Invalidate using the old-fashioned way
         klog!(Debug, MEMORY_PAGING_TLB, "Flushing locally using call_invlpg_recursive.");
         call_invlpg_recursive(allocation, allocation.start_addr()+voffset);
@@ -236,7 +238,7 @@ fn call_invlpgb<S: x86_64::structures::paging::page::NotGiantPageSize>(vmem_star
 }
 
 // TODO: broadcast this somehow?
-fn call_invlpg_recursive(allocation: &super::PartialPageAllocation, voffset: usize){
+fn call_invlpg_recursive(allocation: &paging_root::PartialPageAllocation, voffset: usize){
     use x86_64::instructions::tlb::flush;
     use x86_64::VirtAddr;
     for item in allocation.entries() {

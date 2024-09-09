@@ -1,9 +1,9 @@
 
 use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
-use crate::sync::{WRwLock as RwLock,WRwLockReadGuard as RwLockReadGuard,WRwLockWriteGuard as RwLockWriteGuard,WRwLockUpgradableGuard as RwLockUpgradableGuard};
-use crate::sync::WMutex as Mutex;
-use crate::sync::cpulocal::{CpuLocal,CpuLocalLockedOption};
+// use crate::sync::{WRwLock as RwLock,WRwLockReadGuard as RwLockReadGuard,WRwLockWriteGuard as RwLockWriteGuard,WRwLockUpgradableGuard as RwLockUpgradableGuard};
+// use crate::sync::WMutex as Mutex;
+use crate::multitasking::cpulocal::CpuLocal;
 
 use super::*;
 
@@ -293,12 +293,14 @@ impl PagingContext {
         // activate table
         let table_addr = ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize);
         klog!(Info, MEMORY_PAGING_CONTEXT, "Switching active context to 0x{:x}", table_addr);
-        let oldpt = without_interruptions(||{
-            // Set active
-            set_active_page_table(table_addr);
-            // store reference (and take old one)
-            _ACTIVE_PAGE_TABLE.get().lock().replace(Self::clone_ref(&self))
-        });
+        
+        let ni = disable_interruptions();
+        // Set active
+        set_active_page_table(table_addr);
+        // store reference (and take old one)
+        _ACTIVE_PAGE_TABLE.lock().replace(Self::clone_ref(&self));
+        // Enable interruptions
+        drop(ni);
         
         // Decrement reader count on old page table (if applicable)
         // Safety: Since the previous page table was activated using this function,
@@ -585,9 +587,9 @@ impl<T> core::ops::DerefMut for ForcedUpgradeGuard<'_, T>{
 
 // = ACTIVE OR SMTH? =
 // the currently active page table on each CPU
-use crate::sync::kspin::{KMutexRaw,KRwLockRaw};
-use crate::multitasking::without_interruptions;
-static _ACTIVE_PAGE_TABLE: CpuLocalLockedOption<PagingContext,KMutexRaw,KRwLockRaw> = CpuLocal::new();
+use crate::sync::kspin::KMutex;
+use crate::multitasking::disable_interruptions;
+static _ACTIVE_PAGE_TABLE: CpuLocal<KMutex<Option<PagingContext>>> = CpuLocal::new();
 
 // = ALLOCATIONS =
 // Note: Allocations must be allocated/deallocated manually

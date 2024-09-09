@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use alloc::boxed::Box;
 
 use crate::logging::klog;
-use super::*;
+use crate::memory::paging::*;
 
 // Multi-Level First-Fit
 pub struct MLFFAllocator<ST: PageFrameAllocator, PT: IPageTable, const SUBTABLES: bool, const HUGEPAGES: bool> {

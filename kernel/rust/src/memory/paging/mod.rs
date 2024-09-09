@@ -1,3 +1,4 @@
+pub(in self) use crate::logging::klog;
 
 pub(in self) mod sealed;
 pub(in self) use sealed::{PageFrameAllocatorImpl,IPageTableImpl,PAllocItem,PartialPageAllocation};

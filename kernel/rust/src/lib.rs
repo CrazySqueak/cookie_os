@@ -15,6 +15,9 @@ extern crate alloc;
 pub mod memory;
 pub mod multitasking;
 pub mod sync;
+pub mod coredrivers;
+
+pub mod logging;
 
 // arch-specific code lives in "x::arch" for some modules
 macro_rules! arch_specific_module {

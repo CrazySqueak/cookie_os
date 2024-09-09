@@ -73,11 +73,11 @@ impl<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>> core::ops::DerefMut 
 }
 
 // FORMATTER/DESTINATION SELECTION
-pub struct LoggingContext {
+pub struct LoggingPipeline {
     formatter: Box<dyn LogFormatter>,
     destinations: Vec<Box<dyn core::fmt::Write + Send>>,
 }
-impl core::default::Default for LoggingContext {
+impl core::default::Default for LoggingPipeline {
     fn default() -> Self {
         // Note: the logger permanently locks serial1. Literally nothing else uses serial1 so it's fine.
         let serial1 = Box::new(GuardFmtWriter::new(crate::coredrivers::serial_uart::SERIAL1.lock()));
@@ -89,20 +89,20 @@ impl core::default::Default for LoggingContext {
 }
 
 lazy_static! {
-    static ref CONTEXT: crate::sync::kspin::KMutex<LoggingContext> = crate::sync::kspin::KMutex::default();
+    static ref PIPELINE: crate::sync::kspin::KMutex<LoggingPipeline> = crate::sync::kspin::KMutex::default();
 }
 
-pub fn _kernel_log(level: LogLevel, component: &str, msg: &(impl core::fmt::Display + ?Sized), file: &str, line: u32, column: u32){crate::multitasking::without_interruptions(||{
-    let mut context = CONTEXT.lock();
+pub fn _kernel_log(level: LogLevel, component: &str, msg: &(impl core::fmt::Display + ?Sized), file: &str, line: u32, column: u32){
+    let mut context = PIPELINE.lock();
     let formatted = context.formatter.format_log_message(level, component, &format!("{}",msg), file, line, column);
     for dest in context.destinations.iter_mut() {
         let _=write!(dest,"{}\r\n",formatted);
     }
-})}
-pub fn update_logging_context(updater: impl FnOnce(&mut LoggingContext)){crate::multitasking::without_interruptions(||{
-    let mut context = CONTEXT.lock();
+}
+pub fn update_logging_pipeline(updater: impl FnOnce(&mut LoggingPipeline)){
+    let mut context = PIPELINE.lock();
     updater(&mut context);
-})}
+}
 
 macro_rules! klog {
     ($level: ident, $component:ident, $template:literal, $($x:expr),*) => {

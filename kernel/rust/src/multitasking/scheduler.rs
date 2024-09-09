@@ -2,7 +2,7 @@
 use super::arch::{context_switch as cswitch_impl};
 use super::task::{Task,TaskType};
 use alloc::collections::VecDeque;
-macro_rules! klog { ($($x:tt)*)=>{} }//FIXME use crate::logging::klog;
+use crate::logging::klog;
 use super::cpulocal::CpuLocal;
 use super::fixedcpulocal::{get_fixed_cpu_locals,fixed_cpu_local};
 use super::interruptions::{disable_interruptions,NoInterruptionsGuard};

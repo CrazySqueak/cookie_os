@@ -1,8 +1,8 @@
 
 use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
-// use crate::sync::{WRwLock as RwLock,WRwLockReadGuard as RwLockReadGuard,WRwLockWriteGuard as RwLockWriteGuard,WRwLockUpgradableGuard as RwLockUpgradableGuard};
-// use crate::sync::WMutex as Mutex;
+use alloc::vec::Vec;
+use crate::sync::{YRwLock as RwLock,YRwLockReadGuard as RwLockReadGuard,YRwLockWriteGuard as RwLockWriteGuard,YRwLockUpgradableGuard as RwLockUpgradableGuard};  // changed to using YLocks for now as Wlocks aren't re-implemented yet
 use crate::multitasking::cpulocal::CpuLocal;
 
 use super::*;
@@ -298,7 +298,7 @@ impl PagingContext {
         // Set active
         set_active_page_table(table_addr);
         // store reference (and take old one)
-        _ACTIVE_PAGE_TABLE.lock().replace(Self::clone_ref(&self));
+        let oldpt = _ACTIVE_PAGE_TABLE.lock().replace(Self::clone_ref(&self));
         // Enable interruptions
         drop(ni);
         
@@ -589,7 +589,7 @@ impl<T> core::ops::DerefMut for ForcedUpgradeGuard<'_, T>{
 // the currently active page table on each CPU
 use crate::sync::kspin::KMutex;
 use crate::multitasking::disable_interruptions;
-static _ACTIVE_PAGE_TABLE: CpuLocal<KMutex<Option<PagingContext>>> = CpuLocal::new();
+static _ACTIVE_PAGE_TABLE: CpuLocal<KMutex<Option<PagingContext>>,false> = CpuLocal::new();
 
 // = ALLOCATIONS =
 // Note: Allocations must be allocated/deallocated manually

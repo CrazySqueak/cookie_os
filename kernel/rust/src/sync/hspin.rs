@@ -1,5 +1,7 @@
 
 use super::kspin;
+use super::yspin;
+use crate::multitasking::is_executing_task;
 // (this whole implementation is a dirty hack implemented over KLocks)
 
 macro_rules! inherit_lock_fn {
@@ -22,13 +24,15 @@ macro_rules! inherit_lock_fn {
 }
 
 fn relax(relcond:impl Fn()->bool){
-    let can_yield = false; // TODO: detect if we can yield
+    use spin::RelaxStrategy;
+    let can_yield = is_executing_task();
     while relcond() {
         if can_yield {
-            todo!()  // TODO: yield
+            // Yield to scheduler
+            yspin::SchedulerYield::relax();
         } else {
             // Busy-loop
-            <spin::relax::Spin as spin::relax::RelaxStrategy>::relax();
+            spin::relax::Spin::relax();
         }
     }
 }

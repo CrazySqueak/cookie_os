@@ -5,7 +5,7 @@ use alloc::collections::VecDeque;
 macro_rules! klog { ($($x:tt)*)=>{} }//FIXME use crate::logging::klog;
 use super::cpulocal::CpuLocal;
 use super::fixedcpulocal::{get_fixed_cpu_locals,fixed_cpu_local};
-use super::interruptions::disable_interruptions;
+use super::interruptions::{disable_interruptions,NoInterruptionsGuard};
 
 //use crate::sync::kspin::{KMutexRaw,KRwLockRaw};
 use crate::sync::kspin::{KMutex,KMutexGuard};
@@ -80,7 +80,7 @@ pub enum SchedulerCommand<'a> {
 /* Do not call this function yourself! (unless you know what you're doing). Use yield_to_scheduler instead!
     This function happens after the previous context is saved, but before the next one is loaded. It's this function's job to determine what to run next (and then run it). */
 #[inline]
-pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
+pub(super) fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
     if super::interruptions::is_sched_yield_disabled() { panic!("schedule() called when interruptions were disabled?"); }
     _IS_EXECUTING_TASK.get().store(false, Ordering::Release);
     let mut current_task = _CURRENT_TASK.lock().take().expect("schedule() called but no task currently active?");
@@ -136,7 +136,8 @@ pub fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
         
         if let Some((next_task, state_guard)) = next_task {
             klog!(Debug, SCHEDULER, "Resuming task: {}", next_task.task_id);
-            resume_context(next_task, state_guard)
+            let ni = disable_interruptions(); drop(state_guard);  // (unlock state but keep interruptions disabled)
+            resume_context(next_task, ni)
         } else {
             // No tasks to do
             // spin for now
@@ -151,18 +152,23 @@ pub fn resume_context(task: Task, state_guard: KMutexGuard<SchedulerState>) -> !
     // Note: state_guard contains a no-interruptions guard within it, ensuring we're not interrupted
     let rsp = task.get_rsp();
     
+    // resume task
+    // Note: setting the current_task is handled by __resume_callback
+    unsafe { cswitch_impl::resume_context(rsp, (task, state_guard)) };
+}
+/* Called by _cs_pop after the stack has been switched to the task's stack */
+#[inline]
+pub(super) fn __resume_callback(args: (Task,NoInterruptionsGuard)){
+    let (task, ni) = args;
+    
     // set active task
     _CURRENT_TASK.lock().insert(task);
     _IS_EXECUTING_TASK.store(true, Ordering::Release);
     
-    // we're now "in" the task (even if we're not executing its code yet)
-    todo!();  // we need to switch stacks before we enable interruptions as otherwise a race condition could screw us
-    drop(state_guard);  // activating the paging context will require interruptions to be enabled, so we drop the guard and enable them here
+    // TODO: Switch paging context if necessary?
     
-    // set paging context and stuff if applicable
-    
-    // resume task
-    unsafe { cswitch_impl::resume_context(rsp) };
+    // Done! We are now "in" the task, with CURRENT_TASK set and the stack switched, so we can now enable interruptions without issue
+    drop(ni);
 }
 
 // NOTE: Anything done while _SCHEDULER_STATE is locked will be done with interruptions_disabled (because of how KMutexes work)

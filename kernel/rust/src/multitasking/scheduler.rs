@@ -185,7 +185,7 @@ pub fn init_scheduler(stack: Option<alloc::boxed::Box<dyn crate::memory::alloc_u
         klog!(Info, SCHEDULER, "Initialised scheduler on CPU {}. Bootstrapper task has become task {}.", super::get_cpu_num(), task_id);
         
         // Signal that scheduler is online
-        super::BSP_SCHEDULER_READY.store(true,core::sync::atomic::Ordering::Release);
+        BSP_SCHEDULER_READY.store(true,core::sync::atomic::Ordering::Release);
         // Return the task
         task
     };
@@ -196,6 +196,8 @@ pub fn init_scheduler(stack: Option<alloc::boxed::Box<dyn crate::memory::alloc_u
     // (which cannot be done if the scheduler lock is held, causing what I think is a stack overflow)
     _CURRENT_TASK.insert(boot_task);
 }
+/// If true, then the scheduler has been initialised on the bootstrap processor
+static BSP_SCHEDULER_READY: AtomicBool = AtomicBool::new(false);
 
 /* Push a new task to the current scheduler's run queue. */
 pub fn push_task(task: Task){
@@ -233,13 +235,12 @@ pub fn _scheduler_tick(){
 /* Returns true if the scheduler is currently executing a task. Returns false otherwise (i.e. it's instead executing bootstrap or scheduler code). */
 #[inline(always)]
 pub fn is_executing_task() -> bool {
-    todo!()
-    // super::without_interruptions(|| _IS_EXECUTING_TASK.get().load(Ordering::Relaxed) && _CURRENT_TASK.inspect(|ot|ot.is_some()) )
+    _IS_EXECUTING_TASK.load(Ordering::Relaxed) && _CURRENT_TASK.lock().is_some()
 }
 /* Get the ID of the current task, or None if the scheduler is running right now instead of a specific task. */
 #[inline(always)]
 pub fn get_executing_task_id() -> Option<usize> {
-    super::without_interruptions(|| _CURRENT_TASK.inspect(|ot|ot.as_ref().map(|t|t.task_id)) )
+    _CURRENT_TASK.lock().as_ref().map(|t|t.task_id)
 }
 /* Get the current tick count on the current CPU's scheduler.
 This may differ between CPUs, and is not a good way of keeping time, but is lowlevel and does not rely on the RTC or anything complicated like that. 

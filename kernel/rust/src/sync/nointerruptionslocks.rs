@@ -1,6 +1,7 @@
 use crate::multitasking::interruptions::{NoInterruptionsGuard,disable_interruptions};
 use core::ops::{Deref,DerefMut};
 use super::baselocks::*;
+use core::default::Default;
 
 pub struct NoInterruptionsGuardWrapper<G> {
     lock_guard: G,
@@ -95,6 +96,11 @@ impl<T,S:MutexStrategy> NIMutex<T,S> {
     ni_wrap_lock!(pub fn lock(&self) -> wrap(BaseMutexGuard<'_,T,S>));
     ni_wrap_lock!(pub fn try_lock(&self) -> wrap_Option(BaseMutexGuard<'_,T,S>));
 }
+impl<T,S:MutexStrategy> Default for NIMutex<T,S> where BaseMutex<T,S>: Default {
+    fn default() -> Self {
+        Self::new(BaseMutex::default())
+    }
+}
 
 impl<'a,T,S:MutexStrategy> NoInterruptionsGuardWrapper<BaseMutexGuard<'a,T,S>> {
     ni_wrap_map!(pub fn map(s:Self,f:F) -> wrap(BaseMutexGuard->MappedBaseMutexGuard<'a,&mut T=>&mut U=(U),S>));
@@ -127,6 +133,11 @@ impl<T,S:RwLockStrategy> NIRwLock<T,S> {
     ni_wrap_lock!(pub fn try_write(&self) -> wrap_Option(BaseRwLockWriteGuard<'_,T,S>));
     ni_wrap_lock!(pub fn upgradable_read(&self) -> wrap(BaseRwLockUpgradableGuard<'_,T,S>));
     ni_wrap_lock!(pub fn try_upgradable_read(&self) -> wrap_Option(BaseRwLockUpgradableGuard<'_,T,S>));
+}
+impl<T,S:RwLockStrategy> Default for NIRwLock<T,S> where BaseRwLock<T,S>: Default {
+    fn default() -> Self {
+        Self::new(BaseRwLock::default())
+    }
 }
 
 impl<'a,T,S:RwLockStrategy> NoInterruptionsGuardWrapper<BaseRwLockUpgradableGuard<'a,T,S>> {

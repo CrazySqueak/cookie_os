@@ -37,8 +37,8 @@ pub extern "sysv64" fn _kstart() -> ! {
     unsafe { memory::kernel_heap::init_kheap(); }
     // Initialise Fixed CPU Locals
     multitasking::fixedcpulocal::init_fixed_cpu_locals();
-    // :)
-    let test = core::hint::black_box(multitasking::fixedcpulocal::get_fixed_cpu_locals());
+    // Initialise scheduler
+    multitasking::scheduler::init_scheduler(None);
     todo!()
 }
 #[no_mangle]

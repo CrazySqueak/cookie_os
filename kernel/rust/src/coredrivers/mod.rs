@@ -23,5 +23,5 @@ pub mod serial_uart;
 
 // #[path = "parser/acpi_tables.rs"]
 // pub mod parse_acpi_tables;
-// #[path="parser/multiboot.rs"]
-// pub mod parse_multiboot;
+#[path="parser/multiboot.rs"]
+pub mod parse_multiboot;

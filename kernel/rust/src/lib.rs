@@ -5,6 +5,7 @@
 #![feature(box_into_inner)]
 #![feature(vec_pop_if)]
 #![feature(new_uninit)]
+#![feature(asm_const)]
 
 // i'm  exhausted by these warnings jeez
 #![allow(unused_imports)]
@@ -50,6 +51,15 @@ pub extern "sysv64" fn _kstart() -> ! {
     klog!(Info, MEMORY_KHEAP, "Kernel heap initialised with {} bytes.", unsafe{memory::kernel_heap::kheap_initial_size});
     // Initialise scheduler
     multitasking::scheduler::init_scheduler(None);
+    
+    // Configure physical memory
+    klog!(Info, BOOT, "Initialising physical memory allocator...");
+    let memmap = coredrivers::parse_multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!");
+    memory::physical::init_pmem(memmap);
+    // Configure virtual memory
+    klog!(Info, BOOT, "Initialising virtual memory mappings...");
+    let pagetable = memory::alloc_util::new_user_paging_context();
+    unsafe{pagetable.activate()};
     
     todo!()
 }

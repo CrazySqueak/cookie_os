@@ -51,13 +51,18 @@ pub fn _set_fixed_cpu_locals(cpulocals: FixedCpuLocals){
 #[inline(always)]
 pub fn _load_fixed_cpu_locals() -> &'static FixedCpuLocals {
     // GS:0 = cpu_local_ptr
-    // FIXME: GSbase is only 32-bits, so we need to offset the returned value by HIGHER_HALF_OFFSET (if that even still exists somewhere in the code)
+    // GSbase is only 32-bits, so we need to offset the returned value by HIGHER_HALF_OFFSET
+    // Since FixedCpuLocals are allocated on the kernel heap, we can use KERNEL_PTABLE_VADDR as the offset
+    const HIGHER_HALF_OFFSET: usize = crate::memory::paging::global_pages::KERNEL_PTABLE_VADDR;
+    const FCL_PTR_PTR_ADDR: usize = 0 + HIGHER_HALF_OFFSET;  // we load GS:FCL_PTR_PTR_ADDR
+    
     let cpu_locals_ptr: usize;
     unsafe{
         core::arch::asm!(
-            "mov {x},gs:0",
-            x = out(reg) cpu_locals_ptr,
+            "mov {x},gs:[{addr_reg}]",
+            x = lateout(reg) cpu_locals_ptr,
+            addr_reg = in(reg) FCL_PTR_PTR_ADDR,  // 64-bit immediates and x86_64 mix like oil and water, so we have to put it in a register first (just like when first CALLing into the higher half)
         );
-    }
+    };
     unsafe { &*(cpu_locals_ptr as *const FixedCpuLocals) }
 }

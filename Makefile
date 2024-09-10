@@ -8,7 +8,7 @@ export QEMU := qemu-system-x86_64
 export GRUB_MKRESCUE := grub-mkrescue
 export LIMINE := limine
 
-export KBUILDFEATURES ?= per_page_NXE_bit enable_amd64_TCE page_global_bit 1G_huge_pages 
+export KBUILDFEATURES ?= enable_amd64_TCE 1G_huge_pages per_page_NXE_bit page_global_bit
 QEMUCPU ?= max -smp 4
 
 export BUILDNAME := $(ARCH)

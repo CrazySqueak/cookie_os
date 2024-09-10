@@ -166,7 +166,7 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> core::fmt::Debug for BuddyAl
 
 pub fn init_pmem(mmap: &Vec<crate::coredrivers::parse_multiboot::MemoryMapEntry>){
     let (_, kend) = get_kernel_bounds();  // note: we ignore any memory before the kernel, its a tiny sliver (2MB tops) and isn't worth it
-    klog!(Info, MEMORY_PHYSICAL_RAMMAP, "\tKernel ends @ {:x}", kend);
+    klog!(Debug, MEMORY_PHYSICAL_RAMMAP, "\tKernel ends @ {:x}", kend);
     let mut total_general_use: u64 = 0;
     let mut allocator = PHYSMEM_ALLOCATOR.lock();
     let prev_free: usize = allocator.amount_free;

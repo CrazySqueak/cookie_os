@@ -11,6 +11,21 @@ impl<G> NoInterruptionsGuardWrapper<G> {
     pub fn new(lock_guard: G, interrupt_guard: NoInterruptionsGuard) -> Self {
         Self { lock_guard, interrupt_guard }
     }
+    
+    /// Return only the lock guard, dropping the NoInterruptionsGuard
+    /// Safety: Care must be taken to ensure no interruptions occur that could cause issues with whatever item was locked
+    pub unsafe fn into_lock_guard(s: Self) -> G {
+        s.lock_guard
+    }
+    /// Return only the NoInterruptionsGuard, dropping the lock guard
+    pub fn into_nointerrupt_guard(s: Self) -> NoInterruptionsGuard {
+        s.interrupt_guard
+    }
+    /// Split both guards apart from each other.
+    /// Safety: Care must be taken to ensure no interruptions occur that could cause issues with whatever item was locked
+    pub unsafe fn into_separate_guards(s: Self) -> (G, NoInterruptionsGuard) {
+        (s.lock_guard, s.interrupt_guard)
+    }
 }
 impl<T,G> Deref for NoInterruptionsGuardWrapper<G> where G:Deref<Target=T> {
     type Target = T;
@@ -28,6 +43,7 @@ impl<T,G> DerefMut for NoInterruptionsGuardWrapper<G> where G:DerefMut<Target=T>
 
 macro_rules! ni_wrap_lock {
     ($vis:vis fn $fname:ident(&self) -> wrap($baset:ident<'_,T,S>)) => {
+        #[cfg_attr(feature="dbg_track_nointerrupt_source", track_caller)]
         $vis fn $fname(&self) -> NoInterruptionsGuardWrapper<$baset<'_,T,S>> {
             let ni = disable_interruptions(); // (we have to disable them here to prevent a rare race condition where one could happen between locking and disabling interruptions)
             // Acquire the lock
@@ -37,6 +53,7 @@ macro_rules! ni_wrap_lock {
         }
     };
     ($vis:vis fn $fname:ident(&self) -> wrap_Option($baset:ident<'_,T,S>)) => {
+        #[cfg_attr(feature="dbg_track_nointerrupt_source", track_caller)]
         $vis fn $fname(&self) -> Option<NoInterruptionsGuardWrapper<$baset<'_,T,S>>> {
             let ni = disable_interruptions(); // this will be dropped if try_lock fails, or kept if try_lock succeeds
             self.0.$fname().map(|guard|NoInterruptionsGuardWrapper::new(guard,ni))

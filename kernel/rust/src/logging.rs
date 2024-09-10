@@ -80,7 +80,9 @@ pub struct LoggingPipeline {
 impl core::default::Default for LoggingPipeline {
     fn default() -> Self {
         // Note: the logger permanently locks serial1. Literally nothing else uses serial1 so it's fine.
-        let serial1 = Box::new(GuardFmtWriter::new(crate::coredrivers::serial_uart::SERIAL1.lock()));
+        let serial1 = crate::coredrivers::serial_uart::SERIAL1.lock();
+        let (serial1, ni) = unsafe { crate::sync::nointerruptionslocks::NoInterruptionsGuardWrapper::into_separate_guards(serial1) };
+        let serial1 = Box::new(GuardFmtWriter::new(serial1));
         Self {
             formatter: Box::new(DefaultLogFormatter()),
             destinations: Vec::from([serial1 as Box<dyn core::fmt::Write + Send + 'static>]),

@@ -48,6 +48,10 @@ enable_amd64_invlpgb = []
 # Make sure to disable it on debug builds though unless you want your life made 100x harder
 recover_from_task_related_kernel_panic = []
 
+# DEBUGGING FEATURES (dbg_ prefix)
+# Stores the location where no_interruption guards are taken
+dbg_track_nointerrupt_source = []
+
 [lib]
 crate-type = ["staticlib"]
 

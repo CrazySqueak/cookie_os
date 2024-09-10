@@ -15,13 +15,18 @@ impl core::ops::Drop for NoInterruptionsGuard {
     }
 }
 
+#[derive(Debug)]
 struct NoInterruptionsState {
     interrupt_state: super::arch::enable_interrupts::InterruptState,
     yield_state: bool,
 }
+#[derive(Debug)]
 pub struct NoInterruptionsStateContainer {
     active: bool,
     state: NoInterruptionsState,
+    
+    #[cfg(feature="dbg_track_nointerrupt_source")]
+    dbg_source: &'static core::panic::Location<'static>,
 }
 
 fn _disable_interruptions_internal() -> NoInterruptionsState {
@@ -38,12 +43,16 @@ fn _disable_interruptions_internal() -> NoInterruptionsState {
     }
 }
 
+#[cfg_attr(feature="dbg_track_nointerrupt_source", track_caller)]
 pub fn disable_interruptions() -> NoInterruptionsGuard {
     let ni_state = _disable_interruptions_internal();
     // Create state container
     let state = NoInterruptionsStateContainer {
         active: true,
         state: ni_state,
+        
+        #[cfg(feature="dbg_track_nointerrupt_source")]
+        dbg_source: core::panic::Location::caller(),
     };
     // Push it
     let mut guard = CURRENT_NOINTERRUPTIONS_STATE.lock();

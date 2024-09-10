@@ -62,6 +62,7 @@ pub extern "sysv64" fn _kstart() -> ! {
     unsafe{pagetable.activate()};
     
     // TODO
+    let x = multitasking::interruptions::disable_interruptions();
     klog!(Info, BOOT, "Further boot process not yet implemented.");
     multitasking::terminate_current_task();
 }

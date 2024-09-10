@@ -46,18 +46,35 @@ static _SCHEDULER_TICKS: CpuLocal<AtomicUsize,false> = CpuLocal::new();
 fixed_cpu_local!(fixedcpulocal static _IS_EXECUTING_TASK: AtomicBool = AtomicBool::new(false));
 
 pub type StackPointer = cswitch_impl::StackPointer;
-pub use cswitch_impl::yield_to_scheduler;
+
+#[inline]
+#[cfg_attr(feature="dbg_scheduler_yield_errinfo", track_caller)]
+pub fn yield_to_scheduler(command: SchedulerCommand) {
+    // This wrapper fn is included to allow for adding debug assertions and such
+    
+    cfg_if::cfg_if! {
+        if #[cfg(any(debug_assertions, feature="dbg_scheduler_yield_errinfo"))] {
+            assert!(!super::interruptions::is_sched_yield_disabled(), "yield_to_scheduler() called when interruptions were disabled!\n(no_interruptions state stack={:?})", super::interruptions::fmt_current_state_stack());
+            assert!(_CURRENT_TASK.lock().is_some(), "yield_to_scheduler() called when no task was currently active!");
+        } else {}
+    }
+    
+    cswitch_impl::yield_to_scheduler(command);
+}
+
 /* Terminate the current task. This is akin to calling yield_to_scheduler(Terminate), but returns the "!" type to hint that it cannot resume afterwards.
     This currently does not unwind the stack, so any objects you store in the stack will not be dropped. However, this may change in the future without warning (so be cautious but don't depend on it).
     Anything held in the task object itself (e.g. stack allocations, handles to the relevant process/thread, etc.) will be dropped as normal
         at a non-deterministic time in the near future (usually when another terminate call occurs in the scheduler, or sooner if i add a cleanup task that periodically cleans up terminated tasks). */
 #[inline]
+#[cfg_attr(feature="dbg_scheduler_yield_errinfo", track_caller)]
 pub fn terminate_current_task() -> ! {
     yield_to_scheduler(SchedulerCommand::Terminate);
     unreachable!();  // the scheduler will drop the task when yield is called with the Terminate command
 }
 /* Shorthand for yielding as part of a spinloop. */
 #[inline]
+#[cfg_attr(feature="dbg_scheduler_yield_errinfo", track_caller)]
 pub fn spin_yield(){
     yield_to_scheduler(SchedulerCommand::PushBack);
 }

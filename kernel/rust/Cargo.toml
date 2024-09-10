@@ -49,8 +49,12 @@ enable_amd64_invlpgb = []
 recover_from_task_related_kernel_panic = []
 
 # DEBUGGING FEATURES (dbg_ prefix)
-# Stores the location where no_interruption guards are taken
+# Tracks the location where no_interruption guards are taken
 dbg_track_nointerrupt_source = []
+# Tracks the location where yield_to_scheduler is called,
+#  and includes some extra assertions,
+#  to provide better error reporting when it is called incorrectly
+dbg_scheduler_yield_errinfo = []
 
 [lib]
 crate-type = ["staticlib"]

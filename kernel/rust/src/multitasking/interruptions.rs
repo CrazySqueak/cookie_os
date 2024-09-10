@@ -105,6 +105,11 @@ fixed_cpu_local!(fixedcpulocal static SCHEDULER_YIELD_DISABLED: AtomicBool = Ato
 // pub const FCLCurrentNIGuardDefault: FCLCurrentNIGuard = LLMutex::new(Vec::new());
 
 /// Return true if scheduler_yield has been disabled by disable_interruptions
+#[inline]
 pub fn is_sched_yield_disabled() -> bool {
     SCHEDULER_YIELD_DISABLED.load(Ordering::Relaxed)
+}
+/// Format the current state stack (useful for debugging)
+pub fn fmt_current_state_stack() -> alloc::string::String {
+    alloc::format!("{:?}", *CURRENT_NOINTERRUPTIONS_STATE)
 }

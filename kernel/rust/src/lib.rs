@@ -4,6 +4,7 @@
 #![feature(sync_unsafe_cell)]
 #![feature(box_into_inner)]
 #![feature(vec_pop_if)]
+#![feature(new_uninit)]
 
 // i'm  exhausted by these warnings jeez
 #![allow(unused_imports)]

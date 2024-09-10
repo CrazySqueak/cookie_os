@@ -31,17 +31,22 @@ pub fn _set_fixed_cpu_locals(cpulocals: FixedCpuLocals){
     // Point GS to the pointer
     _point_gs(_s1_cpu_local_ptr_ptr);
     
-    // Stage 2
-    // Leak the CPU local and get the address
-    let cpu_local_ptr = (Box::leak(Box::new(cpulocals)) as *mut FixedCpuLocals) as usize;
-    // Create a pointer to the pointer (yep)
-    let cpu_local_ptr_ptr = (Box::leak(Box::new(cpu_local_ptr)) as *mut usize) as usize;
-    // Point GS:0 -> CPU local ptr
-    _point_gs(cpu_local_ptr_ptr);
-    
-    // Now that GS is pointed at heap memory, we can discard the items on the stack
+    // Stage 2.1: Pre-allocate heap memory
+    // Since moving the cpulocals into the Box will invalidate the copy GS is currently pointed at,
+    //  we must pre-allocate the heap memory before moving them.
+    let cpu_local_heap = Box::<FixedCpuLocals>::new_uninit();
+    let cpu_local_ptr_heap = Box::<usize>::new_uninit();
+    // Now that the heap memory is allocated, we can discard the items on the stack
     // This discard is placed here to ensure that they live long enough
     let _ = (_s1_cpu_local_ptr, _s1_cpu_local_ptr_ptr);
+    
+    // Stage 2.2: Move cpu locals into heap memory
+    // Leak the CPU local and get the address
+    let cpu_local_ptr = (Box::leak(Box::write(cpu_local_heap, cpulocals)) as *mut FixedCpuLocals) as usize;
+    // Create a pointer to the pointer (yep)
+    let cpu_local_ptr_ptr = (Box::leak(Box::write(cpu_local_ptr_heap, cpu_local_ptr)) as *mut usize) as usize;
+    // Point GS:0 -> CPU local ptr
+    _point_gs(cpu_local_ptr_ptr);
 }
 #[inline(always)]
 pub fn _load_fixed_cpu_locals() -> &'static FixedCpuLocals {

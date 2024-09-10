@@ -24,7 +24,7 @@ fn panic(_info: &PanicInfo) -> ! {
             emergency_kernel_log!("\r\nAborting kernel panic handler due to secondary panic: {}\r\nYou're on your own from here.\r\n", _info);
         }
         //emergency_kernel_log!("\r\nCPU {} now aborting due to secondary panic: {}.\r\n", cpu_num, _info.message());
-        todo!()//lowlevel::halt();
+        loop{}//todo!()//lowlevel::halt();
     }
     // Otherwise, begin panic
     if cfg!(feature = "recover_from_task_related_kernel_panic") && multitasking::is_executing_task() {

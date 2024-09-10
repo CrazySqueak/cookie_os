@@ -40,7 +40,6 @@ pub(crate) use arch_specific_module;
 
 #[no_mangle]
 pub extern "sysv64" fn _kstart() -> ! {
-    {
     // Initialise heap
     unsafe { memory::kernel_heap::init_kheap(); }
     // Initialise Fixed CPU Locals
@@ -61,11 +60,8 @@ pub extern "sysv64" fn _kstart() -> ! {
     klog!(Info, BOOT, "Initialising virtual memory mappings...");
     let pagetable = memory::alloc_util::new_user_paging_context();
     unsafe{pagetable.activate()};
-    }
     
     // TODO
-    let x = alloc::format!("{:?}",multitasking::fixedcpulocal::get_fixed_cpu_locals().CURRENT_NOINTERRUPTIONS_STATE);
-    klog!(Info, ROOT, &x);
     klog!(Info, BOOT, "Further boot process not yet implemented.");
     multitasking::terminate_current_task();
 }

@@ -61,14 +61,26 @@ pub extern "sysv64" fn _kstart() -> ! {
     let pagetable = memory::alloc_util::new_user_paging_context();
     unsafe{pagetable.activate()};
     
+    let test = equals_fourty_two::spawn(42);
+    let test2 = equals_fourty_two::spawn(69);
+    assert!(test.1.get().unwrap());
+    assert!(!test2.1.get().unwrap());
+    
     // TODO
-    let x = multitasking::interruptions::disable_interruptions();
+    //let x = multitasking::interruptions::disable_interruptions();
     klog!(Info, BOOT, "Further boot process not yet implemented.");
     multitasking::terminate_current_task();
 }
 #[no_mangle]
 pub extern "sysv64" fn _kstart_ap() -> ! {
     todo!()
+}
+
+multitasking::util::def_task_fn! {
+    pub task fn equals_fourty_two(x: usize) -> bool {
+        klog!(Info, ROOT, "Checking if {} equals 42...", x);
+        x == 42
+    }
 }
 
 // fixme

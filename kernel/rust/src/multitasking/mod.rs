@@ -13,7 +13,7 @@ pub use scheduler::{is_executing_task,SchedulerCommand};
 pub use scheduler::{yield_to_scheduler,terminate_current_task,spin_yield};
 pub mod task;
 pub use task::{Task,TaskType};
-//pub mod util;
+pub mod util;
 
 pub mod econtext;
 pub use econtext::ExecutionContext;

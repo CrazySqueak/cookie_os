@@ -5,9 +5,7 @@ use x86_64::registers::control::{Cr4,Cr4Flags};
 
 use crate::sync::promise::POnceLock;
 type StoredFlags = (EferFlags,Cr4Flags);
-lazy_static::lazy_static! {
-    static ref _MSR_FLAGS: POnceLock<StoredFlags> = POnceLock::new();
-}
+static _MSR_FLAGS: POnceLock<StoredFlags> = POnceLock::new();
 
 use crate::logging::klog;
 

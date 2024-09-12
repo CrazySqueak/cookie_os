@@ -16,14 +16,18 @@ impl WaitingList {
         Self(YMutex::new(VecDeque::new()))
     }
     
+    fn wait_inner(&self, list: super::YMutexGuard<'_,VecDeque<WaitingListEntry>>) {
+        // The scheduler takes ownership of the lock and drops it after pushing
+        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushToWaitingList(core::cell::Cell::new(Some(list))));
+    }
     /// Yield to the scheduler, and wait until the thread is notified
     /// Note: This makes no guarantee that a notify hasn't happened in between you checking the predicate and calling wait()
     ///       For more robust behaviour, consider using wait_ifnt or wait_until instead.
     pub fn wait(&self) {
         let list = self.0.lock();
-        // The scheduler takes ownership of the lock and drops it after pushing
-        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushToWaitingList(core::cell::Cell::new(Some(list))));
+        self.wait_inner(list);
     }
+    
     /// Lock the waiting list, then check the predicate, and then finally wait *iff* the predicate was false
     /// This method guarantees that notify() has not been called between checking the predicate and suspending the thread
     /// Returns true if the thread was suspended, false if the predicate returned true early.
@@ -31,13 +35,21 @@ impl WaitingList {
         let list = self.0.lock();
         if predicate() { return false; }  // Predicate returned true, so return early
         // The scheduler takes ownership of the lock and drops it after pushing
-        scheduler::yield_to_scheduler(scheduler::SchedulerCommand::PushToWaitingList(core::cell::Cell::new(Some(list))));
+        self.wait_inner(list);
         true
     }
     /// A version of wait_ifnt that checks the predicate again after resuming, and keeps suspending until the predicate returns true
     pub fn wait_until(&self, predicate: impl Fn()->bool + Copy) {
         // Keep trying until the predicate returns true (causing wait_ifnt to return false)
         while self.wait_ifnt(predicate){}
+    }
+    /// A version of wait_until that calls the predicate. If it returns Some(x), returns x. If it returns None, waits and then tries again.
+    pub fn wait_until_try<R>(&self, predicate: impl Fn()->Option<R>) -> R {
+        loop {
+            let list = self.0.lock();
+            if let Some(value) = predicate() { return value; }
+            self.wait_inner(list);
+        }
     }
     
     fn notify_inner(&self, list: &mut super::YMutexGuard<'_,VecDeque<WaitingListEntry>>) -> bool {

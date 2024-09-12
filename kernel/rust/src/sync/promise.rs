@@ -2,7 +2,7 @@
 
 use core::sync::atomic::*;
 use super::WaitingList;
-use core::cell::UnsafeCell;
+use core::cell::SyncUnsafeCell;
 use core::mem::MaybeUninit;
 use alloc::sync::Arc;
 
@@ -12,7 +12,7 @@ const PROMISE_COMPLETE: u8 = 2;  // completed (either fulfilled or cancelled)
 
 struct PromiseInner<T> {
     state: AtomicU8,
-    value: UnsafeCell<Option<T>>,
+    value: SyncUnsafeCell<Option<T>>,
     waiters: WaitingList,
 }
 
@@ -22,7 +22,7 @@ impl<T> Promise<T> {
     pub fn new() -> (PromiseFulfiller<T>,Promise<T>) {
         let inner: PromiseInner<T> = PromiseInner {
             state: AtomicU8::new(PROMISE_EMPTY),
-            value: UnsafeCell::new(None),
+            value: SyncUnsafeCell::new(None),
             waiters: WaitingList::new(),
         };
         let promise = Self(Arc::new(inner));
@@ -117,5 +117,35 @@ impl<T> core::ops::Drop for PromiseFulfiller<T> {
             // ...and wake the waiters
             self.0.0.waiters.notify_all();
         }
+    }
+}
+
+/// A OnceLock implemented as a wrapper around a Promise
+/// Note: The fact that PromiseFulfiller contains a copy of the promise is currently an implementation detail, so we must store both a fulfiller and a reader
+pub struct POnceLock<T> { w: PromiseFulfiller<T>, r: Promise<T> }
+impl<T> POnceLock<T> {
+    pub fn new() -> Self {
+        let (w, r) = Promise::<T>::new();
+        return Self { w, r };
+    }
+    
+    /// Get the value, or None if not yet set
+    pub fn get(&self) -> Option<&T> {
+        self.r.try_get().ok()
+    }
+    /// Set the value, if it has not already been set
+    pub fn set(&self, value: T) -> Result<(),T> {
+        self.w.complete(value)
+    }
+    
+    /// Get the value, blocking (using a WaitingList) until it is available.
+    /// This is equivalent to just waiting on a promise.
+    pub fn get_blocking(&self) -> &T {
+        self.r.get().unwrap()
+    }
+}
+impl<T> core::default::Default for POnceLock<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }

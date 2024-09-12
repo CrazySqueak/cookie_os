@@ -3,9 +3,11 @@ use raw_cpuid::CpuId;
 use x86_64::registers::model_specific::{Efer,EferFlags};
 use x86_64::registers::control::{Cr4,Cr4Flags};
 
-use crate::sync::kspin::KRwLock;
-// Note: _MSR_FLAGS is used before scheduler/interrupts are configured
-static _MSR_FLAGS: KRwLock<Option<(EferFlags,Cr4Flags)>> = KRwLock::new(None);
+use crate::sync::promise::POnceLock;
+type StoredFlags = (EferFlags,Cr4Flags);
+lazy_static::lazy_static! {
+    static ref _MSR_FLAGS: POnceLock<StoredFlags> = POnceLock::new();
+}
 
 use crate::logging::klog;
 
@@ -132,7 +134,7 @@ pub fn init_msr(){
         Cr4::write(cr4flags);
         
         // Store flags for use by APs
-        let _=_MSR_FLAGS.write().insert((eferflags, cr4flags));
+        let _=_MSR_FLAGS.set((eferflags, cr4flags));
     }
 }
 
@@ -140,9 +142,9 @@ pub fn init_msr_ap(){
     unsafe {
         use x86_64::registers::model_specific::{Efer,EferFlags};
         use x86_64::registers::control::{Cr4,Cr4Flags};
-        let (eferflags, cr4flags) = _MSR_FLAGS.read().expect("init_msr_ap called before BSP set its own flags!");
+        let (eferflags, cr4flags) = _MSR_FLAGS.get().expect("init_msr_ap called before BSP set its own flags!");
         klog!(Debug, FEATURE_FLAGS, "Writing flags to control registers: EFER={:?} CR4={:?}", eferflags, cr4flags);
-        Efer::write(eferflags);
-        Cr4::write(cr4flags);
+        Efer::write(*eferflags);
+        Cr4::write(*cr4flags);
     }
 }

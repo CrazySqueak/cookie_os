@@ -14,6 +14,7 @@
 
 extern crate alloc;
 
+pub mod cpu;
 pub mod memory;
 pub mod multitasking;
 pub mod sync;
@@ -49,15 +50,17 @@ pub extern "sysv64" fn _kstart() -> ! {
     klog!(Info, BOOT, "\"Now with less asbestos!\"");
     klog!(Info, BOOT, "=========================");
     klog!(Info, MEMORY_KHEAP, "Kernel heap initialised with {} bytes.", unsafe{memory::kernel_heap::kheap_initial_size});
+    // Initialise CPU flags
+    cpu::init_bsp();
     // Initialise scheduler
     multitasking::scheduler::init_scheduler(None);
     
     // Configure physical memory
-    klog!(Info, BOOT, "Initialising physical memory allocator...");
+    //klog!(Info, BOOT, "Initialising physical memory allocator...");
     let memmap = coredrivers::parse_multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!");
     memory::physical::init_pmem(memmap);
     // Configure virtual memory
-    klog!(Info, BOOT, "Initialising virtual memory mappings...");
+    //klog!(Info, BOOT, "Initialising virtual memory mappings...");
     let pagetable = memory::alloc_util::new_user_paging_context();
     unsafe{pagetable.activate()};
     

@@ -8,8 +8,7 @@ export QEMU := qemu-system-x86_64
 export GRUB_MKRESCUE := grub-mkrescue
 export LIMINE := limine
 
-export KBUILDFEATURES ?= enable_amd64_TCE 1G_huge_pages
-# per_page_NXE_bit page_global_bit
+export KBUILDFEATURES ?= enable_amd64_TCE 1G_huge_pages per_page_NXE_bit page_global_bit
 export KDBGFEATURES ?= dbg_scheduler_yield_errinfo dbg_track_nointerrupt_source
 QEMUCPU ?= max -smp 4
 

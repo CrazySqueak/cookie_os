@@ -61,6 +61,7 @@ pub extern "sysv64" fn _kstart() -> ! {
     let pagetable = memory::alloc_util::new_user_paging_context();
     unsafe{pagetable.activate()};
     
+    klog!(Info, ROOT, "Spawning test tasks...");
     let test = equals_fourty_two::spawn(42);
     let test2 = equals_fourty_two::spawn(69);
     assert!(test.1.get().unwrap());

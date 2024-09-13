@@ -7,7 +7,7 @@ use crate::safety::{SyscallFFISafe,SyscallFFIMarshallable};
 macro_rules! ffi_enum {
     {
         $(#[$attrs:meta])*
-        $vis:vis enum($inttype:ty) $name:ident {
+        $vis:vis extern($inttype:ty) enum $name:ident {
             $(
                 $(#[$vattrs:meta])*
                 $vname:ident = $vtag:literal
@@ -37,16 +37,160 @@ macro_rules! ffi_enum {
                 }
             }
         }
-    }
+    };
+    
+    {
+        $(#[$attrs:meta])*
+        $vis:vis extern($inttype:ty) union(internals=mod $mname:ident) enum $name:ident {
+            $(
+                $(#[$vattrs:meta])*
+                $vname:ident
+                $( = $empty_vtag:literal )?
+                $( ($tuple_vtag:literal, $($tuple_itype:ty),+ $(,)?) )?
+                $( {$struct_vtag:literal, $($struct_iname:ident : $struct_itype:ty),+ $(,)?} )?
+            ),+
+            $(,)?
+        }
+    } => {
+        mod $mname {
+            #![allow(non_snake_case)]
+            // Tags
+            $crate::marshal::ffi_enum! {
+                pub extern($inttype) enum Tag {
+                    $(
+                        $vname = 
+                        $($empty_vtag)?
+                        $($tuple_vtag)?
+                        $($struct_vtag)?
+                    ),+
+                }
+            }
+            // Item Types
+            $(
+                pub mod $vname {
+                    $(
+                        pub type Item = ();
+                        pub type ItemFFI = <Item as $crate::safety::SyscallFFIMarshallable>::As;
+                        
+                        #[allow(dead_code)]
+                        const _MARKER: $inttype = $empty_vtag;  // _marker is only here to ensure this path is only generated for empty members
+                        // Used for deconstructing $vname later on (since it has no other unique variables to match on)
+                        #[inline]
+                        pub fn new_ffi(_x: $inttype) -> ItemFFI {
+                            $crate::safety::SyscallFFIMarshallable::marshall(())
+                        }
+                    )?
+                    $(
+                        pub type Item = ($($tuple_itype,)+);
+                        pub type ItemFFI = <Item as $crate::safety::SyscallFFIMarshallable>::As;
+                    )?
+                    $(
+                        $crate::marshal::ffi_struct! {
+                            pub extern struct Item marshalled as ItemFFI {
+                                $(
+                                    pub $struct_iname: $struct_itype,
+                                )+
+                            }
+                        }
+                    )?
+                }
+            )+
+            // Items
+            #[allow(non_snake_case)]
+            #[repr(C)]
+            pub union Item {
+                $( pub $vname: ::core::mem::ManuallyDrop<$vname::ItemFFI> ),+
+            }
+            unsafe impl $crate::safety::SyscallFFISafe for Item {}
+            // Ensure all items are FFI-safe (you can never be too careful)
+            const _: () = const { $(
+                $crate::safety::assert_ffi_safe::<$vname::ItemFFI>();
+            )+ };
+            
+            // Tag+Union format for FFI
+            pub type FFIRaw = (Tag, Item);
+            pub type FFI = <FFIRaw as $crate::safety::SyscallFFIMarshallable>::As;
+            // And finally! Implement the actual enum itself
+            $(#[$attrs])*
+            pub enum Rust {
+                $(
+                    $(#[$vattrs])*
+                    $vname
+                    $( ($($tuple_itype),+) )?
+                    $( {$($struct_iname: $struct_itype),+} )?
+                ),+
+            }
+            impl $crate::safety::SyscallFFIMarshallable for Rust {
+                type As = FFI;
+                fn marshall(value: Self) -> Self::As {
+                    let (tag,item) = match value {
+                        $(
+                            Rust::$vname
+                            
+                            $( {$($struct_iname),+} )?
+                            => {
+                                (
+                                    Tag::$vname,
+                                    Item { $vname: ::core::mem::ManuallyDrop::new(
+                                        $( $vname::new_ffi($empty_vtag) )?
+                                        $( $crate::safety::SyscallFFIMarshallable::marshall($vname::Item { $($struct_iname),+ }) )?
+                                    )},
+                                )
+                            }
+                        ),+
+                    };
+                    $crate::safety::SyscallFFIMarshallable::marshall((tag,item))
+                }
+                fn demarshall(value: Self::As) -> Option<Self> {
+                    let (tag, item) = $crate::safety::SyscallFFIMarshallable::demarshall(value)?;
+                    match tag { $(
+                        Tag::$vname => {
+                            // Safety: We've checked that the tag is correct
+                            // And ffi-safety mandates that any value may be correct for item (as it's FFISafe currently)
+                            let item_ffi: $vname::ItemFFI = ::core::mem::ManuallyDrop::into_inner(unsafe { item.$vname });
+                            // Then, we de-marshall it
+                            let _item: $vname::Item = $crate::safety::SyscallFFIMarshallable::demarshall(item_ffi)?;
+                            // Now, we finally need to de-structure and re-structure everything into the equivalent Rust enum
+                            $(
+                                // Empty variant
+                                let _ = $vname::new_ffi($empty_vtag);
+                                Some(Rust::$vname)
+                            )?
+                            $(
+                                // Struct variant
+                                let $vname::Item { $($struct_iname),+ } = _item;
+                                Some(Rust::$vname { $($struct_iname),+ })
+                            )?
+                        }
+                    ),+ }
+                }
+            }
+        }
+    };
 }
+// Rust doesn't allow commenting macros, but we accept any of the three enum member syntaxes
 pub(crate) use ffi_enum;
 ffi_enum! {
     #[allow(dead_code)]
-    pub(crate) enum(u16) Example {
+    pub(crate) extern(u16) enum Example {
         Test0 = 0,
         Test1 = 1,
         SixtyNine = 69,
         FourTwenty = 420,
+    }
+}
+ffi_enum! {
+    #[allow(dead_code)]
+    pub(crate) extern(u16) union(internals=mod exun) enum ExampleUnion {
+        Empty = 0,
+        
+        // Tuple1(1, u32),
+        // Tuple2(2, u32, bool),
+        // Tuple3(3, bool, bool,),
+        
+        Struct1{4, x: u32},
+        Struct2{5, x: u32, y: u32},
+        Struct3{6, x: bool, y: bool,},
     }
 }
 

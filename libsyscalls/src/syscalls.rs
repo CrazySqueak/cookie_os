@@ -16,7 +16,7 @@ macro_rules! define_syscalls {
         // Syscall ID enum
         $crate::marshal::ffi_enum! {
             #[warn(non_camel_case_types, reason="Syscalls should have upper camel case names")]
-            $tagvis enum($tagty) $tagname {
+            $tagvis extern($tagty) enum $tagname {
                 $(
                     $callname = $callid,
                 )+

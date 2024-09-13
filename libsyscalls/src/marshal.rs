@@ -49,83 +49,46 @@ ffi_enum! {
     }
 }
 
-/// Internal macro used for several different operations
-macro_rules! marshal_operations {
-    // @is_safe: Algorithm to determine whether a struct contains only FFI-safe types, or at least one FFI-marshall type
-    (@is_safe, marshall$(,)? $($imode:ident),* -> $callback_name:ident@$callback_mode:ident($($args:tt)*)) => { $crate::marshal::$callback_name!(@$callback_mode, marshall, $($args)*); };
-    (@is_safe, safe, $($imode:ident),* -> $callback_name:ident@$callback_mode:ident($($args:tt)*)) => { $crate::marshal::marshal_operations!(@is_safe, $($imode),* -> $callback_name@$callback_mode($($args)*)); };
-    (@is_safe, safe -> $callback_name:ident@$callback_mode:ident($($args:tt)*)) => { $crate::marshal::$callback_name!(@$callback_mode, safe, $($args)*); };
-    
-    // @assert_safety: Asserts that a given item is what it's said to be
-    (@assert_safety, $itype:ty, safe) => { const _:() = $crate::safety::assert_ffi_safe::<$itype>(); };
-    (@assert_safety, $itype:ty, marshall) => { const _:() = $crate::safety::assert_ffi_marshallable::<$itype>(); };
-    
-    // @marshall_value: Convert a marshallable value in a variable of the given name to its marshalled form, storing it in a variable of the same name
-    (@marshall_value, $name:ident, safe, $itype:ty) => {};
-    (@marshall_value, $name:ident, marshall, $itype:ty) => {
-        let $name = $crate::marshal::FFIMarshalled::from($name);
-    };
-    // @demarshall_value: (and vice versa, returning if None is returned)
-    (@demarshall_value, $name:ident, safe, $itype:ty) => {};
-    (@demarshall_value, $name:ident, marshall, $itype:ty) => {
-        let $name = $crate::marshal::FFIMarshalled::try_into($name)?;
-    };
-    // @marshall_type: Convert a marshallable type to its marshalled version
-    (@marshall_type, safe, $itype:ty) => { $itype };
-    (@marshall_type, marshalled, $itype:ty) => { $crate::marshal::FFIMarshalled<$itype> };
-    
-}
-pub(crate) use marshal_operations;
-
-/// Define a struct that is Syscall FFI-compatible.
 macro_rules! ffi_struct {
-    
-    // @impl_ffi: Implement ffi-safe or FFI-marshall. Usually used as a callback with is_safe
-    (@impl_ffi, safe, $name:ident, $($iname:ident $imode:ident $itype:ty),+ $(as $mname:ident)?) => {
+    (@impl_ffi for $name:ident, $vis:vis, $(($($repr:ident),+))?, ; $($ivis:vis $iname:ident: $itype:ty),+) => {
         // SAFETY: As the struct is repr(C) and all items are robust, the struct itself can be considered robust
         #[automatically_derived]
         unsafe impl $crate::safety::SyscallFFISafe for $name {}
+        // Ensure all items are FFI-safe
+        const _: () = const { $(
+            $crate::safety::assert_ffi_safe::<$itype>();
+        )+ };
     };
-    (@impl_ffi, marshall, $name:ident, $($iname:ident $imode:ident $itype:ty),+ as $mname:ident) => {
+    (@impl_ffi for $name:ident, $vis:vis, $(($($repr:ident),+))?, $mname:ident ; $($ivis:vis $iname:ident: $itype:ty),+) => {
+        // Create Marshalled variant
+        $crate::marshal::ffi_struct! {
+            #[allow(dead_code)]
+            $vis extern$(($($repr),+))? struct $mname {
+                $( $ivis $iname: <$itype as $crate::safety::SyscallFFIMarshallable>::As ),+
+            }
+        }
+        // Impl SyscallFFIMarshallable
         #[automatically_derived]
         impl $crate::safety::SyscallFFIMarshallable for $name {
             type As = $mname;
             
             fn marshall(value: Self) -> Self::As {
                 $(
-                    let $iname = value.$iname;
-                    $crate::marshal::marshal_operations!(@marshall_value, $iname, $imode, $itype);
+                    let $iname = $crate::safety::SyscallFFIMarshallable::marshall(value.$iname);  // SyscallFFISafe also implement SyscallFFIMarshallable (even though it's a no-op)
                 )+
                 $mname { $($iname:$iname),+ }
             }
             fn demarshall(value: Self::As) -> Option<Self> {
                 $(
-                    let $iname = value.$iname;
-                    $crate::marshal::marshal_operations!(@demarshall_value, $iname, $imode, $itype);
+                    let $iname = $crate::safety::SyscallFFIMarshallable::demarshall(value.$iname)?;  // SyscallFFISafe also implement SyscallFFIMarshallable (even though it's a no-op)
                 )+
                 Some(Self { $($iname:$iname),+ })
             }
         }
-    };
-    
-    // @mstruct: Construct the marshalled version of a marshallable struct, by munching each item in term and converting it to the correct mode
-    {@mstruct : $($tokens:tt)*} => {};
-    {@mstruct $mname:ident: $($attrs:meta)* ; $vis:vis , $($($repr:ident),+)? ; $($($pattrs:meta)* $pvis:vis $pname:ident safe $ptype:ty),* ; $($cattrs:meta)* $cvis:vis $cname:ident safe $ctype:ty $(, $($iattrs:meta)* $ivis:vis $iname:ident $imode:ident $itype:ty)* } => {
-        ffi_struct! {@mstruct $mname: $($attrs)* ; $vis , $($($repr),+)? ; $($($pattrs)* $pvis $pname safe $ptype,)* $($cattrs:meta)* $cvis $cname safe $ctype ; $($($iattrs)* $ivis $iname $imode $itype),* }
-    };
-    {@mstruct $mname:ident: $($attrs:meta)* ; $vis:vis , $($($repr:ident),+)? ; $($($pattrs:meta)* $pvis:vis $pname:ident safe $ptype:ty),* ; $($cattrs:meta)* $cvis:vis $cname:ident marshall $ctype:ty $(, $($iattrs:meta)* $ivis:vis $iname:ident $imode:ident $itype:ty)* } => {
-        ffi_struct! {@mstruct $mname: $($attrs)* ; $vis , $($($repr),+)? ; $($($pattrs)* $pvis $pname safe $ptype,)* $($cattrs:meta)* $cvis $cname safe $crate::marshal::FFIMarshalled<$ctype> ; $($($iattrs)* $ivis $iname $imode $itype),* }
-    };
-    {@mstruct $mname:ident: $($attrs:meta)* ; $vis:vis , $($($repr:ident),+)? ; $($($pattrs:meta)* $pvis:vis $pname:ident safe $ptype:ty),* ; } => {
-        ffi_struct! {
-            $(#[$attrs])*
-            $vis extern$(($($repr),+))? struct $mname {
-                $(
-                    $(#[$pattrs])*
-                    $pvis $pname: safe $ptype,
-                )*
-            }
-        }
+        // Assert that all items may be marshalled
+        const _: () = const { $(
+            $crate::safety::assert_ffi_marshallable::<$itype>();
+        )+ };
     };
     
     {
@@ -133,7 +96,7 @@ macro_rules! ffi_struct {
         $vis:vis extern$(($($repr:ident),+))? struct $name:ident $(marshalled as $mname:ident)? {
             $(
                 $(#[$iattrs:meta])*
-                $ivis:vis $iname:ident: $imode:ident $itype:ty
+                $ivis:vis $iname:ident: $itype:ty
             ),+
             $(,)?
         }
@@ -146,31 +109,25 @@ macro_rules! ffi_struct {
                 $ivis $iname: $itype,
             )+
         }
-        // Implement either safe or marshall, depending on whether this has marshalled items
-        $crate::marshal::marshal_operations!(@is_safe, $($imode),+ -> ffi_struct@impl_ffi($name, $($iname $imode $itype),+ $(as $mname)?));
-        
-        // Assert that each type is what it's said to be
-        $($crate::marshal::marshal_operations!(@assert_safety, $itype, $imode);)+
-        
-        // Implement the marshalled version
-        ffi_struct! { @mstruct $($mname)?: $($attrs)* ; $vis , $($($repr),+)? ; ; $($($iattrs)* $ivis $iname $imode $itype),+ }
-    }
+        // Implement either safe or marshall
+        $crate::marshal::ffi_struct!(@impl_ffi for $name, $vis, $(($($repr),+))?, $($mname)? ; $($ivis $iname: $itype),+);
+    };
 }
 pub(crate) use ffi_struct;
 ffi_struct! {
     #[allow(dead_code)]
     pub(crate) extern struct A {
-        x: safe u32,
-        y: safe i64,
-        z: safe u16,
+        x: u32,
+        y: i64,
+        z: u16,
     }
 }
 ffi_struct! {
     #[allow(dead_code)]
     pub(crate) extern(packed) struct B marshalled as BFFI {
-        x: safe u32,
-        y: safe i64,
-        z: marshall bool,
+        x: u32,
+        y: i64,
+        z: bool,
     }
 }
 

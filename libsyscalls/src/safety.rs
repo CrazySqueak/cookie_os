@@ -7,7 +7,7 @@
     label = "`{Self}` is not a robust type",
     note = "If it implements `SyscallFFIMarshallable`, consider wrapping it in an `FFIMarshalled<{Self}>`",
 )]
-pub unsafe trait SyscallFFISafe {}
+pub unsafe trait SyscallFFISafe: Sized {}
 /// A type is SyscallFFIMarshallable if it can be converted to a SyscallFFISafe type, either by reinterpreting it (with a check for validity) or similar.
 /// Examples: Enums with a defined integer tag (can be implemented using the decl_ffi_safe! macro), booleans
 #[diagnostic::on_unimplemented(
@@ -22,11 +22,13 @@ pub trait SyscallFFIMarshallable: Sized {
     
     fn marshalled(self) -> Self::As { Self::marshall(self) }
 }
-/*impl<T> SyscallFFIMarshallable for T where T: SyscallFFISafe {
+impl<T> SyscallFFIMarshallable for T where T: SyscallFFISafe {
     type As = T;
+    #[inline(always)]
     fn marshall(value: Self) -> Self::As { value }
+    #[inline(always)]
     fn demarshall(value: Self::As) -> Option<Self> { Some(value) }
-}*/
+}
 //impl<T> SyscallFFIMarshallable for T where Option<T>: SyscallFFISafe {
 //    type As = Option<T>;
 //    fn marshall(value: Self) -> Self::As { Some(value) }

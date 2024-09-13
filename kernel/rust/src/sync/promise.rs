@@ -115,6 +115,7 @@ impl<T> core::clone::Clone for Promise<T> {
 /// A write guard responsible for fulfilling a promise
 /// Only one of these may exist as it has a Drop impl,
 /// however complete() is thread-safe and works from an immutable reference.
+#[must_use = "If you wish to explicitly cancel the promise, consider using .cancel() instead." ]
 pub struct PromiseFulfiller<T>(Promise<T>);
 impl<T> PromiseFulfiller<T> {
     /// Return a reference to the promise this fulfills
@@ -152,6 +153,88 @@ impl<T> PromiseFulfiller<T> {
 impl<T> core::ops::Drop for PromiseFulfiller<T> {
     fn drop(&mut self){
         // Cancel the promise if necessary
+        let _ = self.cancel();
+    }
+}
+
+// == ACKNOWLEDGEMENTS ==
+struct AcknowledgementInner {
+    state: AtomicU8,
+    waiters: WaitingList,
+}
+const ACK_EMPTY: u8 = 0;
+const ACK_POSITIVE: u8 = 1;
+const ACK_NEGATIVE: u8 = 2;
+
+/// An Acknowledgement is a special kind of promise, akin to a Promise<()>
+/// However this version is more optimized (taking advantage of some improvements granted by having no data to write)
+/// Note that Acknowledgements should not be used for synchronized access to values, as they use Ordering::Relaxed.
+/// They are intended mainly for acknowledging that a value has been accepted by another task, for example
+pub struct Acknowledgement(Arc<AcknowledgementInner>);
+impl Acknowledgement {
+    pub fn new() -> (AcknowledgementFulfiller,Acknowledgement) {
+        let inner = AcknowledgementInner {
+            state: AtomicU8::new(ACK_EMPTY),
+            waiters: WaitingList::new(),
+        };
+        let ack = Acknowledgement(Arc::new(inner));
+        let acf = AcknowledgementFulfiller(ack.clone());
+        (acf, ack)
+    }
+    /// Block until the acknowledgement is filled.
+    /// Returns true for a positive (complete())
+    /// Returns false for a negative (cancel())
+    pub fn get(&self) -> bool {
+        self.0.waiters.wait_until_try(||{
+            let x = self.0.state.load(Ordering::Relaxed);
+            if x == ACK_EMPTY { None }
+            else { Some(x == ACK_POSITIVE) }
+        })
+    }
+    /// Return Ok(x) if the acknowledgement is filled (true for positive, false for negative)
+    /// Return Err() if the acknowledgement is not yet filled
+    pub fn try_get(&self) -> Result<bool,()> {
+        match self.0.state.load(Ordering::Relaxed) {
+            ACK_EMPTY => Err(()),
+            ACK_POSITIVE => Ok(true),
+            ACK_NEGATIVE => Ok(false),
+            _ => unreachable!(),
+        }
+    }
+    
+    pub fn is_pending(&self) -> bool {
+        self.0.state.load(Ordering::Relaxed) == ACK_EMPTY
+    }
+}
+impl core::clone::Clone for Acknowledgement {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+#[must_use = "If you wish to explicitly cancel the acknowledgement, consider using .cancel() instead." ]
+pub struct AcknowledgementFulfiller(Acknowledgement);
+impl AcknowledgementFulfiller {
+    pub fn acknowledgement(&self) -> &Acknowledgement {
+        &self.0
+    }
+    
+    fn _fill_internal(&self, value: u8) -> bool {
+        let ok = self.0.0.state.compare_exchange(ACK_EMPTY, value, Ordering::Relaxed, Ordering::Relaxed).is_ok();
+        if ok { self.0.0.waiters.notify_all() };
+        ok
+    }
+    /// Returns true if successful, false if already filled
+    pub fn complete(&self) -> bool {
+        self._fill_internal(ACK_POSITIVE)
+    }
+    /// Returns true if successful, false if already filled
+    pub fn cancel(&self) -> bool {
+        self._fill_internal(ACK_NEGATIVE)
+    }
+}
+impl core::ops::Drop for AcknowledgementFulfiller {
+    fn drop(&mut self){
         let _ = self.cancel();
     }
 }

@@ -3,6 +3,7 @@ use core::ops::{Deref,DerefMut};
 use super::baselocks::*;
 use core::default::Default;
 
+#[must_use]
 pub struct NoInterruptionsGuardWrapper<G> {
     lock_guard: G,
     interrupt_guard: NoInterruptionsGuard, // <-- this lives at the end so that drop order ends the "no interruptions" stage as late as possible

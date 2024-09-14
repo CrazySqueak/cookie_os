@@ -2,7 +2,7 @@
 use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use crate::sync::{YRwLock as RwLock,YRwLockReadGuard as RwLockReadGuard,YRwLockWriteGuard as RwLockWriteGuard,YRwLockUpgradableGuard as RwLockUpgradableGuard};  // changed to using YLocks for now as Wlocks aren't re-implemented yet
+use crate::sync::hspin::{HRwLock as RwLock,HRwLockReadGuard as RwLockReadGuard,HRwLockWriteGuard as RwLockWriteGuard,HRwLockUpgradableGuard as RwLockUpgradableGuard};  // we're now using HLocks because that's what we always should've been using
 use crate::multitasking::cpulocal::CpuLocal;
 
 use super::*;
@@ -83,6 +83,7 @@ bitflags::bitflags! {
         // This is a custom flag which is interpreted by the OS' page handler
         // On pages: Page must always point to the same frame. Frame's contents must not be moved.
         // On sub-tables: No effect.
+        // #[deprecated]
         const PINNED = 1<<1;
         // Affects the "memory type" of the selected area - idk what this does because what I've read is very vague
         // On pages: influences the memory type of the memory mapped via the page
@@ -160,8 +161,11 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     This is intended to be used when the page table is possibly being read/cached by the CPU, as when locked by _begin_active, writes via write_when_active are still possible (as they flush the TLB). */
     pub(super) fn _begin_active(&self) -> &PFA {
         // Lock (by obtaining then forgetting a read guard, and using the underlying ptr instead)
-        core::mem::forget(self.0.read());
+        let read_guard = self.0.read();
+        let (lock_guard, nointerrupt_guard) = unsafe { RwLockReadGuard::into_separate_guards(read_guard) };  // Discard the NoInterruptionsGuard once we leave this function
+        core::mem::forget(lock_guard);  // Leak the lock guard
         let alloc = unsafe{ &*self.0.data_ptr() };  // SAFETY: We hold a read lock which we obtained (and then leaked) in the statement above
+        
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
         // Increment active count
         self.0.active_count.fetch_add(1, Ordering::Acquire);
@@ -222,8 +226,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
            Note: Reader count no longer includes the upgradeable guard (however since we have an upgradeable guard, this returns Err(x))
         */
         loop {
-            // Safety: .raw() shouldn't be unsafe due to allowing you to unlock it as the unlock...() functions are already unsafe! (as is poking at implementation details)
-            let reader_count = unsafe{self.0.raw()}.reader_count().err().unwrap();
+            let reader_count = self.0.raw().reader_count().err().unwrap();
             core::sync::atomic::compiler_fence(Ordering::SeqCst);
             let active_count = self.0.active_count.load(Ordering::Acquire);
             if reader_count <= (active_count+1).into() {

@@ -74,6 +74,13 @@ impl<T> HRwLock<T> {
         readers.is_err() || readers.unwrap() > 0
     }
     
+    pub unsafe fn force_unlock_read(&self) {
+        self.0.force_unlock_read()
+    }
+    pub fn data_ptr(&self) -> *mut T {
+        self.0.data_ptr()
+    }
+    
     inherit_lock_fn!(pub fn try_read(&self) -> try(HRwLockReadGuard<'_,T>));
     inherit_lock_fn!(pub fn read(&self) -> block(HRwLockReadGuard<'_,T>; using try_read; relax while self.is_locked_exclusively()));
     pub fn try_write(&self) -> Option<HRwLockWriteGuard<'_,T>> {
@@ -137,5 +144,16 @@ impl<'a,T> HRwLockWriteGuard<'a,T> {
     }
     pub fn try_map<U>(s:Self,f:impl FnOnce(&mut T)->Option<&mut U>) -> Result<MappedHRwLockWriteGuard<'a,U>,Self> {
         kspin::KRwLockWriteGuard::try_map(s.0,f).map_err(|wg|Self(wg))
+    }
+}
+impl<T> core::ops::Deref for HRwLockWriteGuard<'_,T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+impl<T> core::ops::DerefMut for HRwLockWriteGuard<'_,T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.deref_mut()
     }
 }

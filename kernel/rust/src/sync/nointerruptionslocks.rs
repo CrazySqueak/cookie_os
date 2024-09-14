@@ -114,6 +114,9 @@ impl<T,S:MutexStrategy> NIMutex<T,S> {
     pub unsafe fn force_unlock(&self) {
         self.0.force_unlock()
     }
+    pub fn data_ptr(&self) -> *mut T {
+        self.0.data_ptr()
+    }
     
     ni_wrap_lock!(pub fn lock(&self) -> wrap(BaseMutexGuard<'_,T,S>));
     ni_wrap_lock!(pub fn try_lock(&self) -> wrap_Option(BaseMutexGuard<'_,T,S>));
@@ -147,6 +150,13 @@ impl<T,S:RwLockStrategy> NIRwLock<T,S> {
     }
     pub fn is_locked_exclusively(&self) -> bool {
         self.raw().is_locked_exclusively()
+    }
+    
+    pub unsafe fn force_unlock_read(&self) {
+        self.0.force_unlock_read()
+    }
+    pub fn data_ptr(&self) -> *mut T {
+        self.0.data_ptr()
     }
     
     ni_wrap_lock!(pub fn read(&self) -> wrap(BaseRwLockReadGuard<'_,T,S>));

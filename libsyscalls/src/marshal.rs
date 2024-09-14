@@ -46,12 +46,13 @@ macro_rules! ffi_enum {
                 $(#[$vattrs:meta])*
                 $vname:ident
                 $( = $empty_vtag:literal )?
-                $( ($tuple_vtag:literal, $($tuple_itype:ty),+ $(,)?) )?
+                $( ($tuple1_vtag:literal, $tuple1_itype:ty $(,)?) )?
                 $( {$struct_vtag:literal, $($struct_iname:ident : $struct_itype:ty),+ $(,)?} )?
             ),+
             $(,)?
         }
     } => {
+        // $( ($tuple_vtag:literal, $($tuple_itype:ty),+ $(,)?) )?
         mod $mname {
             #![allow(non_snake_case)]
             // Tags
@@ -60,7 +61,7 @@ macro_rules! ffi_enum {
                     $(
                         $vname = 
                         $($empty_vtag)?
-                        $($tuple_vtag)?
+                        $($tuple1_vtag)?
                         $($struct_vtag)?
                     ),+
                 }
@@ -81,7 +82,7 @@ macro_rules! ffi_enum {
                         }
                     )?
                     $(
-                        pub type Item = ($($tuple_itype,)+);
+                        pub type Item = $tuple1_itype;
                         pub type ItemFFI = <Item as $crate::safety::SyscallFFIMarshallable>::As;
                     )?
                     $(
@@ -116,7 +117,7 @@ macro_rules! ffi_enum {
                 $(
                     $(#[$vattrs])*
                     $vname
-                    $( ($($tuple_itype),+) )?
+                    $( ($tuple1_itype) )?
                     $( {$($struct_iname: $struct_itype),+} )?
                 ),+
             }
@@ -127,16 +128,30 @@ macro_rules! ffi_enum {
                         $(
                             Rust::$vname
                             
-                            $( {$($struct_iname),+} )?
-                            => {
-                                (
+                            $(
+                                => {(
                                     Tag::$vname,
-                                    Item { $vname: ::core::mem::ManuallyDrop::new(
-                                        $( $vname::new_ffi($empty_vtag) )?
-                                        $( $crate::safety::SyscallFFIMarshallable::marshall($vname::Item { $($struct_iname),+ }) )?
+                                    Item { $vname: core::mem::ManuallyDrop::new(
+                                        $vname::new_ffi($empty_vtag)
                                     )},
-                                )
-                            }
+                                )}
+                            )?
+                            $(
+                                (item) => {(
+                                    Tag::$vname,
+                                    Item { $vname: core::mem::ManuallyDrop::new(
+                                        <$tuple1_itype as $crate::safety::SyscallFFIMarshallable>::marshall(item)
+                                    )},
+                                )}
+                            )?
+                            $(
+                                {$($struct_iname),+} => {(
+                                    Tag::$vname,
+                                    Item { $vname: core::mem::ManuallyDrop::new(
+                                        $crate::safety::SyscallFFIMarshallable::marshall($vname::Item { $($struct_iname),+ })
+                                    )},
+                                )}
+                            )?
                         ),+
                     };
                     $crate::safety::SyscallFFIMarshallable::marshall((tag,item))
@@ -157,6 +172,11 @@ macro_rules! ffi_enum {
                                 Some(Rust::$vname)
                             )?
                             $(
+                                // 1-tuple variant
+                                let item: $tuple1_itype = _item;
+                                Some(Rust::$vname(item))
+                            )?
+                            $(
                                 // Struct variant
                                 let $vname::Item { $($struct_iname),+ } = _item;
                                 Some(Rust::$vname { $($struct_iname),+ })
@@ -166,6 +186,7 @@ macro_rules! ffi_enum {
                 }
             }
         }
+        $vis use $mname::Rust as $name;
     };
 }
 // Rust doesn't allow commenting macros, but we accept any of the three enum member syntaxes
@@ -184,9 +205,10 @@ ffi_enum! {
     pub(crate) extern(u16) union(internals=mod exun) enum ExampleUnion {
         Empty = 0,
         
-        // Tuple1(1, u32),
-        // Tuple2(2, u32, bool),
-        // Tuple3(3, bool, bool,),
+        Tuple1(1, u32),
+        Tuple2(2, (u32, bool)),
+        Tuple3(3, (bool, bool,)),
+        Tuple4(7, (bool, bool),),
         
         Struct1{4, x: u32},
         Struct2{5, x: u32, y: u32},

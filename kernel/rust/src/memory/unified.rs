@@ -5,7 +5,7 @@ use alloc::sync::{Arc,Weak};
 use super::paging::AnyPageAllocation;
 use super::physical::PhysicalMemoryAllocation;
 use bitflags::bitflags;
-use crate::sync::hspin::{HRwLock};
+use crate::sync::hspin::{HRwLock,HRwLockWriteGuard};
 
 use super::paging::{global_pages::KERNEL_PTABLE,strategy::KALLOCATION_KERNEL_GENERALDYN};
 
@@ -90,23 +90,33 @@ impl VirtualAllocation {
     }
 }
 
-pub struct CombinedAllocation {  // vmem is placed before pmem as part of drop order - physical memory must be freed last
+pub struct CombinedAllocationInner {  // vmem is placed before pmem as part of drop order - physical memory must be freed last
     vmem: Vec<Option<VirtualAllocation>>,  // indicies must always point to the same allocation, so we instead tombstone empty slots
     physical: Option<PhysicalAllocation>,
     swap: Option<()>,  // swap isn't supported yet
     // todo: general flags
-    
-    self_arc: CombinedAllocationWeak,
 }
+pub struct CombinedAllocation(HRwLock<CombinedAllocationInner>);
 impl CombinedAllocation {  // TODO: Figure out visibility n stuff
+    fn new() -> Arc<Self> {
+        Arc::new(Self(HRwLock::new(CombinedAllocationInner{
+            physical: None,
+            vmem: Vec::new(),
+            swap: None,
+        })))
+    }
+    
     /// Set the current physical allocation, dropping the old one
-    fn set_physical(&mut self, new: Option<PhysicalAllocation>) {
+    fn set_physical(self: &Arc<Self>, new: Option<PhysicalAllocation>) {
+        let mut inner = self.0.write();
         // Clear the old allocation
-        let old = core::mem::replace(&mut self.physical, new);
+        let old = core::mem::replace(&mut inner.physical, new);
         drop(old);
+        // (downgrade the guard)
+        let inner = HRwLockWriteGuard::downgrade(inner);
         // Re-map all pages to point to it
-        let vmem = self.vmem.iter().flatten();
-        match self.physical {
+        let vmem = inner.vmem.iter().flatten();
+        match inner.physical {
             Some(ref new) => {
                 for valloc in vmem {
                     valloc.map(new.start_addr())
@@ -120,34 +130,33 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         }
     }
     /// Add a new virtual allocation, returning a corresponding guard
-    fn add_virtual(&mut self, virt: VirtualAllocation) -> VirtAllocationGuard {
+    fn add_virtual(self: &Arc<Self>, virt: VirtualAllocation) -> VirtAllocationGuard {
+        let mut inner = self.0.write();
         // Try overwriting a tombstoned one
-        let index = self.vmem.iter().position(|i|i.is_none()).ok_or(self.vmem.len());
+        let index = inner.vmem.iter().position(|i|i.is_none()).ok_or(inner.vmem.len());
         // Ok(x) = overwrite, Err(x) = push
         let index = match index {
-            Ok(index) => { self.vmem[index] = Some(virt); index },
-            Err(new_index) => { self.vmem.push(Some(virt)); new_index },
+            Ok(index) => { inner.vmem[index] = Some(virt); index },
+            Err(new_index) => { inner.vmem.push(Some(virt)); new_index },
         };
         // Return a guard
         VirtAllocationGuard {
-            allocation: CombinedAllocationWeak::upgrade(&self.self_arc).unwrap(),
+            allocation: Arc::clone(self),
             index,
         }
     }
 }
-type CombinedAllocationRc = Arc<HRwLock<CombinedAllocation>>;
-type CombinedAllocationWeak = Weak<HRwLock<CombinedAllocation>>;
 
 /// A guard corresponding to a given virtual memory allocation + its unified counterpart
 pub struct VirtAllocationGuard {
-    allocation: CombinedAllocationRc,
+    allocation: Arc<CombinedAllocation>,
     index: usize,
 }
 // TODO
 impl Drop for VirtAllocationGuard {
     fn drop(&mut self) {
         // Clear our virtual allocation
-        let mut guard = self.allocation.write();
+        let mut guard = self.allocation.0.write();
         let vmem_allocation = guard.vmem[self.index].take();
         // Drop the guard first (now that we've tombstoned our slot in the allocation)
         drop(guard);

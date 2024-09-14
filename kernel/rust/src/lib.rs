@@ -6,6 +6,7 @@
 #![feature(vec_pop_if)]
 #![feature(new_uninit)]
 #![feature(asm_const)]
+#![feature(try_blocks)]
 
 // i'm  exhausted by these warnings jeez
 #![allow(unused_imports)]

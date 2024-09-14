@@ -620,6 +620,13 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
         // TODO
     }
     
+    /// Normalize this allocation, setting base to be equal to start
+    /// This is necessary for managing allocations as part of a complex allocator,
+    /// but may get in the way of attempts to offset-map addresses that aren't page-aligned
+    pub fn normalize(&mut self) {
+        self.baseaddr_offset = 0;
+    }
+    
     /* Deliberately leak the allocation, without freeing it.
        Use this instead of core::mem::forget, as this makes sure to drop the Arc<> which means the page table will be dropped when appropriate. */
     pub fn leak(self) -> (PartialPageAllocation, LockedPageAllocator<PFA>, LPAMetadata) {
@@ -675,6 +682,10 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
         let result = allocator.write_when_active().split_allocation(self, mid);
         result
     }
+    pub fn alloc_downwards(&self, size: usize) -> Option<Self> {
+        let start = self.start()-size;
+        self.allocator.allocate_at(start, size)
+    }
 }
 impl<PFA:PageFrameAllocator> core::ops::Drop for PageAllocation<PFA> {
     fn drop(&mut self){
@@ -693,22 +704,43 @@ impl<PFA:PageFrameAllocator> core::fmt::Debug for PageAllocation<PFA> {
     }
 }
 
+use alloc::boxed::Box;
 /* Any page allocation, regardless of PFA. */
 pub trait AnyPageAllocation: core::fmt::Debug + Send {
+    fn normalize(&mut self);
+    
     fn start(&self) -> usize;
     fn end(&self) -> usize;
     fn size(&self) -> usize;
     fn set_base_addr(&self, base_addr: usize, flags: PageFlags);
     fn set_absent(&self, data: usize);
     fn flush_tlb(&self);
+    
+    /// Split this page allocation in half
+    fn split_dyn(self, mid: usize) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>);
+    /// Allocate more virtual memory directly below this allocation
+    /// This is made available as a new allocation
+    fn alloc_downwards_dyn(&self, size: usize) -> Option<Box<dyn AnyPageAllocation>>;
 }
-impl<PFA:PageFrameAllocator + Send + Sync> AnyPageAllocation for PageAllocation<PFA> {
+impl<PFA:PageFrameAllocator + Send + Sync + 'static> AnyPageAllocation for PageAllocation<PFA> {
+    fn normalize(&mut self){ self.normalize() }
+    
     fn start(&self) -> usize { self.start() }
     fn end(&self) -> usize { self.end() }
     fn size(&self) -> usize { self.size() }
     fn set_base_addr(&self, base_addr: usize, flags: PageFlags) { self.set_base_addr(base_addr, flags) }
     fn set_absent(&self, data: usize) { self.set_absent(data) }
     fn flush_tlb(&self) { self.flush_tlb() }
+    
+    // Note: Self is not always Sized
+    fn split_dyn(self, mid: usize) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>) {
+        let (left, right) = self.split(mid);
+        (Box::new(left) as Box<dyn AnyPageAllocation>,
+         Box::new(right) as Box<dyn AnyPageAllocation>)
+    }
+    fn alloc_downwards_dyn(&self, size: usize) -> Option<Box<dyn AnyPageAllocation>> {
+        self.alloc_downwards(size).map(|pa|Box::new(pa) as Box<dyn AnyPageAllocation>)
+    }
 }
 
 pub type TopLevelPageAllocation = PageAllocation<BaseTLPageAllocator>;

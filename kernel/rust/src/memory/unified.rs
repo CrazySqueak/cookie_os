@@ -94,18 +94,33 @@ pub struct CombinedAllocationInner {  // vmem is placed before pmem as part of d
     vmem: Vec<Option<VirtualAllocation>>,  // indicies must always point to the same allocation, so we instead tombstone empty slots
     physical: Option<PhysicalAllocation>,
     swap: Option<()>,  // swap isn't supported yet
+    
+    /// Size in bytes
+    size: usize,
     // todo: general flags
 }
 pub struct CombinedAllocation(HRwLock<CombinedAllocationInner>);
 impl CombinedAllocation {  // TODO: Figure out visibility n stuff
-    fn new() -> Arc<Self> {
+    pub fn new(backing: PhysicalMemoryAllocation) -> Arc<Self> {
         Arc::new(Self(HRwLock::new(CombinedAllocationInner{
-            physical: None,
+            size: backing.get_size(),
+            
+            physical: Some(PhysicalAllocation::new(backing, PMemFlags::empty())),
             vmem: Vec::new(),
             swap: None,
         })))
     }
     
+    fn _map_to_current(self: &Arc<Self>, inner: &impl core::ops::Deref<Target=CombinedAllocationInner>, valloc: &VirtualAllocation){
+        match inner.physical {
+            Some(ref phys) => {
+                valloc.map(phys.start_addr());  // TODO: handle baseaddr_offset??
+            },
+            None => {
+                valloc.set_absent(0);  // TODO: data
+            },
+        }
+    }
     /// Set the current physical allocation, dropping the old one
     fn set_physical(self: &Arc<Self>, new: Option<PhysicalAllocation>) {
         let mut inner = self.0.write();
@@ -115,22 +130,15 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         // (downgrade the guard)
         let inner = HRwLockWriteGuard::downgrade(inner);
         // Re-map all pages to point to it
-        let vmem = inner.vmem.iter().flatten();
-        match inner.physical {
-            Some(ref new) => {
-                for valloc in vmem {
-                    valloc.map(new.start_addr())
-                }
-            },
-            None => {
-                for valloc in vmem {
-                    valloc.set_absent(0);  // TODO: data
-                }
-            },
-        }
+        inner.vmem.iter().flatten().for_each(|valloc|self._map_to_current(&inner,valloc));
     }
     /// Add a new virtual allocation, returning a corresponding guard
-    fn add_virtual(self: &Arc<Self>, virt: VirtualAllocation) -> VirtAllocationGuard {
+    pub fn add_virtual_mapping(self: &Arc<Self>, virt: impl AnyPageAllocation + 'static, page_flags: VMemFlags) -> VirtAllocationGuard {
+        // Create allocation object
+        let virt = VirtualAllocation::new(virt, page_flags);
+        assert!(virt.allocation.size() == self.size());  // size must be exactly equal (TODO: find a better way to check this)
+        
+        // Add to the list
         let mut inner = self.0.write();
         // Try overwriting a tombstoned one
         let index = inner.vmem.iter().position(|i|i.is_none()).ok_or(inner.vmem.len());
@@ -139,11 +147,20 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
             Ok(index) => { inner.vmem[index] = Some(virt); index },
             Err(new_index) => { inner.vmem.push(Some(virt)); new_index },
         };
+        
+        // Map to current physical
+        let inner = HRwLockWriteGuard::downgrade(inner);
+        self._map_to_current(&inner, inner.vmem[index].as_ref().unwrap());
+        
         // Return a guard
         VirtAllocationGuard {
             allocation: Arc::clone(self),
             index,
         }
+    }
+    
+    pub fn size(self: &Arc<Self>) -> usize {
+        self.0.read().size
     }
 }
 

@@ -109,7 +109,7 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
         self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);  // set addr
     }
     fn set_absent(&mut self, idx: usize, data: usize){
-        let data = data.checked_shl(1).expect("Data value is out-of-bounds!") &!1;  // clear the "present" flag
+        let data = data.checked_shl(1).expect("Data value is out-of-bounds!") &!1;  // clear the "present" flag (TODO: reserve bit 2 for "is swapped out" / "is guard")
         klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping entry {:x}[{}] to N/A (data={:x})", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, data);
         unsafe { *((&mut self.0[idx] as *mut PageTableEntry) as *mut u64) = data as u64; }  // Update entry manually
     }
@@ -135,6 +135,8 @@ pub const MIN_PAGE_SIZE: usize = X64Level1::PAGE_SIZE;
 
 // Kernel Stack: In the kernel page
 pub const KALLOCATION_KERNEL_STACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true), PageAllocationStrategy::new_default().reverse_order(true).spread_mode(true), PageAllocationStrategy::new_default().reverse_order(true)];
+// Kernel Dynamic Allocations (general usage)
+pub const KALLOCATION_KERNEL_GENERALDYN: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true)];
 // Kernel Dynamic Allocations in the MMIO Page: In the mmio page, in reverse order to avoid clashing with offset mapped stuff
 pub const KALLOCATION_DYN_MMIO: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true), PageAllocationStrategy::new_default()];
 

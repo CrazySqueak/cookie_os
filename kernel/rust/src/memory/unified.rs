@@ -98,11 +98,13 @@ pub struct CombinedAllocationSegment {  // vmem is placed before pmem as part of
     
     /// Size in bytes
     size: usize,
-    // todo: general flags
 }
 pub struct CombinedAllocationInner {
     sections: VecDeque<CombinedAllocationSegment>,  // a series of consecutive allocations in virtual memory, sorted in order of start address (from lowest to highest)
     available_virt_slots: Vec<bool>,
+    
+    physical_alloc_flags: PMemFlags,
+    // todo: general flags
 }
 pub struct CombinedAllocation(HMutex<CombinedAllocationInner>);
 impl CombinedAllocation {  // TODO: Figure out visibility n stuff
@@ -159,11 +161,8 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         }
         
         // Allocate backing (physical memory)
-        let phys_flags = inner.sections[0].physical.as_ref().map(|p|p.flags).unwrap_or_else(PMemFlags::empty);  // todo: store elsewhere?
-        new_section.physical = palloc(layout).map(|phys_raw|PhysicalAllocation{
-            allocation: phys_raw,
-            flags: phys_flags,
-        });
+        let phys_flags = inner.physical_alloc_flags;
+        new_section.physical = palloc(layout).map(|phys_raw|PhysicalAllocation::new(phys_raw, phys_flags));
         
         // Update mappings
         self._update_mappings_section(&new_section);

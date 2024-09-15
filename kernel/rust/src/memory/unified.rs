@@ -217,8 +217,7 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         inner.sections.push_front(new_section);
     }
     
-    /// Map this into virtual memory in the given allocator
-    pub fn map_virtual<PFA:PageFrameAllocator+Send+Sync+'static>(self: &Arc<Self>, allocator: &LockedPageAllocator<PFA>, strategy: PageAllocationStrategies, flags: VMemFlags) -> Option<VirtAllocationGuard> {
+    fn map_virtual_inner<PFA:PageFrameAllocator+Send+Sync+'static>(self: &Arc<Self>, valloc:impl FnOnce(Option<usize>,usize)->Option<PageAllocation<PFA>>, flags: VMemFlags) -> Option<VirtAllocationGuard> {
         let mut inner = self.0.lock(); let n_sections = inner.sections.len();
         // Sum size and determine split positions
         let mut total_size = 0;
@@ -229,9 +228,10 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         }
         let _=split_lengths.pop();  // Pop the final one as it isn't needed
         
+        let phys_addr = inner.sections[0].physical.as_ref().map(|p|p.start_addr());  // (used by valloc)
         // Allocate one big block of [SIZE], then split it into each section
         let mut lhs: PageAllocation<PFA>;
-        let mut remainder = allocator.allocate(total_size, strategy)?; remainder.normalize();
+        let mut remainder = valloc(phys_addr,total_size)?; remainder.normalize();
         let mut section_allocs = Vec::<PageAllocation<PFA>>::new();
         for split_size in split_lengths {
             (lhs, remainder) = remainder.split(split_size);
@@ -273,6 +273,14 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         self._update_mappings_valloc(&inner.sections, index);
         // And return a guard
         Some(VirtAllocationGuard { allocation: Arc::clone(self), index: index })
+    }
+    /// Map this into virtual memory in the given allocator
+    pub fn map_virtual<PFA:PageFrameAllocator+Send+Sync+'static>(self: &Arc<Self>, allocator: &LockedPageAllocator<PFA>, strategy: PageAllocationStrategies, flags: VMemFlags) -> Option<VirtAllocationGuard> {
+        self.map_virtual_inner(|_phys_start,total_size|allocator.allocate(total_size,strategy), flags)
+    }
+    /// Map this into virtual memory, in the given allocator, at the given offset
+    pub fn map_virtual_offset<PFA:PageFrameAllocator+Send+Sync+'static>(self: &Arc<Self>, allocator: &LockedPageAllocator<PFA>, offset: usize, flags: VMemFlags) -> Option<VirtAllocationGuard> {
+        self.map_virtual_inner(|phys_start,total_size|allocator.allocate_at(phys_start?+offset, total_size), flags)
     }
 }
 
@@ -321,7 +329,7 @@ impl super::alloc_util::AnyAllocatedStack for VirtAllocationGuard {
     fn expand(&mut self, bytes: usize) -> bool {
         let start = self.start_addr();
         self.combined_allocation().expand_downwards(bytes);  // on success, this will change our start_addr
-        start == self.start_addr()
+        start != self.start_addr()
     }
 }
 impl core::fmt::Debug for VirtAllocationGuard {

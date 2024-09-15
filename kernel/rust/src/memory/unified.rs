@@ -6,7 +6,7 @@ use alloc::sync::{Arc,Weak};
 use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,MIN_PAGE_SIZE};
 use super::physical::{PhysicalMemoryAllocation,palloc};
 use bitflags::bitflags;
-use crate::sync::hspin::{HMutex};
+use crate::sync::hspin::{HMutex,HMutexGuard};
 
 use super::paging::{global_pages::KERNEL_PTABLE,strategy::KALLOCATION_KERNEL_GENERALDYN,strategy::PageAllocationStrategies};
 
@@ -58,6 +58,9 @@ impl PhysicalAllocation {
     pub fn size(&self) -> usize {
         self.allocation.get_size()
     }
+    pub fn end_addr(&self) -> usize {
+        self.allocation.get_addr() + self.allocation.get_size()
+    }
 }
 impl core::ops::Drop for PhysicalAllocation {
     fn drop(&mut self) {
@@ -89,6 +92,16 @@ impl VirtualAllocation {
         // TODO: Figure out what the 'data' argument should be
         self.allocation.set_absent(data);
     }
+    
+    pub fn start_addr(&self) -> usize {
+        self.allocation.start()
+    }
+    pub fn size(&self) -> usize {
+        self.allocation.size()
+    }
+    pub fn end_addr(&self) -> usize {
+        self.allocation.end()
+    }
 }
 // NOTE: CombinedAllocation must ALWAYS be locked BEFORE any page allocators (if you are nesting the locks, which isn't recommended but often necessary)!!
 pub struct CombinedAllocationSegment {  // vmem is placed before pmem as part of drop order - physical memory must be freed last
@@ -108,6 +121,31 @@ pub struct CombinedAllocationInner {
 }
 pub struct CombinedAllocation(HMutex<CombinedAllocationInner>);
 impl CombinedAllocation {  // TODO: Figure out visibility n stuff
+    pub fn new_from_phys(alloc: PhysicalMemoryAllocation, phys_flags: PMemFlags) -> Arc<Self> {
+        Arc::new(Self(HMutex::new(CombinedAllocationInner{
+            sections: VecDeque::from([CombinedAllocationSegment{
+                    size: alloc.get_size(),
+                    physical: Some(PhysicalAllocation::new(
+                        alloc, phys_flags,
+                    )),
+                    vmem: Vec::new(),
+                    swap: None,
+                }]),
+            available_virt_slots: Vec::new(),
+            
+            physical_alloc_flags: phys_flags,
+        })))
+    }
+    pub fn alloc_new_phys(size: usize, phys_flags: PMemFlags) -> Option<Arc<Self>> {
+        let layout = core::alloc::Layout::from_size_align(size, MIN_PAGE_SIZE).unwrap().pad_to_align();
+        let phys_allocation = palloc(layout)?;
+        Some(Self::new_from_phys(phys_allocation,phys_flags))
+    }
+    pub fn alloc_new_phys_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, phys_flags: PMemFlags, allocator: &LockedPageAllocator<PFA>, strategy: PageAllocationStrategies, virt_flags: VMemFlags) -> Option<VirtAllocationGuard> {
+        let allocation = Self::alloc_new_phys(size, phys_flags)?;
+        allocation.map_virtual(allocator, strategy, virt_flags)
+    }
+    
     fn _map_to_current(self: &Arc<Self>, section: &CombinedAllocationSegment, valloc: &VirtualAllocation){
         match section.physical {
             Some(ref phys) => {
@@ -152,7 +190,7 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
                 expansion.normalize();
                 // Adjust size if necessary
                 //if new_section.size == 0 { new_section.size = expansion.size(); }
-                assert!(new_section.size == expansion.size());
+                assert!(expansion.size() <= new_section.size);
                 // Carry across flags from the lowest vmem allocation in the section
                 let virt_flags = previous_bottom.flags.clone();
                 // Return new allocation
@@ -282,7 +320,23 @@ pub struct VirtAllocationGuard {
     allocation: Arc<CombinedAllocation>,
     index: usize,
 }
-// TODO
+impl VirtAllocationGuard {
+    pub fn combined_allocation(&self) -> &Arc<CombinedAllocation> {
+        &self.allocation
+    }
+    fn combined_allocation_inner(&self) -> HMutexGuard<'_,CombinedAllocationInner> {
+        core::ops::Deref::deref(&self.allocation).0.lock()
+    }
+    
+    pub fn start_addr(&self) -> usize {
+        let inner = self.combined_allocation_inner();
+        inner.sections.iter().map(|s|&s.vmem[self.index]).flatten().next().unwrap().start_addr()
+    }
+    pub fn end_addr(&self) -> usize {
+        let inner = self.combined_allocation_inner();
+        inner.sections.iter().map(|s|&s.vmem[self.index]).flatten().next_back().unwrap().end_addr()
+    }
+}
 impl Drop for VirtAllocationGuard {
     fn drop(&mut self) {
         // Clear our virtual allocations and free the slot
@@ -297,3 +351,20 @@ impl Drop for VirtAllocationGuard {
     }
 }
 impl !Clone for VirtAllocationGuard{}
+
+impl super::alloc_util::AnyAllocatedStack for VirtAllocationGuard {
+    // assumes the stack grows downwards
+    fn bottom_vaddr(&self) -> usize {
+        self.start_addr()
+    }
+    fn expand(&mut self, bytes: usize) -> bool {
+        let start = self.start_addr();
+        self.combined_allocation().expand_downwards(bytes);  // on success, this will change our start_addr
+        start == self.start_addr()
+    }
+}
+impl core::fmt::Debug for VirtAllocationGuard {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "VirtAllocationGuard [ {:x}..{:x} ]", self.start_addr(), self.end_addr())
+    } 
+}

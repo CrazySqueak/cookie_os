@@ -1,15 +1,17 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use alloc::collections::VecDeque;
 use alloc::sync::{Arc,Weak};
-use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation};
-use super::physical::PhysicalMemoryAllocation;
+use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,MIN_PAGE_SIZE};
+use super::physical::{PhysicalMemoryAllocation,palloc};
 use bitflags::bitflags;
 use crate::sync::hspin::{HMutex};
 
 use super::paging::{global_pages::KERNEL_PTABLE,strategy::KALLOCATION_KERNEL_GENERALDYN,strategy::PageAllocationStrategies};
 
 bitflags! {
+    #[derive(Clone,Copy)]
     pub struct PMemFlags: u32 {
         /// Zero out the memory upon allocating it
         const INIT_ZEROED = 1<<0;
@@ -80,7 +82,6 @@ impl VirtualAllocation {
     }
     /// Map to a given physical address
     pub fn map(&self, phys_addr: usize) {
-        // TODO: Handle baseaddr_offset???
         self.allocation.set_base_addr(phys_addr, self.flags);
     }
     /// Set as absent
@@ -100,21 +101,44 @@ pub struct CombinedAllocationSegment {  // vmem is placed before pmem as part of
     // todo: general flags
 }
 pub struct CombinedAllocationInner {
-    sections: Vec<CombinedAllocationSegment>,  // a series of consecutive allocations in virtual memory, sorted in order of start address (from lowest to highest)
+    sections: VecDeque<CombinedAllocationSegment>,  // a series of consecutive allocations in virtual memory, sorted in order of start address (from lowest to highest)
     available_virt_slots: Vec<bool>,
 }
 pub struct CombinedAllocation(HMutex<CombinedAllocationInner>);
 impl CombinedAllocation {  // TODO: Figure out visibility n stuff
+    fn _map_to_current(self: &Arc<Self>, section: &CombinedAllocationSegment, valloc: &VirtualAllocation){
+        match section.physical {
+            Some(ref phys) => {
+                valloc.map(phys.start_addr());  // valloc is normalized upon being added to the combinedallocation so we don't need to account for baseaddr_offset
+            },
+            None => {
+                valloc.set_absent(0);  // TODO: data
+            },
+        }
+    }
+    fn _update_mappings_section(self: &Arc<Self>, section: &CombinedAllocationSegment){
+        for valloc in section.vmem.iter().flatten() {
+            self._map_to_current(section, valloc);
+        }
+    }
+    fn _update_mappings_valloc(self: &Arc<Self>, sections: &VecDeque<CombinedAllocationSegment>, valloc_idx: usize){
+        for section in sections.iter() {
+            let Some(valloc) = section.vmem[valloc_idx].as_ref() else { continue };
+            self._map_to_current(section, valloc);
+        }
+    }
+    
     /// Allocate more memory, expanding downwards
-    pub fn expand_downwards(self: &Arc<Self>, size: usize) {
+    pub fn expand_downwards(self: &Arc<Self>, size_bytes: usize) {
         let mut inner = self.0.lock();
+        let layout = core::alloc::Layout::from_size_align(size_bytes, MIN_PAGE_SIZE).unwrap().pad_to_align();
         // Begin setting up new section
         let mut new_section = CombinedAllocationSegment {
             vmem: Vec::with_capacity(inner.available_virt_slots.len()),
             physical: None,
             swap: None,
             
-            size: 0,
+            size: layout.size(),
         };
         // Populate virtual memory allocations
         for (index, active) in inner.available_virt_slots.iter().enumerate() {
@@ -122,10 +146,10 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
                 if !active { None? }
                 let previous_bottom = inner.sections[0].vmem[index].as_ref()?;
                 // Expand vmem allocation
-                let mut expansion = previous_bottom.allocation.alloc_downwards_dyn(size)?;
+                let mut expansion = previous_bottom.allocation.alloc_downwards_dyn(new_section.size)?;
                 expansion.normalize();
                 // Adjust size if necessary
-                if new_section.size == 0 { new_section.size = expansion.size(); }
+                //if new_section.size == 0 { new_section.size = expansion.size(); }
                 assert!(new_section.size == expansion.size());
                 // Carry across flags from the lowest vmem allocation in the section
                 let virt_flags = previous_bottom.flags.clone();
@@ -133,10 +157,18 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
                 VirtualAllocation { allocation: expansion, flags: virt_flags }
             });
         }
-        // TODO: Allocate backing
         
+        // Allocate backing (physical memory)
+        let phys_flags = inner.sections[0].physical.as_ref().map(|p|p.flags).unwrap_or_else(PMemFlags::empty);  // todo: store elsewhere?
+        new_section.physical = palloc(layout).map(|phys_raw|PhysicalAllocation{
+            allocation: phys_raw,
+            flags: phys_flags,
+        });
+        
+        // Update mappings
+        self._update_mappings_section(&new_section);
         // And append
-        inner.sections.insert(0, new_section);  // TODO: Determine whether it's better to use a VecDeque to store sections (consider indexing performance vs push_front performance?)
+        inner.sections.push_front(new_section);
     }
     
     /// Map this into virtual memory in the given allocator
@@ -171,8 +203,6 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
             });
         }
         
-        // TODO: Set allocation addresses or whatever
-        
         // Try overwriting a tombstoned slot
         let index = inner.available_virt_slots.iter().position(|i|*i).ok_or(inner.available_virt_slots.len());
         // Ok(x) = overwrite, Err(x) = push
@@ -193,6 +223,8 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
             },
         };
         
+        // Update mappings
+        self._update_mappings_valloc(&inner.sections, index);
         // And return a guard
         Some(VirtAllocationGuard { allocation: Arc::clone(self), index: index })
     }
@@ -205,17 +237,7 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
     //         swap: None,
     //     })))
     // }
-    // 
-    // fn _map_to_current(self: &Arc<Self>, inner: &impl core::ops::Deref<Target=CombinedAllocationInner>, valloc: &VirtualAllocation){
-    //     match inner.physical {
-    //         Some(ref phys) => {
-    //             valloc.map(phys.start_addr());  // TODO: handle baseaddr_offset??
-    //         },
-    //         None => {
-    //             valloc.set_absent(0);  // TODO: data
-    //         },
-    //     }
-    // }
+    
     // /// Set the current physical allocation, dropping the old one
     // fn set_physical(self: &Arc<Self>, new: Option<PhysicalAllocation>) {
     //     let mut inner = self.0.lock();

@@ -103,6 +103,14 @@ impl VirtualAllocation {
         self.allocation.end()
     }
 }
+
+bitflags! {
+    #[derive(Clone,Copy,Debug)]
+    pub struct AllocationFlags : u32 {
+        /// This may not be un-mapped from physical memory, or moved around within physical memory
+        const STICKY = 1<<0;
+    }
+}
 // NOTE: CombinedAllocation must ALWAYS be locked BEFORE any page allocators (if you are nesting the locks, which isn't recommended but often necessary)!!
 pub struct CombinedAllocationSegment {  // vmem is placed before pmem as part of drop order - physical memory must be freed last
     vmem: Vec<Option<VirtualAllocation>>,  // indicies must always point to the same allocation, so we instead tombstone empty slots
@@ -117,11 +125,11 @@ pub struct CombinedAllocationInner {
     available_virt_slots: Vec<bool>,
     
     physical_alloc_flags: PMemFlags,
-    // todo: general flags
+    allocation_flags: AllocationFlags,
 }
 pub struct CombinedAllocation(HMutex<CombinedAllocationInner>);
 impl CombinedAllocation {  // TODO: Figure out visibility n stuff
-    pub fn new_from_phys(alloc: PhysicalMemoryAllocation, phys_flags: PMemFlags) -> Arc<Self> {
+    pub fn new_from_phys(alloc: PhysicalMemoryAllocation, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
         Arc::new(Self(HMutex::new(CombinedAllocationInner{
             sections: VecDeque::from([CombinedAllocationSegment{
                     size: alloc.get_size(),
@@ -134,15 +142,16 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
             available_virt_slots: Vec::new(),
             
             physical_alloc_flags: phys_flags,
+            allocation_flags: alloc_flags,
         })))
     }
-    pub fn alloc_new_phys(size: usize, phys_flags: PMemFlags) -> Option<Arc<Self>> {
+    pub fn alloc_new_phys(size: usize, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Option<Arc<Self>> {
         let layout = core::alloc::Layout::from_size_align(size, MIN_PAGE_SIZE).unwrap().pad_to_align();
         let phys_allocation = palloc(layout)?;
-        Some(Self::new_from_phys(phys_allocation,phys_flags))
+        Some(Self::new_from_phys(phys_allocation,phys_flags,alloc_flags))
     }
-    pub fn alloc_new_phys_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, phys_flags: PMemFlags, allocator: &LockedPageAllocator<PFA>, strategy: PageAllocationStrategies, virt_flags: VMemFlags) -> Option<VirtAllocationGuard> {
-        let allocation = Self::alloc_new_phys(size, phys_flags)?;
+    pub fn alloc_new_phys_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, phys_flags: PMemFlags, allocator: &LockedPageAllocator<PFA>, strategy: PageAllocationStrategies, virt_flags: VMemFlags, alloc_flags: AllocationFlags) -> Option<VirtAllocationGuard> {
+        let allocation = Self::alloc_new_phys(size, phys_flags, alloc_flags)?;
         allocation.map_virtual(allocator, strategy, virt_flags)
     }
     
@@ -265,54 +274,6 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         // And return a guard
         Some(VirtAllocationGuard { allocation: Arc::clone(self), index: index })
     }
-    // pub fn new(backing: PhysicalMemoryAllocation) -> Arc<Self> {
-    //     Arc::new(Self(HRwLock::new(CombinedAllocationInner{
-    //         size: backing.get_size(),
-    //         
-    //         physical: Some(PhysicalAllocation::new(backing, PMemFlags::empty())),
-    //         vmem: Vec::new(),
-    //         swap: None,
-    //     })))
-    // }
-    
-    // /// Set the current physical allocation, dropping the old one
-    // fn set_physical(self: &Arc<Self>, new: Option<PhysicalAllocation>) {
-    //     let mut inner = self.0.lock();
-    //     // Clear the old allocation
-    //     let old = core::mem::replace(&mut inner.physical, new);
-    //     drop(old);
-    //     // Re-map all pages to point to it
-    //     inner.vmem.iter().flatten().for_each(|valloc|self._map_to_current(&inner,valloc));
-    // }
-    // /// Add a new virtual allocation, returning a corresponding guard
-    // pub fn add_virtual_mapping(self: &Arc<Self>, virt: impl AnyPageAllocation + 'static, page_flags: VMemFlags) -> VirtAllocationGuard {
-    //     // Create allocation object
-    //     let virt = VirtualAllocation::new(virt, page_flags);
-    //     assert!(virt.allocation.size() == self.size());  // size must be exactly equal (TODO: find a better way to check this)
-    //     
-    //     // Add to the list
-    //     let mut inner = self.0.lock();
-    //     // Try overwriting a tombstoned one
-    //     let index = inner.vmem.iter().position(|i|i.is_none()).ok_or(inner.vmem.len());
-    //     // Ok(x) = overwrite, Err(x) = push
-    //     let index = match index {
-    //         Ok(index) => { inner.vmem[index] = Some(virt); index },
-    //         Err(new_index) => { inner.vmem.push(Some(virt)); new_index },
-    //     };
-    //     
-    //     // Map to current physical
-    //     self._map_to_current(&inner, inner.vmem[index].as_ref().unwrap());
-    //     
-    //     // Return a guard
-    //     VirtAllocationGuard {
-    //         allocation: Arc::clone(self),
-    //         index,
-    //     }
-    // }
-    // 
-    // pub fn size(self: &Arc<Self>) -> usize {
-    //     self.0.read().size
-    // }
 }
 
 /// A guard corresponding to a given virtual memory allocation + its unified counterpart

@@ -105,17 +105,22 @@ impl VirtualAllocation {
 }
 #[derive(Debug,Clone,Copy)]
 pub enum VirtualAllocationMode {
-    Free,
     Dynamic { strategy: PageAllocationStrategies<'static> },
     OffsetMapped { offset: usize },
 }
-impl VirtualAllocationMode {
-    pub fn is_free(&self) -> bool {
-        match self {
-            Self::Free => true,
-            _ => false,
-        }
-    }
+
+#[derive(Clone,Copy,Debug)]
+pub enum GuardPageType {
+    StackLimit = 0xF47B33F,  // Fat Beef
+    NullPointer = 0x4E55_4C505452,  // "NULPTR"
+}
+pub enum SwapAllocation {
+    /// Guard page - i.e. the memory doesn't actually exist, but is instead reserved to prevent null pointer derefs, buffer overruns, etc.
+    GuardPage(GuardPageType),
+    /// Uninitialised memory - memory that has been reserved in vmem, but not in pmem
+    Uninitialised,
+    
+    // "real" swap isn't supported yet
 }
 
 bitflags! {
@@ -129,14 +134,14 @@ bitflags! {
 struct CombinedAllocationSegment {  // vmem is placed before pmem as part of drop order - physical memory must be freed last
     vmem: Vec<Option<VirtualAllocation>>,  // indicies must always point to the same allocation, so we instead tombstone empty slots
     physical: Option<PhysicalAllocation>,
-    swap: Option<()>,  // swap isn't supported yet
+    swap: Option<SwapAllocation>,
     
     /// Size in bytes
     size: usize,
 }
 struct CombinedAllocationInner {
     sections: VecDeque<CombinedAllocationSegment>,  // a series of consecutive allocations in virtual memory, sorted in order of start address (from lowest to highest)
-    available_virt_slots: Vec<VirtualAllocationMode>,
+    available_virt_slots: Vec<Option<VirtualAllocationMode>>, // https://godbolt.org/z/3vE4nzzaM - Option<enum X> is optimized to a single tag instead of two (provided there's space)
     
     physical_alloc_flags: PMemFlags,
     allocation_flags: AllocationFlags,
@@ -232,6 +237,34 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         inner.sections.push_front(new_section);
     }
     
+    // TODO: replace `section` with some sort of handle (to avoid race conditions causing OOB / mismatch errors)
+    /// Load a section from swap into physical memory
+    pub fn swap_in(self: &Arc<Self>, section: usize) -> Result<(),SwapInError> {
+        let inner = self.0.lock();
+        let section = &mut inner.sections[section];
+        
+        // Check swap type to ensure it's valid
+        let swap_type = section.swap.as_ref().ok_or(SwapInError::NotInSwap)?;
+        match swap_type {
+            SwapAllocation::GuardPage(gp_type) => SwapInError::GuardPage(gp_type)?,
+            _=>{},
+        }
+        
+        // Allocate physical memory
+        let layout = core::alloc::Layout::from_size_align(section.size, MIN_PAGE_SIZE).unwrap();
+        let phys_allocation = palloc(layout).ok_or(SwapInError::PMemAllocationFail)?;
+        
+        // TODO: Map into virtual memory and write data (if necessary)
+        
+        // Change state
+        section.physical = Some(phys_allocation);
+        section.swap = None;
+        // Update mappings
+        self._update_mappings_section(section);
+        // Done :)
+        Ok(())
+    }
+    
     /// Map this into virtual memory in the given allocator
     pub fn map_virtual<PFA:PageFrameAllocator+Send+Sync+'static>(self: &Arc<Self>, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocationMode, flags: VMemFlags) -> Option<VirtAllocationGuard> {
         let mut inner = self.0.lock(); let n_sections = inner.sections.len();
@@ -247,7 +280,6 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         // Allocate one big block of [SIZE]
         let phys_addr = inner.sections[0].physical.as_ref().map(|p|p.start_addr());
         let virt_allocation = match virt_mode {
-            VirtualAllocationMode::Free => None?,
             VirtualAllocationMode::Dynamic { strategy } => allocator.allocate(total_size,strategy),
             VirtualAllocationMode::OffsetMapped { offset } => allocator.allocate_at(phys_addr?+offset, total_size),
         };
@@ -272,21 +304,21 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         }
         
         // Try overwriting a tombstoned slot
-        let index = inner.available_virt_slots.iter().position(|i|i.is_free()).ok_or(inner.available_virt_slots.len());
+        let index = inner.available_virt_slots.iter().position(|i|i.is_none()).ok_or(inner.available_virt_slots.len());
         // Ok(x) = overwrite, Err(x) = push
         let index = match index {
             Ok(index) => {
                 for (section,virt) in inner.sections.iter_mut().zip(virtual_allocs) {
                     section.vmem[index] = Some(virt);
                 }
-                inner.available_virt_slots[index] = virt_mode;
+                inner.available_virt_slots[index] = Some(virt_mode);
                 index
             },
             Err(new_index) => {
                 for (section,virt) in inner.sections.iter_mut().zip(virtual_allocs) {
                     section.vmem.push(Some(virt));
                 }
-                inner.available_virt_slots.push(virt_mode);
+                inner.available_virt_slots.push(Some(virt_mode));
                 new_index
             },
         };
@@ -296,6 +328,14 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         // And return a guard
         Some(VirtAllocationGuard { allocation: Arc::clone(self), index: index })
     }
+}
+pub enum SwapInError {
+    /// Requested section holds a guard page
+    GuardPage(GuardPageType),
+    /// Could not allocate physical memory
+    PMemAllocationFail,
+    /// Not swapped out
+    NotInSwap,
 }
 
 /// A guard corresponding to a given virtual memory allocation + its unified counterpart
@@ -326,7 +366,7 @@ impl Drop for VirtAllocationGuard {
         let mut guard = self.allocation.0.lock();
         let mut vmem_allocations = Vec::<Option<VirtualAllocation>>::with_capacity(guard.sections.len()); 
         for section in guard.sections.iter_mut() { vmem_allocations.push(section.vmem[self.index].take()); }
-        guard.available_virt_slots[self.index] = VirtualAllocationMode::Free;
+        guard.available_virt_slots[self.index] = None;
         // Drop the guard first (now that we've tombstoned our slot in the allocation)
         drop(guard);
         // Then, drop the allocation (doing it in this order prevents deadlocks, as we only hold one lock at a time)

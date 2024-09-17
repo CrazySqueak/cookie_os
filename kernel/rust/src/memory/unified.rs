@@ -121,6 +121,14 @@ pub enum VirtualAllocationMode {
     Dynamic { strategy: PageAllocationStrategies<'static> },
     OffsetMapped { offset: usize },
 }
+/// Lookup an "absent page" data item in the ABSENT_PAGES_TABLE
+pub fn lookup_absent_id(absent_id: usize) -> Option<(Arc<CombinedAllocation>,usize)> {
+    let apth_a = ABSENT_PAGES_TABLE.acquire_a(absent_id.try_into().unwrap()).ok()?;
+    let apt_item_a = apth_a.get_a();
+    let combined_alloc = Weak::upgrade(&apt_item_a.allocation)?;
+    let virt_index = apt_item_a.virt_allocation_index;
+    Some((combined_alloc,virt_index))
+}
 
 #[derive(Clone,Copy,Debug)]
 pub enum GuardPageType {
@@ -160,7 +168,7 @@ struct CombinedAllocationInner {
     allocation_flags: AllocationFlags,
 }
 pub struct CombinedAllocation(HMutex<CombinedAllocationInner>);
-impl CombinedAllocation {  // TODO: Figure out visibility n stuff
+impl CombinedAllocation {
     pub fn new_from_phys(alloc: PhysicalMemoryAllocation, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
         Arc::new(Self(HMutex::new(CombinedAllocationInner{
             sections: VecDeque::from([CombinedAllocationSegment{

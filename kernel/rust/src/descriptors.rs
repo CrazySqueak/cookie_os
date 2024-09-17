@@ -263,9 +263,9 @@ impl<'r,T,A,B> DescriptorHandleB<'r,T,A,B> where T: Default {
     }
     
     /* Attempt to downgrade this B-handle to an A-handle. */
-    pub fn downgrade(self) -> Result<DescriptorHandleA<'r,T,A,B>,DescriptorAcquireError> {
-        // Currently this just calls .acquire_ref, but in theory it could be replaced with a more optimised version that takes advantage of the fact that a ref already exists
-        self.0.acquire_ref::<false>()
+    pub fn downgrade(self) -> DescriptorHandleA<'r,T,A,B> {
+        // Currently this just calls .clone_a_ref, but in theory it could be replaced with a more optimised version that takes advantage of the fact that a ref already exists
+        self.clone_a_ref()
     }
 }
 
@@ -302,8 +302,16 @@ impl<T,A,B, const N: usize, const M: usize> DescriptorTable<T,A,B,N,M> where T: 
     }
     
     /* Get a handle to the descriptor with the given ID, or an error if it could not be done. */
-    pub fn acquire<const IS_B_REF: bool>(&self, id: DescriptorID) -> Result<DescriptorHandle<T,A,B,IS_B_REF>,DescriptorAcquireError> {
+    fn acquire<const IS_B_REF: bool>(&self, id: DescriptorID) -> Result<DescriptorHandle<T,A,B,IS_B_REF>,DescriptorAcquireError> {
         self.table.acquire::<IS_B_REF>(id)
+    }
+    /* Get an A-handle to the descriptor with the given ID, or an error if it could not be done. */
+    pub fn acquire_a(&self, id: DescriptorID) -> Result<DescriptorHandleA<T,A,B>,DescriptorAcquireError> {
+        self.acquire::<false>(id)
+    }
+    /* Get a B-handle to the descriptor with the given ID, or an error if it could not be done. */
+    pub fn acquire_b(&self, id: DescriptorID) -> Result<DescriptorHandleB<T,A,B>,DescriptorAcquireError> {
+        self.acquire::<true>(id)
     }
     /* Create a new descriptor, and return the initialiser, allowing you to initialise slots T, A, and B as necessary before commit()-ing it and opening the descriptor for regular use. */
     pub fn create_new_descriptor(&self) -> DescriptorInitialiser<T,A,B> {

@@ -25,6 +25,8 @@ pub mod logging;
 use logging::{klog,emergency_kernel_log};
 pub mod panic;
 
+pub mod descriptors;
+
 // arch-specific code lives in "x::arch" for some modules
 macro_rules! arch_specific_module {
     ($v:vis mod $name:ident) => {

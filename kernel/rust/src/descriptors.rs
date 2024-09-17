@@ -410,7 +410,7 @@ impl<T,A,B, const N: usize, const M: usize> Drop for DescriptorTableInner<T,A,B,
         // Drop sub-tables (as they're stored as pointers and wouldn't be dropped otherwise)
         for st_ptr in &mut self.subtables {
             let ptr = st_ptr.get_mut();
-            let st = *ptr; *ptr = ptr::null_mut();
+            let st = core::mem::replace(ptr, ptr::null_mut());
             if st != ptr::null_mut() { drop(unsafe{ Box::from_raw(st) }) };
         }
     }

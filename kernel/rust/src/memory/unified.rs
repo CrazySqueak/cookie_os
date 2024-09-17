@@ -75,22 +75,35 @@ use super::paging::PageFlags as VMemFlags;
 struct VirtualAllocation {
     allocation: Box<dyn AnyPageAllocation>,
     flags: VMemFlags,
+    
+    /// Used if the page is not in physmem
+    absent_pages_table_handle: AbsentPagesHandleA,  // (dropped after the vmem allocation has been erased)
 }
 impl VirtualAllocation {
-    pub fn new(alloc: impl AnyPageAllocation + 'static, flags: VMemFlags) -> Self {
-        Self {
-            allocation: Box::new(alloc) as Box<dyn AnyPageAllocation>,
+    pub fn new(alloc: Box<dyn AnyPageAllocation>, flags: VMemFlags,
+                  combined_alloc: Weak<CombinedAllocation>, virt_index: usize) -> (Self,AbsentPagesHandleB) {
+        // Populate an absent_pages_table entry
+        let ate = ABSENT_PAGES_TABLE.create_new_descriptor();
+        let apth = ate.commit(AbsentPagesItemA {
+            allocation: combined_alloc,
+            virt_allocation_index: virt_index,
+        }, AbsentPagesItemB {});
+        let apth_a = apth.clone_a_ref();
+        
+        // Return self
+        (Self {
+            allocation: alloc,
             flags: flags,
-        }
+            absent_pages_table_handle: apth_a,
+        }, apth)
     }
     /// Map to a given physical address
     pub fn map(&self, phys_addr: usize) {
         self.allocation.set_base_addr(phys_addr, self.flags);
     }
     /// Set as absent
-    pub fn set_absent(&self, data: usize) {
-        // TODO: Figure out what the 'data' argument should be
-        self.allocation.set_absent(data);
+    pub fn set_absent(&self) {
+        self.allocation.set_absent(self.absent_pages_table_handle.get_id().try_into().unwrap());
     }
     
     pub fn start_addr(&self) -> usize {
@@ -180,7 +193,7 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
                 valloc.map(phys.start_addr());  // valloc is normalized upon being added to the combinedallocation so we don't need to account for baseaddr_offset
             },
             None => {
-                valloc.set_absent(0);  // TODO: data
+                valloc.set_absent();
             },
         }
     }
@@ -223,7 +236,8 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
                 // Carry across flags from the lowest vmem allocation in the section
                 let virt_flags = previous_bottom.flags.clone();
                 // Return new allocation
-                VirtualAllocation { allocation: expansion, flags: virt_flags }
+                let (va, _) = VirtualAllocation::new(expansion, virt_flags, Arc::downgrade(self), index);
+                va
             });
         }
         
@@ -296,31 +310,38 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         }
         section_allocs.push(remainder);  // The final section
         
+        // Reserve an index (must be done before initialising absent_pages_table entries)
+        // Try overwriting a tombstoned slot
+        let index_result = inner.available_virt_slots.iter().position(|i|i.is_none()).ok_or(inner.available_virt_slots.len());
+        let index = match index_result {
+            Ok(index) => {inner.available_virt_slots[index] = Some(virt_mode);index},  // by setting it to Some() we reserve the slot
+            Err(new_index) => {inner.available_virt_slots.push(Some(virt_mode));new_index},
+        };
+        
         // Convert from PageAllocation into VirtualAllocation
         let mut virtual_allocs = Vec::<VirtualAllocation>::with_capacity(n_sections);
         for allocation in section_allocs {
-            virtual_allocs.push(VirtualAllocation {
-                allocation: Box::new(allocation) as Box<dyn AnyPageAllocation>,
-                flags: flags,
-            });
+            let (va, _) = VirtualAllocation::new(
+                Box::new(allocation) as Box<dyn AnyPageAllocation>,
+                flags,
+                Arc::downgrade(self), index,
+            );
+            virtual_allocs.push(va);
         }
         
-        // Try overwriting a tombstoned slot
-        let index = inner.available_virt_slots.iter().position(|i|i.is_none()).ok_or(inner.available_virt_slots.len());
+        // Push items to list
         // Ok(x) = overwrite, Err(x) = push
-        let index = match index {
-            Ok(index) => {
+        match index_result {
+            Ok(_) => {
                 for (section,virt) in inner.sections.iter_mut().zip(virtual_allocs) {
                     section.vmem[index] = Some(virt);
                 }
-                inner.available_virt_slots[index] = Some(virt_mode);
                 index
             },
             Err(new_index) => {
                 for (section,virt) in inner.sections.iter_mut().zip(virtual_allocs) {
                     section.vmem.push(Some(virt));
                 }
-                inner.available_virt_slots.push(Some(virt_mode));
                 new_index
             },
         };
@@ -392,4 +413,18 @@ impl core::fmt::Debug for VirtAllocationGuard {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "VirtAllocationGuard [ {:x}..{:x} ]", self.start_addr(), self.end_addr())
     } 
+}
+
+use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};
+struct AbsentPagesItemA {
+    allocation: Weak<CombinedAllocation>,
+    virt_allocation_index: usize,
+}
+struct AbsentPagesItemB {
+}
+type AbsentPagesTab = DescriptorTable<(),AbsentPagesItemA,AbsentPagesItemB,16,8>;
+type AbsentPagesHandleA = DescriptorHandleA<'static,(),AbsentPagesItemA,AbsentPagesItemB>;
+type AbsentPagesHandleB = DescriptorHandleB<'static,(),AbsentPagesItemA,AbsentPagesItemB>;
+lazy_static::lazy_static! {
+    static ref ABSENT_PAGES_TABLE: AbsentPagesTab = DescriptorTable::new();
 }

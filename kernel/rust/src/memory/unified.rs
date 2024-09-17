@@ -211,7 +211,7 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
         // Populate virtual memory allocations
         for (index, virt_mode) in inner.available_virt_slots.iter().enumerate() {
             new_section.vmem.push(try{
-                if virt_mode.is_free() { None? }
+                let virt_mode = virt_mode.as_ref()?;
                 if let VirtualAllocationMode::OffsetMapped{..} = virt_mode { None? }  // We can't expand offset-mapped allocations at the moment (as the expanded block of physmem could be anywhere)
                 let previous_bottom = inner.sections[0].vmem[index].as_ref()?;
                 // Expand vmem allocation
@@ -240,19 +240,21 @@ impl CombinedAllocation {  // TODO: Figure out visibility n stuff
     // TODO: replace `section` with some sort of handle (to avoid race conditions causing OOB / mismatch errors)
     /// Load a section from swap into physical memory
     pub fn swap_in(self: &Arc<Self>, section: usize) -> Result<(),SwapInError> {
-        let inner = self.0.lock();
+        let mut inner = self.0.lock();
+        let phys_alloc_flags = inner.physical_alloc_flags;
         let section = &mut inner.sections[section];
         
         // Check swap type to ensure it's valid
         let swap_type = section.swap.as_ref().ok_or(SwapInError::NotInSwap)?;
-        match swap_type {
-            SwapAllocation::GuardPage(gp_type) => SwapInError::GuardPage(gp_type)?,
+        match *swap_type {
+            SwapAllocation::GuardPage(gp_type) => return Err(SwapInError::GuardPage(gp_type)),
             _=>{},
         }
         
         // Allocate physical memory
         let layout = core::alloc::Layout::from_size_align(section.size, MIN_PAGE_SIZE).unwrap();
         let phys_allocation = palloc(layout).ok_or(SwapInError::PMemAllocationFail)?;
+        let phys_allocation = PhysicalAllocation { allocation: phys_allocation, flags: phys_alloc_flags };
         
         // TODO: Map into virtual memory and write data (if necessary)
         

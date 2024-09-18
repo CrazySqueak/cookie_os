@@ -16,15 +16,7 @@ macro_rules! vec_of_non_clone {
     }
 }
 
-bitflags! {
-    #[derive(Clone,Copy)]
-    pub struct PMemFlags: u32 {
-        /// Zero out the memory upon allocating it
-        const INIT_ZEROED = 1<<0;
-        /// Zero out the memory before deallocating it
-        const DROP_ZEROED = 1<<1;
-    }
-}
+/*
 pub enum PhysicalAllocationSharable {
     Owned(PhysicalMemoryAllocation),
     Shared { alloc: Arc<PhysicalMemoryAllocation>, offset: usize, size: usize },
@@ -64,66 +56,7 @@ impl PhysicalAllocationSharable {
         (lhs, rhs)
     }
 }
-struct PhysicalAllocation {
-    allocation: PhysicalAllocationSharable,
-    flags: PMemFlags,
-}
-impl PhysicalAllocation {
-    #[deprecated]
-    fn _zero_out(&self) {
-    }
-    
-    fn _init(&self) {
-        if self.flags.contains(PMemFlags::INIT_ZEROED) {
-            // Clear memory ready for use
-            self._zero_out();
-        }
-    }
-    
-    pub fn new(alloc: PhysicalAllocationSharable, flags: PMemFlags) -> Self {
-        let this = Self {
-            allocation: alloc,
-            flags: flags,
-        };
-        this._init();
-        this
-    }
-    pub fn split(self, mid: usize) -> (Self, Self) {
-        let flags = self.flags;
-        // SAFETY: This method splits an existing allocation without re-allocating or clearing it
-        // Therefore, we must take out the allocation WITHOUT calling the destructor, as the destructor could clear the allocation!!
-        let allocation = unsafe {
-            let this = core::mem::MaybeUninit::new(self).as_ptr();  // ensure we don't get dropped, and can be "de-initialised" (as we are being split, not dropped)
-            // Extract each field, one-by-one
-            let allocation = core::ptr::read(&(*this).allocation);
-            let flags = core::ptr::read(&(*this).flags);
-            // And return the ones we want (the others will be dropped)
-            allocation
-        };
-        let (lhs, rhs) = allocation.split(mid);
-        let left = Self { allocation: lhs, flags };
-        let right = Self { allocation: rhs, flags };
-        (left, right)
-    }
-    
-    pub fn start_addr(&self) -> usize {
-        self.allocation.get_addr()
-    }
-    pub fn size(&self) -> usize {
-        self.allocation.get_size()
-    }
-    pub fn end_addr(&self) -> usize {
-        self.allocation.get_addr() + self.allocation.get_size()
-    }
-}
-impl core::ops::Drop for PhysicalAllocation {
-    fn drop(&mut self) {
-        if self.flags.contains(PMemFlags::DROP_ZEROED) {
-            // Clear memory now that we're done with it
-            self._zero_out();
-        }
-    }
-}
+*/
 
 #[derive(Clone,Copy,Debug)]
 pub enum GuardPageType {
@@ -134,6 +67,8 @@ pub enum GuardPageType {
 pub enum AllocationBackingMode {
     /// Backed by physical memory
     PhysMem(PhysicalMemoryAllocation),
+    /// Backed by shared physical memory
+    PhysMemShared { alloc: Arc<PhysicalMemoryAllocation>, offset: usize },
     /// "guard page" - attempting to access it causes a page fault
     GuardPage(GuardPageType),
     /// Uninitialised memory - when swapped in, memory will be left uninitialised
@@ -151,15 +86,18 @@ impl AllocationBacking {
     }
     /// Load into physical memory
     /// Returns Ok() if successful, Err() if it failed
+    /// 
+    /// Note: This may still be required even if get_addr() returns Some(). Only consider it to be "already swapped in so page fault is some other issue" if this returns AlreadyInPhysMem
+    ///       For example, copy-on-write memory would be implemented as a CopyOnWrite backing type, and would mark the memory as read-only, requiring a swap-in to copy from the old backing memory to a fresh area
     fn swap_in(&mut self) -> Result<BackingLoadSuccess,BackingLoadError> {
         match self.mode {
-            AllocationBackingMode::PhysMem(_) => Ok(BackingLoadSuccess::AlreadyInPhysMem),
+            AllocationBackingMode::PhysMem(_) | AllocationBackingMode::PhysMemShared{..} => Ok(BackingLoadSuccess::AlreadyInPhysMem),
             AllocationBackingMode::GuardPage(gptype) => Err(BackingLoadError::GuardPage(gptype)),
             
             _ => {
                  let phys_alloc = palloc(core::alloc::Layout::from_size_align(self.size, MIN_PAGE_SIZE).unwrap()).ok_or(BackingLoadError::PhysicalAllocationFailed)?;
                  match self.mode {
-                     AllocationBackingMode::PhysMem(_) | AllocationBackingMode::GuardPage(_) => unreachable!(),
+                     AllocationBackingMode::PhysMem(_) | AllocationBackingMode::PhysMemShared{..} | AllocationBackingMode::GuardPage(_) => unreachable!(),
                      
                      AllocationBackingMode::UninitMem => {},  // uninit mem can be left as-is
                      AllocationBackingMode::Zeroed => {  // zeroed and other backing modes must be mapped into vmem and initialised
@@ -168,7 +106,7 @@ impl AllocationBacking {
                         let ptr = vmap.start() as *mut u8;
                         // Initialise memory
                         match self.mode {
-                            AllocationBackingMode::PhysMem(_) | AllocationBackingMode::GuardPage(_) | AllocationBackingMode::UninitMem => unreachable!(),
+                            AllocationBackingMode::PhysMem(_) | AllocationBackingMode::PhysMemShared{..} | AllocationBackingMode::GuardPage(_) | AllocationBackingMode::UninitMem => unreachable!(),
                             
                             AllocationBackingMode::Zeroed => unsafe{
                                 // SAFETY: This pointer is to vmem which we have just allocated, and is to u8s which are robust
@@ -189,6 +127,7 @@ impl AllocationBacking {
     pub fn get_addr(&self) -> Option<usize> {
         match self.mode {
             AllocationBackingMode::PhysMem(ref alloc) => Some(alloc.get_addr()),
+            AllocationBackingMode::PhysMemShared{ ref alloc, offset } => Some(alloc.get_addr()+offset),
             _ => None,
         }
     }
@@ -267,19 +206,6 @@ pub fn lookup_absent_id(absent_id: usize) -> Option<(Arc<CombinedAllocation>,usi
     Some((combined_alloc,virt_index))
 }
 
-pub enum SwapAllocation {
-    // "real" swap isn't supported yet
-}
-impl SwapAllocation {
-    pub fn split(self, mid: usize) -> (Self,Self) {
-        match self {
-            Self::GuardPage(gptype) => (Self::GuardPage(gptype),Self::GuardPage(gptype)),
-            Self::Uninitialised => (Self::Uninitialised,Self::Uninitialised),
-            
-        }
-    }
-}
-
 bitflags! {
     #[derive(Clone,Copy,Debug)]
     pub struct AllocationFlags : u32 {
@@ -289,9 +215,10 @@ bitflags! {
 }
 // NOTE: CombinedAllocation must ALWAYS be locked BEFORE any page allocators (if you are nesting the locks, which isn't recommended but often necessary)!!
 struct CombinedAllocationSegment {  // vmem is placed before pmem as part of drop order - physical memory must be freed last
+    /// Virtual memory mappings assigned to this allocation
     vmem: Vec<Option<VirtualAllocation>>,  // indicies must always point to the same allocation, so we instead tombstone empty slots
-    physical: Option<PhysicalAllocation>,
-    swap: Option<SwapAllocation>,
+    /// The backing memory, whether physical, uninitialised, or swap
+    backing: AllocationBacking,
     
     /// Size in bytes
     size: usize,
@@ -300,9 +227,10 @@ struct CombinedAllocationSegment {  // vmem is placed before pmem as part of dro
 }
 impl CombinedAllocationSegment {
     pub fn _map_to_current(&self, valloc: &VirtualAllocation){
-        match self.physical {
-            Some(ref phys) => {
-                valloc.map(phys.start_addr());  // valloc is normalized upon being added to the combinedallocation so we don't need to account for baseaddr_offset
+        debug_assert!(valloc.size() == self.backing.get_size());
+        match self.backing.get_addr() {
+            Some(addr) => {
+                valloc.map(addr);  // valloc is normalized upon being added to the combinedallocation so we don't need to account for baseaddr_offset
             },
             None => {
                 valloc.set_absent();
@@ -320,7 +248,6 @@ struct CombinedAllocationInner {
     available_virt_slots: Vec<Option<VirtualAllocationMode>>, // https://godbolt.org/z/3vE4nzzaM - Option<enum X> is optimized to a single tag instead of two (provided there's space)
     
     next_section_identifier: usize,
-    physical_alloc_flags: PMemFlags,
     allocation_flags: AllocationFlags,
 }
 impl CombinedAllocationInner {
@@ -345,25 +272,21 @@ impl CombinedAllocationInner {
 }
 pub struct CombinedAllocation(YMutex<CombinedAllocationInner>);
 impl CombinedAllocation {
-    fn _new_single(size: usize, phys: Option<PhysicalAllocationSharable>, phys_flags: PMemFlags,
-                    swap: Option<SwapAllocation>, alloc_flags: AllocationFlags) -> Arc<Self> {
+    fn _new_single(size: usize, backing: AllocationBacking, alloc_flags: AllocationFlags) -> Arc<Self> {
         Arc::new(Self(YMutex::new(CombinedAllocationInner{
             sections: VecDeque::from([CombinedAllocationSegment{
                     size: size,
-                    physical: phys.map(|alloc|PhysicalAllocation::new(
-                        alloc, phys_flags,
-                    )),
+                    backing: backing,
                     vmem: Vec::with_capacity(1),
-                    swap: swap,
                     section_identifier: 0,
                 }]),
             available_virt_slots: Vec::with_capacity(1),
             
             next_section_identifier: 1,
-            physical_alloc_flags: phys_flags,
             allocation_flags: alloc_flags,
         })))
     }
+    /*
     pub fn new_from_phys(alloc: PhysicalAllocationSharable, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
         Self::_new_single(alloc.get_size(), Some(alloc), phys_flags, None, alloc_flags)
     }
@@ -383,8 +306,9 @@ impl CombinedAllocation {
         let allocation = Self::new_from_swap(size, SwapAllocation::GuardPage(guard_type), PMemFlags::empty(), alloc_flags);
         allocation.map_virtual(allocator, VirtualAllocationMode::FixedVirtAddr { addr }, VMemFlags::empty())
     }
+    */
     
-    /// Allocate more memory, expanding downwards
+    /*/// Allocate more memory, expanding downwards
     pub fn expand_downwards(self: &Arc<Self>, size_bytes: usize) {
         let mut inner = self.0.lock();
         let layout = core::alloc::Layout::from_size_align(size_bytes, MIN_PAGE_SIZE).unwrap().pad_to_align();
@@ -425,7 +349,8 @@ impl CombinedAllocation {
         new_section._update_mappings_section();
         // And append
         inner.sections.push_front(new_section);
-    }
+    }*/
+    /*
     /// Split a section into two new sections, with new identifiers
     /// The lower section is guaranteed to contain at least `mid` bytes, though this may be rounded based on page alignment
     /// Returns Err if the section does not exist. Otherwise, returns the two section IDs
@@ -497,9 +422,9 @@ impl CombinedAllocation {
         inner.sections.insert(section_idx, left_section);
         // Return
         Ok((left_identifier, right_identifier))
-    }
+    }*/
     
-    /// Load a section from swap into physical memory
+    /*/// Load a section from swap into physical memory
     pub fn swap_in(self: &Arc<Self>, section_identifier: usize) -> Result<(),SwapInError> {
         let mut inner = self.0.lock();
         let phys_alloc_flags = inner.physical_alloc_flags;
@@ -526,7 +451,7 @@ impl CombinedAllocation {
         section._update_mappings_section();
         // Done :)
         Ok(())
-    }
+    }*/
     
     /// Map this into virtual memory in the given allocator
     pub fn map_virtual<PFA:PageFrameAllocator+Send+Sync+'static>(self: &Arc<Self>, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocationMode, flags: VMemFlags) -> Option<VirtAllocationGuard> {
@@ -541,7 +466,7 @@ impl CombinedAllocation {
         let _=split_lengths.pop();  // Pop the final one as it isn't needed
         
         // Allocate one big block of [SIZE]
-        let phys_addr = inner.sections[0].physical.as_ref().map(|p|p.start_addr());
+        let phys_addr = inner.sections[0].backing.get_addr();
         let virt_allocation = match virt_mode {
             VirtualAllocationMode::Dynamic { strategy } => allocator.allocate(total_size,strategy),
             VirtualAllocationMode::OffsetMapped { offset } => allocator.allocate_at(phys_addr?+offset, total_size),
@@ -655,7 +580,7 @@ impl super::alloc_util::AnyAllocatedStack for VirtAllocationGuard {
     }
     fn expand(&mut self, bytes: usize) -> bool {
         let start = self.start_addr();
-        self.combined_allocation().expand_downwards(bytes);  // on success, this will change our start_addr
+        todo!();//self.combined_allocation().expand_downwards(bytes);  // on success, this will change our start_addr
         start != self.start_addr()
     }
 }

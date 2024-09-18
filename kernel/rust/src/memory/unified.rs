@@ -63,19 +63,6 @@ pub enum GuardPageType {
     StackLimit = 0xF47B33F,  // Fat Beef
     NullPointer = 0x4E55_4C505452,  // "NULPTR"
 }
-/// The memory that backs a given allocation
-enum AllocationBackingMode {
-    /// Backed by physical memory
-    PhysMem(PhysicalMemoryAllocation),
-    /// Backed by shared physical memory
-    PhysMemShared { alloc: Arc<PhysicalMemoryAllocation>, offset: usize },
-    /// "guard page" - attempting to access it causes a page fault
-    GuardPage(GuardPageType),
-    /// Uninitialised memory - when swapped in, memory will be left uninitialised
-    UninitMem,
-    /// Zeroed memory - when swapped in, memory will be zeroed
-    Zeroed,
-}
 /// A request for allocation backing
 /// WARNING: Requests are not guaranteed to contain a size that has been rounded up to the minimum page size
 /// To get the size post-rounding, use the .get_size() method. Yes, even if you're using a match statement.
@@ -97,6 +84,19 @@ impl AllocationBackingRequest {
         core::alloc::Layout::from_size_align(self.get_size_unrounded(), MIN_PAGE_SIZE).unwrap().pad_to_align().size()
     }
 }
+/// The memory that backs a given allocation
+enum AllocationBackingMode {
+    /// Backed by physical memory
+    PhysMem(PhysicalMemoryAllocation),
+    /// Backed by shared physical memory
+    PhysMemShared { alloc: Arc<PhysicalMemoryAllocation>, offset: usize },
+    /// "guard page" - attempting to access it causes a page fault
+    GuardPage(GuardPageType),
+    /// Uninitialised memory - when swapped in, memory will be left uninitialised
+    UninitMem,
+    /// Zeroed memory - when swapped in, memory will be zeroed
+    Zeroed,
+}
 struct AllocationBacking {
     mode: AllocationBackingMode,
     size: usize,
@@ -104,6 +104,7 @@ struct AllocationBacking {
 impl AllocationBacking {
     pub fn new(mode: AllocationBackingMode, size: usize) -> Self {
         debug_assert!(size%MIN_PAGE_SIZE==0);
+        debug_assert!(size > 0);
         Self { mode, size }
     }
     
@@ -150,12 +151,38 @@ impl AllocationBacking {
     //     }
     // }
     
+    /// Split this allocation into two. One of `midpoint` bytes and one of the remainder (if nonzero)
+    pub fn split(self, midpoint: usize) -> (Self,Option<Self>) {
+        if midpoint >= self.size { return (self,None); }
+        debug_assert!(midpoint%MIN_PAGE_SIZE==0);
+        debug_assert!(midpoint != 0);
+        let lhs_size = midpoint;
+        let rhs_size = self.size-midpoint;
+        
+        let (lhs_mode,rhs_mode) = match self.mode {
+            AllocationBackingMode::PhysMem(allocation) => {
+                let allocation = Arc::new(allocation);
+                (AllocationBackingMode::PhysMemShared { alloc: Arc::clone(&allocation), offset: 0 },
+                 AllocationBackingMode::PhysMemShared { alloc: allocation, offset: lhs_size })
+            },
+            AllocationBackingMode::PhysMemShared { alloc: allocation, offset } => {
+                (AllocationBackingMode::PhysMemShared { alloc: Arc::clone(&allocation), offset: offset+0 },
+                 AllocationBackingMode::PhysMemShared { alloc: allocation, offset: offset+lhs_size })
+            },
+            
+            AllocationBackingMode::GuardPage(gptype) => (AllocationBackingMode::GuardPage(gptype),AllocationBackingMode::GuardPage(gptype)),
+            AllocationBackingMode::UninitMem => (AllocationBackingMode::UninitMem,AllocationBackingMode::UninitMem),
+            AllocationBackingMode::Zeroed => (AllocationBackingMode::Zeroed,AllocationBackingMode::Zeroed),
+        };
+        (Self::new(lhs_mode,lhs_size),Some(Self::new(rhs_mode,rhs_size)))
+    }
+    
     /// Load into physical memory
     /// Returns Ok() if successful, Err() if it failed
     /// 
     /// Note: This may still be required even if get_addr() returns Some(). Only consider it to be "already swapped in so page fault is some other issue" if this returns AlreadyInPhysMem
     ///       For example, copy-on-write memory would be implemented as a CopyOnWrite backing type, and would mark the memory as read-only, requiring a swap-in to copy from the old backing memory to a fresh area
-    fn swap_in(&mut self) -> Result<BackingLoadSuccess,BackingLoadError> {
+    pub fn swap_in(&mut self) -> Result<BackingLoadSuccess,BackingLoadError> {
         match self.mode {
             AllocationBackingMode::PhysMem(_) | AllocationBackingMode::PhysMemShared{..} => Ok(BackingLoadSuccess::AlreadyInPhysMem),
             AllocationBackingMode::GuardPage(gptype) => Err(BackingLoadError::GuardPage(gptype)),
@@ -358,43 +385,6 @@ impl CombinedAllocation {
         let size = backing.get_size();
         (Self::_new_single(size,backing,alloc_flags), success)
     }
-    /*pub fn alloc_new_phys(size: usize, alloc_flags: AllocationFlags) -> Option<Arc<Self>> {
-        let backing = AllocationBacking::new_palloc(size);
-        if backing.get_addr().is_none() { return None; }
-        Some(Self::_new_single(size, backing, alloc_flags))
-    }
-    pub fn new_from_backing_mode(size: usize, backing_mode: AllocationBackingMode, alloc_flags: AllocationFlags) -> Arc<Self> {
-        Self::_new_single(size,AllocationBacking::new(backing_mode,size),alloc_flags)
-    }
-    pub fn alloc_new_phys_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, alloc_flags: AllocationFlags, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocationMode, virt_flags: VMemFlags) -> Option<VirtAllocationGuard> {
-        let allocation = Self::alloc_new_phys(size, alloc_flags);
-        allocation.map_virtual(allocator, virt_mode, virt_flags)
-    }
-    pub fn new_from_backing_mode_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, backing_mode: AllocationBackingMode, alloc_flags: AllocationFlags, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocation, virt_flags: VMemFlags) -> Option<VirtAllocationGuard> {
-        let allocation = Self::new_from_backing_mode(size, backing_mode, alloc_flags);
-        allocation.map_virtual(allocator, virt_mode, virt_flags)
-    }*/
-    /*
-    pub fn new_from_phys(alloc: PhysicalAllocationSharable, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
-        Self::_new_single(alloc.get_size(), Some(alloc), phys_flags, None, alloc_flags)
-    }
-    pub fn new_from_swap(size: usize, alloc: SwapAllocation, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
-        Self::_new_single(size, None, phys_flags, Some(alloc), alloc_flags)
-    }
-    pub fn alloc_new_phys(size: usize, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Option<Arc<Self>> {
-        let layout = core::alloc::Layout::from_size_align(size, MIN_PAGE_SIZE).unwrap().pad_to_align();
-        let phys_allocation = PhysicalAllocationSharable::Owned(palloc(layout)?);
-        Some(Self::new_from_phys(phys_allocation,phys_flags,alloc_flags))
-    }
-    pub fn alloc_new_phys_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, phys_flags: PMemFlags, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocationMode, virt_flags: VMemFlags, alloc_flags: AllocationFlags) -> Option<VirtAllocationGuard> {
-        let allocation = Self::alloc_new_phys(size, phys_flags, alloc_flags)?;
-        allocation.map_virtual(allocator, virt_mode, virt_flags)
-    }
-    pub fn alloc_new_guard_virt_at<PFA:PageFrameAllocator+Send+Sync+'static>(addr: usize, size: usize, guard_type: GuardPageType, allocator: &LockedPageAllocator<PFA>, alloc_flags: AllocationFlags) -> Option<VirtAllocationGuard> {
-        let allocation = Self::new_from_swap(size, SwapAllocation::GuardPage(guard_type), PMemFlags::empty(), alloc_flags);
-        allocation.map_virtual(allocator, VirtualAllocationMode::FixedVirtAddr { addr }, VMemFlags::empty())
-    }
-    */
     
     /// Allocate more memory, expanding downwards
     pub fn expand_downwards(self: &Arc<Self>, request: AllocationBackingRequest) {
@@ -439,7 +429,7 @@ impl CombinedAllocation {
         // And append
         inner.sections.push_front(new_section);
     }
-    /*
+    
     /// Split a section into two new sections, with new identifiers
     /// The lower section is guaranteed to contain at least `mid` bytes, though this may be rounded based on page alignment
     /// Returns Err if the section does not exist. Otherwise, returns the two section IDs
@@ -451,40 +441,27 @@ impl CombinedAllocation {
         let left_size = core::alloc::Layout::from_size_align(mid, MIN_PAGE_SIZE).unwrap().pad_to_align().size();
         let right_size = old_section.size-left_size;
         
+        // Split backing allocation
+        let old_backing = core::mem::replace(&mut old_section.backing, AllocationBacking::new(AllocationBackingMode::UninitMem,old_section.size));  // (take, leaving a useless allocation in its place)
+        let (lhs_backing, rhs_backing) = old_backing.split(left_size);
+        let rhs_backing = rhs_backing.unwrap();  // rhs_backing is None if mid >= total size
+        
         let mut left_section = CombinedAllocationSegment {
             vmem: vec_of_non_clone![None;inner.available_virt_slots.len()],
-            physical: None,
-            swap: None,
+            backing: lhs_backing,
             
             size: left_size,
             section_identifier: inner._get_new_section_identifier(),
         };
         let mut right_section = CombinedAllocationSegment {
             vmem: vec_of_non_clone![None;inner.available_virt_slots.len()],
-            physical: None,
-            swap: None,
+            backing: rhs_backing,
             
             size: right_size,
             section_identifier: inner._get_new_section_identifier(),
         };
         let left_identifier = left_section.section_identifier;
         let right_identifier = right_section.section_identifier;
-        
-        // Split physical allocation
-        let old_phys: Option<PhysicalAllocation> = core::mem::take(&mut old_section.physical);
-        if let Some(old_phys) = old_phys {
-            let (phys_lhs,phys_rhs) = old_phys.split(left_size);
-            left_section.physical = Some(phys_lhs);
-            right_section.physical = Some(phys_rhs);
-        }
-        
-        // Split swap allocations
-        let old_swap: Option<SwapAllocation> = core::mem::take(&mut old_section.swap);
-        if let Some(old_swap) = old_swap {
-            let (swap_lhs,swap_rhs) = old_swap.split(left_size);
-            left_section.swap = Some(swap_lhs);
-            right_section.swap = Some(swap_rhs);
-        }
         
         // Split virtual memory allocations
         for (index, valloc) in old_section.vmem.drain(0..).enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {
@@ -511,7 +488,7 @@ impl CombinedAllocation {
         inner.sections.insert(section_idx, left_section);
         // Return
         Ok((left_identifier, right_identifier))
-    }*/
+    }
     
     /*/// Load a section from swap into physical memory
     pub fn swap_in(self: &Arc<Self>, section_identifier: usize) -> Result<(),SwapInError> {

@@ -120,6 +120,7 @@ impl VirtualAllocation {
 pub enum VirtualAllocationMode {
     Dynamic { strategy: PageAllocationStrategies<'static> },
     OffsetMapped { offset: usize },
+    FixedVirtAddr { addr: usize },
 }
 /// Lookup an "absent page" data item in the ABSENT_PAGES_TABLE
 pub fn lookup_absent_id(absent_id: usize) -> Option<(Arc<CombinedAllocation>,usize)> {
@@ -206,15 +207,16 @@ impl CombinedAllocationInner {
 }
 pub struct CombinedAllocation(HMutex<CombinedAllocationInner>);
 impl CombinedAllocation {
-    pub fn new_from_phys(alloc: PhysicalMemoryAllocation, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
+    fn _new_single(size: usize, phys: Option<PhysicalMemoryAllocation>, phys_flags: PMemFlags,
+                    swap: Option<SwapAllocation>, alloc_flags: AllocationFlags) -> Arc<Self> {
         Arc::new(Self(HMutex::new(CombinedAllocationInner{
             sections: VecDeque::from([CombinedAllocationSegment{
-                    size: alloc.get_size(),
-                    physical: Some(PhysicalAllocation::new(
+                    size: size,
+                    physical: phys.map(|alloc|PhysicalAllocation::new(
                         alloc, phys_flags,
                     )),
                     vmem: Vec::with_capacity(1),
-                    swap: None,
+                    swap: swap,
                     section_identifier: 0,
                 }]),
             available_virt_slots: Vec::with_capacity(1),
@@ -224,6 +226,12 @@ impl CombinedAllocation {
             allocation_flags: alloc_flags,
         })))
     }
+    pub fn new_from_phys(alloc: PhysicalMemoryAllocation, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
+        Self::_new_single(alloc.get_size(), Some(alloc), phys_flags, None, alloc_flags)
+    }
+    pub fn new_from_swap(size: usize, alloc: SwapAllocation, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
+        Self::_new_single(size, None, phys_flags, Some(alloc), alloc_flags)
+    }
     pub fn alloc_new_phys(size: usize, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Option<Arc<Self>> {
         let layout = core::alloc::Layout::from_size_align(size, MIN_PAGE_SIZE).unwrap().pad_to_align();
         let phys_allocation = palloc(layout)?;
@@ -232,6 +240,10 @@ impl CombinedAllocation {
     pub fn alloc_new_phys_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, phys_flags: PMemFlags, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocationMode, virt_flags: VMemFlags, alloc_flags: AllocationFlags) -> Option<VirtAllocationGuard> {
         let allocation = Self::alloc_new_phys(size, phys_flags, alloc_flags)?;
         allocation.map_virtual(allocator, virt_mode, virt_flags)
+    }
+    pub fn alloc_new_guard_virt_at<PFA:PageFrameAllocator+Send+Sync+'static>(addr: usize, size: usize, guard_type: GuardPageType, allocator: &LockedPageAllocator<PFA>, alloc_flags: AllocationFlags) -> Option<VirtAllocationGuard> {
+        let allocation = Self::new_from_swap(size, SwapAllocation::GuardPage(guard_type), PMemFlags::empty(), alloc_flags);
+        allocation.map_virtual(allocator, VirtualAllocationMode::FixedVirtAddr { addr }, VMemFlags::empty())
     }
     
     /// Allocate more memory, expanding downwards
@@ -323,6 +335,7 @@ impl CombinedAllocation {
         let virt_allocation = match virt_mode {
             VirtualAllocationMode::Dynamic { strategy } => allocator.allocate(total_size,strategy),
             VirtualAllocationMode::OffsetMapped { offset } => allocator.allocate_at(phys_addr?+offset, total_size),
+            VirtualAllocationMode::FixedVirtAddr { addr } => allocator.allocate_at(addr, total_size),
         };
         // then split it into each section
         let mut lhs: PageAllocation<PFA>;

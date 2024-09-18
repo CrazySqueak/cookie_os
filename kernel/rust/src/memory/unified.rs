@@ -77,10 +77,25 @@ enum AllocationBackingMode {
     Zeroed,
 }
 /// A request for allocation backing
+/// WARNING: Requests are not guaranteed to contain a size that has been rounded up to the minimum page size
+/// To get the size post-rounding, use the .get_size() method. Yes, even if you're using a match statement.
 pub enum AllocationBackingRequest {
     UninitPhysical { size: usize },
     ZeroedPhysical { size: usize },
     GuardPage { gptype: GuardPageType, size: usize },
+}
+impl AllocationBackingRequest {
+    pub fn get_size_unrounded(&self) -> usize {
+        match *self {
+            Self::UninitPhysical{size} => size,
+            Self::ZeroedPhysical{size} => size,
+            Self::GuardPage{size,..} => size,
+        }
+    }
+    /// Get the size, and round it to the next MIN_PAGE_SIZE
+    pub fn get_size(&self) -> usize {
+        core::alloc::Layout::from_size_align(self.get_size_unrounded(), MIN_PAGE_SIZE).unwrap().pad_to_align().size()
+    }
 }
 struct AllocationBacking {
     mode: AllocationBackingMode,
@@ -88,6 +103,7 @@ struct AllocationBacking {
 }
 impl AllocationBacking {
     pub fn new(mode: AllocationBackingMode, size: usize) -> Self {
+        debug_assert!(size%MIN_PAGE_SIZE==0);
         Self { mode, size }
     }
     
@@ -96,16 +112,17 @@ impl AllocationBacking {
     }
     /// Returns (self,true) if the request was fulfilled immediately. Returns (self,false) if it couldn't, and must be swapped in later when more RAM is available
     pub fn new_from_request(request: AllocationBackingRequest) -> (Self,bool) {
+        let size = request.get_size();
         match request {
-            AllocationBackingRequest::GuardPage { gptype, size } => (Self::new(AllocationBackingMode::GuardPage(gptype),size),true),
+            AllocationBackingRequest::GuardPage { gptype, .. } => (Self::new(AllocationBackingMode::GuardPage(gptype),size),true),
             
-            AllocationBackingRequest::UninitPhysical { size } => {
+            AllocationBackingRequest::UninitPhysical { .. } => {
                 match Self::_palloc(size) {
                     Some(pma) => (Self::new(AllocationBackingMode::PhysMem(pma),size),true),
                     None => (Self::new(AllocationBackingMode::UninitMem,size),false),
                 }
             },
-            AllocationBackingRequest::ZeroedPhysical { size } => {
+            AllocationBackingRequest::ZeroedPhysical { .. } => {
                 let mut this = Self::new(AllocationBackingMode::Zeroed,size);
                 match this.swap_in() {
                     Ok(_) => (this,true),
@@ -379,19 +396,24 @@ impl CombinedAllocation {
     }
     */
     
-    /*/// Allocate more memory, expanding downwards
-    pub fn expand_downwards(self: &Arc<Self>, size_bytes: usize) {
+    /// Allocate more memory, expanding downwards
+    pub fn expand_downwards(self: &Arc<Self>, request: AllocationBackingRequest) {
         let mut inner = self.0.lock();
-        let layout = core::alloc::Layout::from_size_align(size_bytes, MIN_PAGE_SIZE).unwrap().pad_to_align();
+        
+        // Allocate backing
+        let (backing, _) = AllocationBacking::new_from_request(request);
+        let size = backing.get_size();
+        
         // Begin setting up new section
         let mut new_section = CombinedAllocationSegment {
             vmem: vec_of_non_clone![None;inner.available_virt_slots.len()],
-            physical: None,
-            swap: None,
             
-            size: layout.size(),
+            backing: backing,
+            size: size,
+            
             section_identifier: inner._get_new_section_identifier(),
         };
+        
         // Populate virtual memory allocations
         for (index, virt_mode) in inner.available_virt_slots.iter().enumerate() {
             new_section.vmem.push(try{
@@ -412,15 +434,11 @@ impl CombinedAllocation {
             });
         }
         
-        // Allocate backing (physical memory)
-        let phys_flags = inner.physical_alloc_flags;
-        new_section.physical = palloc(layout).map(|phys_raw|PhysicalAllocation::new(PhysicalAllocationSharable::Owned(phys_raw), phys_flags));
-        
         // Update mappings
         new_section._update_mappings_section();
         // And append
         inner.sections.push_front(new_section);
-    }*/
+    }
     /*
     /// Split a section into two new sections, with new identifiers
     /// The lower section is guaranteed to contain at least `mid` bytes, though this may be rounded based on page alignment
@@ -647,11 +665,11 @@ impl !Clone for VirtAllocationGuard{}
 impl super::alloc_util::AnyAllocatedStack for VirtAllocationGuard {
     // assumes the stack grows downwards
     fn bottom_vaddr(&self) -> usize {
-        self.start_addr()
+        self.end_addr()
     }
     fn expand(&mut self, bytes: usize) -> bool {
         let start = self.start_addr();
-        todo!();//self.combined_allocation().expand_downwards(bytes);  // on success, this will change our start_addr
+        self.combined_allocation().expand_downwards(AllocationBackingRequest::UninitPhysical { size: bytes });  // on success, this will change our start_addr
         start != self.start_addr()
     }
 }

@@ -213,11 +213,11 @@ impl CombinedAllocation {
                     physical: Some(PhysicalAllocation::new(
                         alloc, phys_flags,
                     )),
-                    vmem: Vec::new(),
+                    vmem: Vec::with_capacity(1),
                     swap: None,
                     section_identifier: 0,
                 }]),
-            available_virt_slots: Vec::new(),
+            available_virt_slots: Vec::with_capacity(1),
             
             next_section_identifier: 1,
             physical_alloc_flags: phys_flags,

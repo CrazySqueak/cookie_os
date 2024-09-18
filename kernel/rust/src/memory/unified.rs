@@ -490,34 +490,19 @@ impl CombinedAllocation {
         Ok((left_identifier, right_identifier))
     }
     
-    /*/// Load a section from swap into physical memory
+    /// Load a section from swap into physical memory
     pub fn swap_in(self: &Arc<Self>, section_identifier: usize) -> Result<(),SwapInError> {
         let mut inner = self.0.lock();
-        let phys_alloc_flags = inner.physical_alloc_flags;
         let section = inner._find_section_with_identifier_mut(section_identifier).ok_or(SwapInError::SectionNotFound)?;
         
-        // Check swap type to ensure it's valid
-        let swap_type = section.swap.as_ref().ok_or(SwapInError::NotInSwap)?;
-        match *swap_type {
-            SwapAllocation::GuardPage(gp_type) => return Err(SwapInError::GuardPage(gp_type)),
-            _=>{},
-        }
+        // Swap in
+        section.backing.swap_in().map_err(|x|SwapInError::LoadError(x))?;
         
-        // Allocate physical memory
-        let layout = core::alloc::Layout::from_size_align(section.size, MIN_PAGE_SIZE).unwrap();
-        let phys_allocation = palloc(layout).ok_or(SwapInError::PMemAllocationFail)?;
-        let phys_allocation = PhysicalAllocation { allocation: PhysicalAllocationSharable::Owned(phys_allocation), flags: phys_alloc_flags };  // FIXME: Shouldn't this be using the constructor? Or maybe the constructor is redundant? DEcide on one or the other
-        
-        // TODO: Map into virtual memory and write data (if necessary)
-        
-        // Change state
-        section.physical = Some(phys_allocation);
-        section.swap = None;
         // Update mappings
         section._update_mappings_section();
         // Done :)
         Ok(())
-    }*/
+    }
     
     /// Map this into virtual memory in the given allocator
     pub fn map_virtual<PFA:PageFrameAllocator+Send+Sync+'static>(self: &Arc<Self>, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocationMode, flags: VMemFlags) -> Option<VirtAllocationGuard> {
@@ -592,12 +577,8 @@ impl CombinedAllocation {
     }
 }
 pub enum SwapInError {
-    /// Requested section holds a guard page
-    GuardPage(GuardPageType),
-    /// Could not allocate physical memory
-    PMemAllocationFail,
-    /// Not swapped out
-    NotInSwap,
+    /// Backing load error
+    LoadError(BackingLoadError),
     /// Section not found
     SectionNotFound,
 }

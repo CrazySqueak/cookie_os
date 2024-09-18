@@ -218,7 +218,7 @@ impl PhysicalMemoryAllocation {
 //      cannot access physical memory that has been freed or re-used)
 impl !Copy for PhysicalMemoryAllocation{}
 impl !Clone for PhysicalMemoryAllocation{}
-impl !Sync for PhysicalMemoryAllocation{}
+// Physical memory allocations *can* be Sync, because they contain no support for mutation that isn't handled by Rust's borrowing rules
 
 // Return the size block to allocate for the given layout, assuming that the given block is aligned by itself (which is the case for allocations).
 fn calc_alloc_size(layout: &Layout) -> usize {

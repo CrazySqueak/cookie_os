@@ -25,8 +25,47 @@ bitflags! {
         const DROP_ZEROED = 1<<1;
     }
 }
+pub enum PhysicalAllocationBacking {
+    Owned(PhysicalMemoryAllocation),
+    Shared { alloc: Arc<PhysicalMemoryAllocation>, offset: usize, size: usize },
+}
+impl PhysicalAllocationBacking {
+    pub fn get_addr(&self) -> usize {
+        match self {
+            &Self::Owned(ref alloc) => alloc.get_addr(),
+            &Self::Shared{ref alloc, offset,..} => alloc.get_addr()+offset,
+        }
+    }
+    pub fn get_size(&self) -> usize {
+        match self {
+            &Self::Owned(ref alloc) => alloc.get_size(),
+            &Self::Shared{size,..} => size,
+        }
+    }
+    
+    pub fn split(self, mid: usize) -> (Self,Self) {
+        let (alloc, base_offset, base_size) = match self {
+            Self::Owned(alloc) => {let size = alloc.get_size(); (Arc::new(alloc),0,size)},
+            Self::Shared { alloc, offset, size} => (alloc,offset,size),
+        };
+        //let base_limit = base_offset+base_size;
+        let mid = core::cmp::min(mid,base_size);
+        
+        let lhs = Self::Shared {
+            alloc: Arc::clone(&alloc),
+            offset: base_offset,
+            size: mid,
+        };
+        let rhs = Self::Shared {
+            alloc: alloc,
+            offset: base_offset+mid,
+            size: base_size-mid,
+        };
+        (lhs, rhs)
+    }
+}
 struct PhysicalAllocation {
-    allocation: PhysicalMemoryAllocation,
+    allocation: PhysicalAllocationBacking,
     flags: PMemFlags,
 }
 impl PhysicalAllocation {
@@ -50,7 +89,7 @@ impl PhysicalAllocation {
         }
     }
     
-    pub fn new(alloc: PhysicalMemoryAllocation, flags: PMemFlags) -> Self {
+    pub fn new(alloc: PhysicalAllocationBacking, flags: PMemFlags) -> Self {
         let this = Self {
             allocation: alloc,
             flags: flags,
@@ -58,6 +97,24 @@ impl PhysicalAllocation {
         this._init();
         this
     }
+    pub fn split(self, mid: usize) -> (Self, Self) {
+        let flags = self.flags;
+        // SAFETY: This method splits an existing allocation without re-allocating or clearing it
+        // Therefore, we must take out the allocation WITHOUT calling the destructor, as the destructor could clear the allocation!!
+        let allocation = unsafe {
+            let this = core::mem::MaybeUninit::new(self).as_ptr();  // ensure we don't get dropped, and can be "de-initialised" (as we are being split, not dropped)
+            // Extract each field, one-by-one
+            let allocation = core::ptr::read(&(*this).allocation);
+            let flags = core::ptr::read(&(*this).flags);
+            // And return the ones we want (the others will be dropped)
+            allocation
+        };
+        let (lhs, rhs) = allocation.split(mid);
+        let left = Self { allocation: lhs, flags };
+        let right = Self { allocation: rhs, flags };
+        (left, right)
+    }
+    
     pub fn start_addr(&self) -> usize {
         self.allocation.get_addr()
     }
@@ -150,6 +207,15 @@ pub enum SwapAllocation {
     
     // "real" swap isn't supported yet
 }
+impl SwapAllocation {
+    pub fn split(self, mid: usize) -> (Self,Self) {
+        match self {
+            Self::GuardPage(gptype) => (Self::GuardPage(gptype),Self::GuardPage(gptype)),
+            Self::Uninitialised => (Self::Uninitialised,Self::Uninitialised),
+            
+        }
+    }
+}
 
 bitflags! {
     #[derive(Clone,Copy,Debug)]
@@ -216,7 +282,7 @@ impl CombinedAllocationInner {
 }
 pub struct CombinedAllocation(YMutex<CombinedAllocationInner>);
 impl CombinedAllocation {
-    fn _new_single(size: usize, phys: Option<PhysicalMemoryAllocation>, phys_flags: PMemFlags,
+    fn _new_single(size: usize, phys: Option<PhysicalAllocationBacking>, phys_flags: PMemFlags,
                     swap: Option<SwapAllocation>, alloc_flags: AllocationFlags) -> Arc<Self> {
         Arc::new(Self(YMutex::new(CombinedAllocationInner{
             sections: VecDeque::from([CombinedAllocationSegment{
@@ -235,7 +301,7 @@ impl CombinedAllocation {
             allocation_flags: alloc_flags,
         })))
     }
-    pub fn new_from_phys(alloc: PhysicalMemoryAllocation, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
+    pub fn new_from_phys(alloc: PhysicalAllocationBacking, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
         Self::_new_single(alloc.get_size(), Some(alloc), phys_flags, None, alloc_flags)
     }
     pub fn new_from_swap(size: usize, alloc: SwapAllocation, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
@@ -243,7 +309,7 @@ impl CombinedAllocation {
     }
     pub fn alloc_new_phys(size: usize, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Option<Arc<Self>> {
         let layout = core::alloc::Layout::from_size_align(size, MIN_PAGE_SIZE).unwrap().pad_to_align();
-        let phys_allocation = palloc(layout)?;
+        let phys_allocation = PhysicalAllocationBacking::Owned(palloc(layout)?);
         Some(Self::new_from_phys(phys_allocation,phys_flags,alloc_flags))
     }
     pub fn alloc_new_phys_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, phys_flags: PMemFlags, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocationMode, virt_flags: VMemFlags, alloc_flags: AllocationFlags) -> Option<VirtAllocationGuard> {
@@ -290,7 +356,7 @@ impl CombinedAllocation {
         
         // Allocate backing (physical memory)
         let phys_flags = inner.physical_alloc_flags;
-        new_section.physical = palloc(layout).map(|phys_raw|PhysicalAllocation::new(phys_raw, phys_flags));
+        new_section.physical = palloc(layout).map(|phys_raw|PhysicalAllocation::new(PhysicalAllocationBacking::Owned(phys_raw), phys_flags));
         
         // Update mappings
         new_section._update_mappings_section();
@@ -327,7 +393,21 @@ impl CombinedAllocation {
         let left_identifier = left_section.section_identifier;
         let right_identifier = right_section.section_identifier;
         
-        // TODO physical/swap adjustments
+        // Split physical allocation
+        let old_phys: Option<PhysicalAllocation> = core::mem::take(&mut old_section.physical);
+        if let Some(old_phys) = old_phys {
+            let (phys_lhs,phys_rhs) = old_phys.split(left_size);
+            left_section.physical = Some(phys_lhs);
+            right_section.physical = Some(phys_rhs);
+        }
+        
+        // Split swap allocations
+        let old_swap: Option<SwapAllocation> = core::mem::take(&mut old_section.swap);
+        if let Some(old_swap) = old_swap {
+            let (swap_lhs,swap_rhs) = old_swap.split(left_size);
+            left_section.swap = Some(swap_lhs);
+            right_section.swap = Some(swap_rhs);
+        }
         
         // Split virtual memory allocations
         for (index, valloc) in old_section.vmem.drain(0..).enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {
@@ -372,7 +452,7 @@ impl CombinedAllocation {
         // Allocate physical memory
         let layout = core::alloc::Layout::from_size_align(section.size, MIN_PAGE_SIZE).unwrap();
         let phys_allocation = palloc(layout).ok_or(SwapInError::PMemAllocationFail)?;
-        let phys_allocation = PhysicalAllocation { allocation: phys_allocation, flags: phys_alloc_flags };
+        let phys_allocation = PhysicalAllocation { allocation: PhysicalAllocationBacking::Owned(phys_allocation), flags: phys_alloc_flags };  // FIXME: Shouldn't this be using the constructor? Or maybe the constructor is redundant? DEcide on one or the other
         
         // TODO: Map into virtual memory and write data (if necessary)
         

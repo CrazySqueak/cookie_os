@@ -69,6 +69,9 @@ pub enum GuardPageType {
 pub enum AllocationBackingRequest {
     UninitPhysical { size: usize },
     ZeroedPhysical { size: usize },
+    /// Similar to UninitPhysical, but isn't automatically allocated in physical memory. Instead, it's initialised as an UninitMem/Zeroed
+    Reservation { size: usize, zeroed: bool },
+    
     GuardPage { gptype: GuardPageType, size: usize },
 }
 impl AllocationBackingRequest {
@@ -76,6 +79,7 @@ impl AllocationBackingRequest {
         match *self {
             Self::UninitPhysical{size} => size,
             Self::ZeroedPhysical{size} => size,
+            Self::Reservation{size,..} => size,
             Self::GuardPage{size,..} => size,
         }
     }
@@ -116,6 +120,10 @@ impl AllocationBacking {
         let size = request.get_size();
         match request {
             AllocationBackingRequest::GuardPage { gptype, .. } => (Self::new(AllocationBackingMode::GuardPage(gptype),size),true),
+            AllocationBackingRequest::Reservation { size, zeroed } => {
+                let mode = if zeroed { AllocationBackingMode::Zeroed } else { AllocationBackingMode::UninitMem };
+                (Self::new(mode,size),true)
+            },
             
             AllocationBackingRequest::UninitPhysical { .. } => {
                 match Self::_palloc(size) {
@@ -132,24 +140,6 @@ impl AllocationBacking {
             },
         }
     }
-    // /// Allocate a new physmem backing.
-    // /// On failure, returns an UninitMem backing instead
-    // pub fn new_palloc(size: usize) -> Self {
-    //     if let Some(phys_alloc) = Self::_palloc(size) {
-    //         Self::new(AllocationBackingMode::PhysMem(phys_alloc), size)
-    //     } else {
-    //         Self::new(AllocationBackingMode::UninitMem, size)
-    //     }
-    // }
-    // /// Create a new backing, and immediately swap it in (using .swap_in)
-    // /// On failure, returns the backing (but not swapped in)
-    // pub fn new_and_swap_in(mode: AllocationBackingMode, size: usize) -> Result<Self,Self> {
-    //     let mut this = Self::new(mode,size);
-    //     match this.swap_in() {
-    //         Ok(_) => Ok(this),
-    //         Err(_) => Err(this),
-    //     }
-    // }
     
     /// Split this allocation into two. One of `midpoint` bytes and one of the remainder (if nonzero)
     pub fn split(self, midpoint: usize) -> (Self,Option<Self>) {
@@ -385,6 +375,30 @@ impl CombinedAllocation {
         let size = backing.get_size();
         (Self::_new_single(size,backing,alloc_flags), success)
     }
+    pub fn new_from_requests(backing_reqs: Vec<AllocationBackingRequest>, alloc_flags: AllocationFlags) -> Arc<Self> {
+        let total_size = backing_reqs.iter().map(|r|r.get_size()).reduce(core::ops::Add::add).unwrap();  // total_size, rounded to account for page-alignment
+        let (this,_) = Self::new_from_request(AllocationBackingRequest::Reservation { size: total_size, zeroed: false }, alloc_flags);
+        
+        let mut size_remaining: usize = total_size;
+        let mut remainder_identifier: usize = 0;
+        let final_request = 'lp:{for (num_left,request) in backing_reqs.into_iter().enumerate().rev() {
+            if num_left == 0 { break 'lp request; } // Final request needs to be handled differently (as lhs size must not be zero)
+            // Split from right-to-left
+            let (lhs_id,rhs_id) = this.split_section(remainder_identifier, size_remaining).unwrap();
+            // rhs = this current request
+            let size = request.get_size();
+            let ok = this.replace_section(rhs_id, request);
+            assert!(ok);
+            // lhs = remainder
+            remainder_identifier = lhs_id;
+            size_remaining -= size;
+        } panic!("End of loop but not broken out?");};
+        let ok = this.replace_section(remainder_identifier,final_request);
+        assert!(ok);
+        
+        // All good
+        this
+    }
     
     /// Allocate more memory, expanding downwards
     pub fn expand_downwards(self: &Arc<Self>, request: AllocationBackingRequest) {
@@ -502,6 +516,24 @@ impl CombinedAllocation {
         section._update_mappings_section();
         // Done :)
         Ok(())
+    }
+    /// Overwrite a section with a new backing type, wiping the previous memory allocated to it and discarding its contents
+    /// (the size in new_request must equal the present size of the section)
+    /// true = success (overwrite ok), false = failure (previous state remains)
+    pub fn replace_section(self: &Arc<Self>, section_identifier: usize, new_request: AllocationBackingRequest) -> bool {
+        let mut inner = self.0.lock();
+        let Some(section) = inner._find_section_with_identifier_mut(section_identifier) else { return false; };
+        
+        debug_assert!(section.size == new_request.get_size());
+        // Allocate new backing
+        let (new_backing,_) = AllocationBacking::new_from_request(new_request);
+        // Overwrite previous allocation
+        section.backing = new_backing;
+        
+        // Update mappings
+        section._update_mappings_section();
+        // Done :)
+        true
     }
     
     /// Map this into virtual memory in the given allocator

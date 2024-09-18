@@ -717,7 +717,7 @@ pub trait AnyPageAllocation: core::fmt::Debug + Send {
     fn flush_tlb(&self);
     
     /// Split this page allocation in half
-    fn split_dyn(self, mid: usize) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>);
+    fn split_dyn(self: Box<Self>, mid: usize) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>);
     /// Allocate more virtual memory directly below this allocation
     /// This is made available as a new allocation
     fn alloc_downwards_dyn(&self, size: usize) -> Option<Box<dyn AnyPageAllocation>>;
@@ -733,7 +733,7 @@ impl<PFA:PageFrameAllocator + Send + Sync + 'static> AnyPageAllocation for PageA
     fn flush_tlb(&self) { self.flush_tlb() }
     
     // Note: Self is not always Sized
-    fn split_dyn(self, mid: usize) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>) {
+    fn split_dyn(self: Box<Self>, mid: usize) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>) {
         let (left, right) = self.split(mid);
         (Box::new(left) as Box<dyn AnyPageAllocation>,
          Box::new(right) as Box<dyn AnyPageAllocation>)

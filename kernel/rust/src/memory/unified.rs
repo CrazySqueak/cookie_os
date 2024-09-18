@@ -10,6 +10,12 @@ use crate::sync::hspin::{HMutex,HMutexGuard};
 
 use super::paging::{global_pages::KERNEL_PTABLE,strategy::KALLOCATION_KERNEL_GENERALDYN,strategy::PageAllocationStrategies};
 
+macro_rules! vec_of_non_clone {
+    [$item:expr ; $count:expr] => {
+        Vec::from_iter((0..$count).map(|_|$item))
+    }
+}
+
 bitflags! {
     #[derive(Clone,Copy)]
     pub struct PMemFlags: u32 {
@@ -194,6 +200,9 @@ impl CombinedAllocationInner {
         self.next_section_identifier += 1;
         id
     }
+    pub fn _find_section_with_identifier_index(&mut self, section_identifier: usize) -> Option<usize> {
+        self.sections.iter_mut().position(|item|item.section_identifier == section_identifier)
+    }
     pub fn _find_section_with_identifier_mut(&mut self, section_identifier: usize) -> Option<&mut CombinedAllocationSegment> {
         self.sections.iter_mut().find(|item|item.section_identifier == section_identifier)
     }
@@ -252,7 +261,7 @@ impl CombinedAllocation {
         let layout = core::alloc::Layout::from_size_align(size_bytes, MIN_PAGE_SIZE).unwrap().pad_to_align();
         // Begin setting up new section
         let mut new_section = CombinedAllocationSegment {
-            vmem: Vec::with_capacity(inner.available_virt_slots.len()),
+            vmem: vec_of_non_clone![None;inner.available_virt_slots.len()],
             physical: None,
             swap: None,
             
@@ -287,6 +296,64 @@ impl CombinedAllocation {
         new_section._update_mappings_section();
         // And append
         inner.sections.push_front(new_section);
+    }
+    /// Split a section into two new sections, with new identifiers
+    /// The lower section is guaranteed to contain at least `mid` bytes, though this may be rounded based on page alignment
+    /// Returns Err if the section does not exist. Otherwise, returns the two section IDs
+    pub fn split_section(self: &Arc<Self>, section_identifier: usize, mid: usize) -> Result<(usize,usize),()> {
+        let mut inner = self.0.lock();
+        let section_idx = inner._find_section_with_identifier_index(section_identifier).ok_or(())?;
+        
+        let mut old_section = inner.sections.remove(section_idx).unwrap();
+        let left_size = core::alloc::Layout::from_size_align(mid, MIN_PAGE_SIZE).unwrap().pad_to_align().size();
+        let right_size = old_section.size-left_size;
+        
+        let mut left_section = CombinedAllocationSegment {
+            vmem: vec_of_non_clone![None;inner.available_virt_slots.len()],
+            physical: None,
+            swap: None,
+            
+            size: left_size,
+            section_identifier: inner._get_new_section_identifier(),
+        };
+        let mut right_section = CombinedAllocationSegment {
+            vmem: vec_of_non_clone![None;inner.available_virt_slots.len()],
+            physical: None,
+            swap: None,
+            
+            size: right_size,
+            section_identifier: inner._get_new_section_identifier(),
+        };
+        let left_identifier = left_section.section_identifier;
+        let right_identifier = right_section.section_identifier;
+        
+        // TODO physical/swap adjustments
+        
+        // Split virtual memory allocations
+        for (index, valloc) in old_section.vmem.drain(0..).enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {
+            let VirtualAllocation { allocation, flags, .. } = valloc;
+            let (left_allocation, right_allocation) = allocation.split_dyn(left_size);
+            debug_assert!(left_allocation.size()==left_size);
+            debug_assert!(right_allocation.size()==right_size);
+            
+            let (la,_) = VirtualAllocation::new(
+                left_allocation, flags.clone(), Arc::downgrade(self), index
+            );
+            left_section.vmem[index] = Some(la);
+            let (ra, _) = VirtualAllocation::new(
+                right_allocation, flags.clone(), Arc::downgrade(self), index
+            );
+            right_section.vmem[index] = Some(ra);
+        }
+        
+        // Update mappings
+        left_section._update_mappings_section();
+        right_section._update_mappings_section();
+        // Insert into list : list now = [X-2] [X-1] LHS RHS [X+1] [X+2], where X±y was relative to the old section
+        inner.sections.insert(section_idx, right_section);
+        inner.sections.insert(section_idx, left_section);
+        // Return
+        Ok((left_identifier, right_identifier))
     }
     
     /// Load a section from swap into physical memory

@@ -64,7 +64,7 @@ pub enum GuardPageType {
     NullPointer = 0x4E55_4C505452,  // "NULPTR"
 }
 /// The memory that backs a given allocation
-pub enum AllocationBackingMode {
+enum AllocationBackingMode {
     /// Backed by physical memory
     PhysMem(PhysicalMemoryAllocation),
     /// Backed by shared physical memory
@@ -76,7 +76,13 @@ pub enum AllocationBackingMode {
     /// Zeroed memory - when swapped in, memory will be zeroed
     Zeroed,
 }
-pub struct AllocationBacking {
+/// A request for allocation backing
+pub enum AllocationBackingRequest {
+    UninitPhysical { size: usize },
+    ZeroedPhysical { size: usize },
+    GuardPage { gptype: GuardPageType, size: usize },
+}
+struct AllocationBacking {
     mode: AllocationBackingMode,
     size: usize,
 }
@@ -84,6 +90,49 @@ impl AllocationBacking {
     pub fn new(mode: AllocationBackingMode, size: usize) -> Self {
         Self { mode, size }
     }
+    
+    fn _palloc(size: usize) -> Option<PhysicalMemoryAllocation> {
+        palloc(core::alloc::Layout::from_size_align(size, MIN_PAGE_SIZE).unwrap())
+    }
+    /// Returns (self,true) if the request was fulfilled immediately. Returns (self,false) if it couldn't, and must be swapped in later when more RAM is available
+    pub fn new_from_request(request: AllocationBackingRequest) -> (Self,bool) {
+        match request {
+            AllocationBackingRequest::GuardPage { gptype, size } => (Self::new(AllocationBackingMode::GuardPage(gptype),size),true),
+            
+            AllocationBackingRequest::UninitPhysical { size } => {
+                match Self::_palloc(size) {
+                    Some(pma) => (Self::new(AllocationBackingMode::PhysMem(pma),size),true),
+                    None => (Self::new(AllocationBackingMode::UninitMem,size),false),
+                }
+            },
+            AllocationBackingRequest::ZeroedPhysical { size } => {
+                let mut this = Self::new(AllocationBackingMode::Zeroed,size);
+                match this.swap_in() {
+                    Ok(_) => (this,true),
+                    Err(_) => (this,false),
+                }
+            },
+        }
+    }
+    // /// Allocate a new physmem backing.
+    // /// On failure, returns an UninitMem backing instead
+    // pub fn new_palloc(size: usize) -> Self {
+    //     if let Some(phys_alloc) = Self::_palloc(size) {
+    //         Self::new(AllocationBackingMode::PhysMem(phys_alloc), size)
+    //     } else {
+    //         Self::new(AllocationBackingMode::UninitMem, size)
+    //     }
+    // }
+    // /// Create a new backing, and immediately swap it in (using .swap_in)
+    // /// On failure, returns the backing (but not swapped in)
+    // pub fn new_and_swap_in(mode: AllocationBackingMode, size: usize) -> Result<Self,Self> {
+    //     let mut this = Self::new(mode,size);
+    //     match this.swap_in() {
+    //         Ok(_) => Ok(this),
+    //         Err(_) => Err(this),
+    //     }
+    // }
+    
     /// Load into physical memory
     /// Returns Ok() if successful, Err() if it failed
     /// 
@@ -95,7 +144,7 @@ impl AllocationBacking {
             AllocationBackingMode::GuardPage(gptype) => Err(BackingLoadError::GuardPage(gptype)),
             
             _ => {
-                 let phys_alloc = palloc(core::alloc::Layout::from_size_align(self.size, MIN_PAGE_SIZE).unwrap()).ok_or(BackingLoadError::PhysicalAllocationFailed)?;
+                 let phys_alloc = Self::_palloc(self.size).ok_or(BackingLoadError::PhysicalAllocationFailed)?;
                  match self.mode {
                      AllocationBackingMode::PhysMem(_) | AllocationBackingMode::PhysMemShared{..} | AllocationBackingMode::GuardPage(_) => unreachable!(),
                      
@@ -123,6 +172,7 @@ impl AllocationBacking {
             },
         }
     }
+    
     /// Get the starting physical memory address, or None if not in physical memory right now
     pub fn get_addr(&self) -> Option<usize> {
         match self.mode {
@@ -286,6 +336,27 @@ impl CombinedAllocation {
             allocation_flags: alloc_flags,
         })))
     }
+    pub fn new_from_request(backing_req: AllocationBackingRequest, alloc_flags: AllocationFlags) -> (Arc<Self>,bool) {
+        let (backing,success) = AllocationBacking::new_from_request(backing_req);
+        let size = backing.get_size();
+        (Self::_new_single(size,backing,alloc_flags), success)
+    }
+    /*pub fn alloc_new_phys(size: usize, alloc_flags: AllocationFlags) -> Option<Arc<Self>> {
+        let backing = AllocationBacking::new_palloc(size);
+        if backing.get_addr().is_none() { return None; }
+        Some(Self::_new_single(size, backing, alloc_flags))
+    }
+    pub fn new_from_backing_mode(size: usize, backing_mode: AllocationBackingMode, alloc_flags: AllocationFlags) -> Arc<Self> {
+        Self::_new_single(size,AllocationBacking::new(backing_mode,size),alloc_flags)
+    }
+    pub fn alloc_new_phys_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, alloc_flags: AllocationFlags, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocationMode, virt_flags: VMemFlags) -> Option<VirtAllocationGuard> {
+        let allocation = Self::alloc_new_phys(size, alloc_flags);
+        allocation.map_virtual(allocator, virt_mode, virt_flags)
+    }
+    pub fn new_from_backing_mode_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, backing_mode: AllocationBackingMode, alloc_flags: AllocationFlags, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocation, virt_flags: VMemFlags) -> Option<VirtAllocationGuard> {
+        let allocation = Self::new_from_backing_mode(size, backing_mode, alloc_flags);
+        allocation.map_virtual(allocator, virt_mode, virt_flags)
+    }*/
     /*
     pub fn new_from_phys(alloc: PhysicalAllocationSharable, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
         Self::_new_single(alloc.get_size(), Some(alloc), phys_flags, None, alloc_flags)

@@ -6,7 +6,7 @@ use alloc::sync::{Arc,Weak};
 use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,MIN_PAGE_SIZE};
 use super::physical::{PhysicalMemoryAllocation,palloc};
 use bitflags::bitflags;
-use crate::sync::hspin::{HMutex,HMutexGuard};
+use crate::sync::{YMutex,YMutexGuard};
 
 use super::paging::{global_pages::KERNEL_PTABLE,strategy::KALLOCATION_KERNEL_GENERALDYN,strategy::PageAllocationStrategies};
 
@@ -214,11 +214,11 @@ impl CombinedAllocationInner {
         }
     }
 }
-pub struct CombinedAllocation(HMutex<CombinedAllocationInner>);
+pub struct CombinedAllocation(YMutex<CombinedAllocationInner>);
 impl CombinedAllocation {
     fn _new_single(size: usize, phys: Option<PhysicalMemoryAllocation>, phys_flags: PMemFlags,
                     swap: Option<SwapAllocation>, alloc_flags: AllocationFlags) -> Arc<Self> {
-        Arc::new(Self(HMutex::new(CombinedAllocationInner{
+        Arc::new(Self(YMutex::new(CombinedAllocationInner{
             sections: VecDeque::from([CombinedAllocationSegment{
                     size: size,
                     physical: phys.map(|alloc|PhysicalAllocation::new(
@@ -477,7 +477,7 @@ impl VirtAllocationGuard {
     pub fn combined_allocation(&self) -> &Arc<CombinedAllocation> {
         &self.allocation
     }
-    fn combined_allocation_inner(&self) -> HMutexGuard<'_,CombinedAllocationInner> {
+    fn combined_allocation_inner(&self) -> YMutexGuard<'_,CombinedAllocationInner> {
         core::ops::Deref::deref(&self.allocation).0.lock()
     }
     

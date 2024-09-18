@@ -159,13 +159,50 @@ struct CombinedAllocationSegment {  // vmem is placed before pmem as part of dro
     
     /// Size in bytes
     size: usize,
+    /// Section ID - a unique way of identifying a given section. Not equivalent to the index, which may vary as allocations and deallocations occur.
+    section_identifier: usize,
+}
+impl CombinedAllocationSegment {
+    pub fn _map_to_current(&self, valloc: &VirtualAllocation){
+        match self.physical {
+            Some(ref phys) => {
+                valloc.map(phys.start_addr());  // valloc is normalized upon being added to the combinedallocation so we don't need to account for baseaddr_offset
+            },
+            None => {
+                valloc.set_absent();
+            },
+        }
+    }
+    pub fn _update_mappings_section(&self){
+        for valloc in self.vmem.iter().flatten() {
+            self._map_to_current(valloc);
+        }
+    }
 }
 struct CombinedAllocationInner {
     sections: VecDeque<CombinedAllocationSegment>,  // a series of consecutive allocations in virtual memory, sorted in order of start address (from lowest to highest)
     available_virt_slots: Vec<Option<VirtualAllocationMode>>, // https://godbolt.org/z/3vE4nzzaM - Option<enum X> is optimized to a single tag instead of two (provided there's space)
     
+    next_section_identifier: usize,
     physical_alloc_flags: PMemFlags,
     allocation_flags: AllocationFlags,
+}
+impl CombinedAllocationInner {
+    pub fn _get_new_section_identifier(&mut self) -> usize {
+        let id = self.next_section_identifier;
+        self.next_section_identifier += 1;
+        id
+    }
+    pub fn _find_section_with_identifier_mut(&mut self, section_identifier: usize) -> Option<&mut CombinedAllocationSegment> {
+        self.sections.iter_mut().find(|item|item.section_identifier == section_identifier)
+    }
+    
+    pub fn _update_mappings_valloc(&self, valloc_idx: usize){
+        for section in self.sections.iter() {
+            let Some(valloc) = section.vmem[valloc_idx].as_ref() else { continue };
+            section._map_to_current(valloc);
+        }
+    }
 }
 pub struct CombinedAllocation(HMutex<CombinedAllocationInner>);
 impl CombinedAllocation {
@@ -178,9 +215,11 @@ impl CombinedAllocation {
                     )),
                     vmem: Vec::new(),
                     swap: None,
+                    section_identifier: 0,
                 }]),
             available_virt_slots: Vec::new(),
             
+            next_section_identifier: 1,
             physical_alloc_flags: phys_flags,
             allocation_flags: alloc_flags,
         })))
@@ -195,28 +234,6 @@ impl CombinedAllocation {
         allocation.map_virtual(allocator, virt_mode, virt_flags)
     }
     
-    fn _map_to_current(self: &Arc<Self>, section: &CombinedAllocationSegment, valloc: &VirtualAllocation){
-        match section.physical {
-            Some(ref phys) => {
-                valloc.map(phys.start_addr());  // valloc is normalized upon being added to the combinedallocation so we don't need to account for baseaddr_offset
-            },
-            None => {
-                valloc.set_absent();
-            },
-        }
-    }
-    fn _update_mappings_section(self: &Arc<Self>, section: &CombinedAllocationSegment){
-        for valloc in section.vmem.iter().flatten() {
-            self._map_to_current(section, valloc);
-        }
-    }
-    fn _update_mappings_valloc(self: &Arc<Self>, sections: &VecDeque<CombinedAllocationSegment>, valloc_idx: usize){
-        for section in sections.iter() {
-            let Some(valloc) = section.vmem[valloc_idx].as_ref() else { continue };
-            self._map_to_current(section, valloc);
-        }
-    }
-    
     /// Allocate more memory, expanding downwards
     pub fn expand_downwards(self: &Arc<Self>, size_bytes: usize) {
         let mut inner = self.0.lock();
@@ -228,6 +245,7 @@ impl CombinedAllocation {
             swap: None,
             
             size: layout.size(),
+            section_identifier: inner._get_new_section_identifier(),
         };
         // Populate virtual memory allocations
         for (index, virt_mode) in inner.available_virt_slots.iter().enumerate() {
@@ -254,17 +272,16 @@ impl CombinedAllocation {
         new_section.physical = palloc(layout).map(|phys_raw|PhysicalAllocation::new(phys_raw, phys_flags));
         
         // Update mappings
-        self._update_mappings_section(&new_section);
+        new_section._update_mappings_section();
         // And append
         inner.sections.push_front(new_section);
     }
     
-    // TODO: replace `section` with some sort of handle (to avoid race conditions causing OOB / mismatch errors)
     /// Load a section from swap into physical memory
-    pub fn swap_in(self: &Arc<Self>, section: usize) -> Result<(),SwapInError> {
+    pub fn swap_in(self: &Arc<Self>, section_identifier: usize) -> Result<(),SwapInError> {
         let mut inner = self.0.lock();
         let phys_alloc_flags = inner.physical_alloc_flags;
-        let section = &mut inner.sections[section];
+        let section = inner._find_section_with_identifier_mut(section_identifier).ok_or(SwapInError::SectionNotFound)?;
         
         // Check swap type to ensure it's valid
         let swap_type = section.swap.as_ref().ok_or(SwapInError::NotInSwap)?;
@@ -284,7 +301,7 @@ impl CombinedAllocation {
         section.physical = Some(phys_allocation);
         section.swap = None;
         // Update mappings
-        self._update_mappings_section(section);
+        section._update_mappings_section();
         // Done :)
         Ok(())
     }
@@ -355,7 +372,7 @@ impl CombinedAllocation {
         };
         
         // Update mappings
-        self._update_mappings_valloc(&inner.sections, index);
+        inner._update_mappings_valloc(index);
         // And return a guard
         Some(VirtAllocationGuard { allocation: Arc::clone(self), index: index })
     }
@@ -367,6 +384,8 @@ pub enum SwapInError {
     PMemAllocationFail,
     /// Not swapped out
     NotInSwap,
+    /// Section not found
+    SectionNotFound,
 }
 
 /// A guard corresponding to a given virtual memory allocation + its unified counterpart

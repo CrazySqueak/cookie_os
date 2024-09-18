@@ -25,11 +25,11 @@ bitflags! {
         const DROP_ZEROED = 1<<1;
     }
 }
-pub enum PhysicalAllocationBacking {
+pub enum PhysicalAllocationSharable {
     Owned(PhysicalMemoryAllocation),
     Shared { alloc: Arc<PhysicalMemoryAllocation>, offset: usize, size: usize },
 }
-impl PhysicalAllocationBacking {
+impl PhysicalAllocationSharable {
     pub fn get_addr(&self) -> usize {
         match self {
             &Self::Owned(ref alloc) => alloc.get_addr(),
@@ -65,21 +65,12 @@ impl PhysicalAllocationBacking {
     }
 }
 struct PhysicalAllocation {
-    allocation: PhysicalAllocationBacking,
+    allocation: PhysicalAllocationSharable,
     flags: PMemFlags,
 }
 impl PhysicalAllocation {
+    #[deprecated]
     fn _zero_out(&self) {
-        let phys_addr = self.allocation.get_addr();
-        let size = self.allocation.get_size();
-        // First, we map it somewhere
-        let vmap = KERNEL_PTABLE.allocate(size, KALLOCATION_KERNEL_GENERALDYN).expect("How the fuck are you out of virtual memory???");
-        let ptr = vmap.start() as *mut u8;
-        // Then, we zero it out
-        // SAFETY: We just allocated the vmem so we know it's valid
-        unsafe { core::ptr::write_bytes(ptr, 0, size) }
-        // All done
-        drop(vmap);
     }
     
     fn _init(&self) {
@@ -89,7 +80,7 @@ impl PhysicalAllocation {
         }
     }
     
-    pub fn new(alloc: PhysicalAllocationBacking, flags: PMemFlags) -> Self {
+    pub fn new(alloc: PhysicalAllocationSharable, flags: PMemFlags) -> Self {
         let this = Self {
             allocation: alloc,
             flags: flags,
@@ -132,6 +123,88 @@ impl core::ops::Drop for PhysicalAllocation {
             self._zero_out();
         }
     }
+}
+
+#[derive(Clone,Copy,Debug)]
+pub enum GuardPageType {
+    StackLimit = 0xF47B33F,  // Fat Beef
+    NullPointer = 0x4E55_4C505452,  // "NULPTR"
+}
+/// The memory that backs a given allocation
+pub enum AllocationBackingMode {
+    /// Backed by physical memory
+    PhysMem(PhysicalMemoryAllocation),
+    /// "guard page" - attempting to access it causes a page fault
+    GuardPage(GuardPageType),
+    /// Uninitialised memory - when swapped in, memory will be left uninitialised
+    UninitMem,
+    /// Zeroed memory - when swapped in, memory will be zeroed
+    Zeroed,
+}
+pub struct AllocationBacking {
+    mode: AllocationBackingMode,
+    size: usize,
+}
+impl AllocationBacking {
+    pub fn new(mode: AllocationBackingMode, size: usize) -> Self {
+        Self { mode, size }
+    }
+    /// Load into physical memory
+    /// Returns Ok() if successful, Err() if it failed
+    fn swap_in(&mut self) -> Result<BackingLoadSuccess,BackingLoadError> {
+        match self.mode {
+            AllocationBackingMode::PhysMem(_) => Ok(BackingLoadSuccess::AlreadyInPhysMem),
+            AllocationBackingMode::GuardPage(gptype) => Err(BackingLoadError::GuardPage(gptype)),
+            
+            _ => {
+                 let phys_alloc = palloc(core::alloc::Layout::from_size_align(self.size, MIN_PAGE_SIZE).unwrap()).ok_or(BackingLoadError::PhysicalAllocationFailed)?;
+                 match self.mode {
+                     AllocationBackingMode::PhysMem(_) | AllocationBackingMode::GuardPage(_) => unreachable!(),
+                     
+                     AllocationBackingMode::UninitMem => {},  // uninit mem can be left as-is
+                     AllocationBackingMode::Zeroed => {  // zeroed and other backing modes must be mapped into vmem and initialised
+                        // Map into vmem and obtain pointer
+                        let vmap = KERNEL_PTABLE.allocate(self.size, KALLOCATION_KERNEL_GENERALDYN).expect("How the fuck are you out of virtual memory???");
+                        let ptr = vmap.start() as *mut u8;
+                        // Initialise memory
+                        match self.mode {
+                            AllocationBackingMode::PhysMem(_) | AllocationBackingMode::GuardPage(_) | AllocationBackingMode::UninitMem => unreachable!(),
+                            
+                            AllocationBackingMode::Zeroed => unsafe{
+                                // SAFETY: This pointer is to vmem which we have just allocated, and is to u8s which are robust
+                                // Guaranteed to be page-aligned and allocated
+                                core::ptr::write_bytes(ptr, 0, self.size)
+                            },
+                        }
+                        // Clear vmem allocation
+                        drop(vmap)
+                     },
+                 }
+                 self.mode = AllocationBackingMode::PhysMem(phys_alloc);
+                 Ok(BackingLoadSuccess::LoadSuccessful)
+            },
+        }
+    }
+    /// Get the starting physical memory address, or None if not in physical memory right now
+    pub fn get_addr(&self) -> Option<usize> {
+        match self.mode {
+            AllocationBackingMode::PhysMem(ref alloc) => Some(alloc.get_addr()),
+            _ => None,
+        }
+    }
+    /// Get the size of this allocation
+    pub fn get_size(&self) -> usize {
+        self.size
+    }
+}
+pub enum BackingLoadSuccess {
+    /// "already in phys mem" can be an error unto itself, in some cases
+    AlreadyInPhysMem,
+    LoadSuccessful,
+}
+pub enum BackingLoadError {
+    GuardPage(GuardPageType),
+    PhysicalAllocationFailed,
 }
 
 use super::paging::PageFlags as VMemFlags;
@@ -194,17 +267,7 @@ pub fn lookup_absent_id(absent_id: usize) -> Option<(Arc<CombinedAllocation>,usi
     Some((combined_alloc,virt_index))
 }
 
-#[derive(Clone,Copy,Debug)]
-pub enum GuardPageType {
-    StackLimit = 0xF47B33F,  // Fat Beef
-    NullPointer = 0x4E55_4C505452,  // "NULPTR"
-}
 pub enum SwapAllocation {
-    /// Guard page - i.e. the memory doesn't actually exist, but is instead reserved to prevent null pointer derefs, buffer overruns, etc.
-    GuardPage(GuardPageType),
-    /// Uninitialised memory - memory that has been reserved in vmem, but not in pmem
-    Uninitialised,
-    
     // "real" swap isn't supported yet
 }
 impl SwapAllocation {
@@ -282,7 +345,7 @@ impl CombinedAllocationInner {
 }
 pub struct CombinedAllocation(YMutex<CombinedAllocationInner>);
 impl CombinedAllocation {
-    fn _new_single(size: usize, phys: Option<PhysicalAllocationBacking>, phys_flags: PMemFlags,
+    fn _new_single(size: usize, phys: Option<PhysicalAllocationSharable>, phys_flags: PMemFlags,
                     swap: Option<SwapAllocation>, alloc_flags: AllocationFlags) -> Arc<Self> {
         Arc::new(Self(YMutex::new(CombinedAllocationInner{
             sections: VecDeque::from([CombinedAllocationSegment{
@@ -301,7 +364,7 @@ impl CombinedAllocation {
             allocation_flags: alloc_flags,
         })))
     }
-    pub fn new_from_phys(alloc: PhysicalAllocationBacking, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
+    pub fn new_from_phys(alloc: PhysicalAllocationSharable, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
         Self::_new_single(alloc.get_size(), Some(alloc), phys_flags, None, alloc_flags)
     }
     pub fn new_from_swap(size: usize, alloc: SwapAllocation, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Arc<Self> {
@@ -309,7 +372,7 @@ impl CombinedAllocation {
     }
     pub fn alloc_new_phys(size: usize, phys_flags: PMemFlags, alloc_flags: AllocationFlags) -> Option<Arc<Self>> {
         let layout = core::alloc::Layout::from_size_align(size, MIN_PAGE_SIZE).unwrap().pad_to_align();
-        let phys_allocation = PhysicalAllocationBacking::Owned(palloc(layout)?);
+        let phys_allocation = PhysicalAllocationSharable::Owned(palloc(layout)?);
         Some(Self::new_from_phys(phys_allocation,phys_flags,alloc_flags))
     }
     pub fn alloc_new_phys_virt<PFA:PageFrameAllocator+Send+Sync+'static>(size: usize, phys_flags: PMemFlags, allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocationMode, virt_flags: VMemFlags, alloc_flags: AllocationFlags) -> Option<VirtAllocationGuard> {
@@ -356,7 +419,7 @@ impl CombinedAllocation {
         
         // Allocate backing (physical memory)
         let phys_flags = inner.physical_alloc_flags;
-        new_section.physical = palloc(layout).map(|phys_raw|PhysicalAllocation::new(PhysicalAllocationBacking::Owned(phys_raw), phys_flags));
+        new_section.physical = palloc(layout).map(|phys_raw|PhysicalAllocation::new(PhysicalAllocationSharable::Owned(phys_raw), phys_flags));
         
         // Update mappings
         new_section._update_mappings_section();
@@ -452,7 +515,7 @@ impl CombinedAllocation {
         // Allocate physical memory
         let layout = core::alloc::Layout::from_size_align(section.size, MIN_PAGE_SIZE).unwrap();
         let phys_allocation = palloc(layout).ok_or(SwapInError::PMemAllocationFail)?;
-        let phys_allocation = PhysicalAllocation { allocation: PhysicalAllocationBacking::Owned(phys_allocation), flags: phys_alloc_flags };  // FIXME: Shouldn't this be using the constructor? Or maybe the constructor is redundant? DEcide on one or the other
+        let phys_allocation = PhysicalAllocation { allocation: PhysicalAllocationSharable::Owned(phys_allocation), flags: phys_alloc_flags };  // FIXME: Shouldn't this be using the constructor? Or maybe the constructor is redundant? DEcide on one or the other
         
         // TODO: Map into virtual memory and write data (if necessary)
         

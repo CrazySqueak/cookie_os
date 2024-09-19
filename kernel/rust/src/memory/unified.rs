@@ -70,8 +70,8 @@ pub type BackingSize = core::num::NonZero<usize>;
 pub enum AllocationBackingRequest {
     UninitPhysical { size: BackingSize },
     ZeroedPhysical { size: BackingSize },
-    /// Similar to UninitPhysical, but isn't automatically allocated in physical memory. Instead, it's initialised as an UninitMem/Zeroed
-    Reservation { size: BackingSize, zeroed: bool },
+    /// Similar to UninitPhysical, but isn't automatically allocated in physical memory. Instead, it's initialised as an UninitMem.
+    Reservation { size: BackingSize },
     
     GuardPage { gptype: GuardPageType, size: BackingSize },
 }
@@ -80,7 +80,7 @@ impl AllocationBackingRequest {
         match *self {
             Self::UninitPhysical{size} => size,
             Self::ZeroedPhysical{size} => size,
-            Self::Reservation{size,..} => size,
+            Self::Reservation{size} => size,
             Self::GuardPage{size,..} => size,
         }
     }
@@ -122,10 +122,7 @@ impl AllocationBacking {
         let size = request.get_size();
         match request {
             AllocationBackingRequest::GuardPage { gptype, .. } => (Self::new(AllocationBackingMode::GuardPage(gptype),size),true),
-            AllocationBackingRequest::Reservation { size, zeroed } => {
-                let mode = if zeroed { AllocationBackingMode::Zeroed } else { AllocationBackingMode::UninitMem };
-                (Self::new(mode,size),true)
-            },
+            AllocationBackingRequest::Reservation { size } => (Self::new(AllocationBackingMode::UninitMem,size),true),
             
             AllocationBackingRequest::UninitPhysical { .. } => {
                 match Self::_palloc(size.get()) {
@@ -385,7 +382,7 @@ impl CombinedAllocation {
     }
     pub fn new_from_requests(backing_reqs: Vec<AllocationBackingRequest>, alloc_flags: AllocationFlags) -> Vec<AllocationSection> {
         let total_size = backing_reqs.iter().map(|r|r.get_size().get()).reduce(core::ops::Add::add).unwrap();  // total_size, rounded to account for page-alignment
-        let (this,_) = Self::new_from_request(AllocationBackingRequest::Reservation { size: BackingSize::new(total_size).unwrap(), zeroed: false }, alloc_flags);
+        let (this,_) = Self::new_from_request(AllocationBackingRequest::Reservation { size: BackingSize::new(total_size).unwrap() }, alloc_flags);
         
         let mut finished: Vec<AllocationSection> = Vec::new();
         let mut size_remaining: usize = total_size;
@@ -532,12 +529,12 @@ impl CombinedAllocation {
     }
 }
 /// A newtype wrapper representing a given section in the unified allocation
-/// This is not tied to the given section - drop()ing it is harmless, and it conversely may be invalidated by anyone at any time.
-#[derive(Clone)]
+/// This is not tied to the given section - drop()ing will not de-allocate the section (as long as another Arc<> to the CombinedAllocation still exists), however you will no longer be able to operate on it
 pub struct AllocationSection {
     allocation: Arc<CombinedAllocation>,
     section_identifier: usize,
 }
+impl !Clone for AllocationSection {}
 impl AllocationSection {
     fn new(allocation: Arc<CombinedAllocation>, section_identifier: usize) -> Self {
         Self { allocation, section_identifier }
@@ -618,6 +615,20 @@ impl AllocationSection {
             Self::new(Arc::clone(&self.allocation),left_identifier),
             Self::new(Arc::clone(&self.allocation),right_identifier),
         ))
+    }
+    /// Deallocate this section. Only succeeds if this is at the edge of the allocation, as allocations cannot have holes.
+    pub fn deallocate(self) -> Result<(),Self> {
+        let mut inner = self.allocation_inner();
+        let section_idx = inner._find_section_with_identifier_index(self.section_identifier).unwrap();
+        
+        let this_section = if section_idx == 0 { inner.sections.pop_front().unwrap() }
+                            else if section_idx == inner.sections.len()-1 { inner.sections.pop_back().unwrap() }
+                            else { drop(inner); return Err(self); };
+        
+        // We have now removed ourselves from the allocation
+        // We drop the section to deallocate it from memory (RAII go brrrrrr)
+        drop(this_section);
+        Ok(())
     }
     
     /// Load a section from swap into physical memory
@@ -710,6 +721,73 @@ impl core::fmt::Debug for VirtAllocationGuard {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "VirtAllocationGuard [ {:x}..{:x} ]", self.start_addr(), self.end_addr())
     } 
+}
+
+pub struct AllocatedStack {  // assumes stack grows downwards
+    virt_stack: VirtAllocationGuard,
+    
+    guard_page: AllocationSection,
+    guard_size: BackingSize,
+}
+impl AllocatedStack {
+    pub fn alloc_new<PFA:PageFrameAllocator+Send+Sync+'static>(stack_size: BackingSize, guard_size: BackingSize, alloc_flags: AllocationFlags, virt_allocator: &LockedPageAllocator<PFA>, virt_mode: VirtualAllocationMode, virt_flags: VMemFlags) -> Option<Self> {
+        // Map into physical memory
+        let sections = CombinedAllocation::new_from_requests(alloc::vec![
+            // Guard Page
+            AllocationBackingRequest::GuardPage { gptype: GuardPageType::StackLimit, size: guard_size },
+            // Stack
+            AllocationBackingRequest::UninitPhysical { size: stack_size },
+        ], alloc_flags);
+        let guard_page = sections.into_iter().nth(0)?;
+        // Map into virtual memory
+        let virt_allocation = guard_page.allocation().map_virtual(virt_allocator, virt_mode, virt_flags)?;
+        // Ok :)
+        Some(Self {
+            virt_stack: virt_allocation,
+            guard_page: guard_page,
+            guard_size: guard_size,
+        })
+    }
+    
+    pub fn bottom_vaddr(&self) -> usize {
+        self.virt_stack.end_addr()
+    }
+    
+    pub fn expand(&mut self, size_bytes: usize) -> bool {
+        let old_start = self.virt_stack.start_addr();  // (the only way to check if our specific virtual allocation has expanded is to check its start address)
+        
+        // Step 1: Allocate the new expansion + guard page
+        let extra_expansion_size = size_bytes.saturating_sub(self.guard_size.get());  // We consume the existing guard page as part of the expansion
+        let total_expansion_size = BackingSize::new(extra_expansion_size + self.guard_size.get()).unwrap();  // X+guard_size is guaranteed to be >0 since guard_size > 0
+        let expanded_section = self.virt_stack.combined_allocation().expand_downwards(AllocationBackingRequest::Reservation { size: total_expansion_size });
+        // Split new expansion into expansion + guard page
+        let (expansion, new_guard) = if let Some(extra_expansion_size) = BackingSize::new(extra_expansion_size) {
+            // Split expanded section into two
+            let (guard, expansion) = expanded_section.split(self.guard_size).unwrap();
+            expansion.overwrite_type(AllocationBackingRequest::UninitPhysical { size: extra_expansion_size });  // map expansion into memory
+            (Some(expansion), guard)
+        } else {
+            // No extra expansion needed
+            (None, expanded_section)
+        };
+        
+        // Check for success - vmem addresses should be updated now if this was successful./
+        // (if it wasn't, we must undo)
+        let success = self.virt_stack.start_addr() != old_start;
+        if !success {
+            new_guard.deallocate().ok().expect("Deallocation failed!");
+            if let Some(expansion) = expansion { expansion.deallocate().ok().expect("Deallocation failed!"); }
+            return false;
+        }
+        
+        // Step 2: Switch guards, and map the old guard as available stack space
+        new_guard.overwrite_type(AllocationBackingRequest::GuardPage { gptype: GuardPageType::StackLimit, size: self.guard_size });
+        let old_guard = core::mem::replace(&mut self.guard_page, new_guard);
+        old_guard.overwrite_type(AllocationBackingRequest::UninitPhysical { size: self.guard_size });
+        
+        // Success
+        true
+    }
 }
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};

@@ -20,10 +20,10 @@ pub struct PageAlignedUsize(NonZeroUsize);
 impl PageAlignedUsize {
     /// Returns self if page-aligned and non-zero. Otherwise, panics (in debug builds). If debug assertions are disabled and these conditions are not met, behaviour is undefined.
     #[track_caller]
-    pub const unsafe fn new(x: usize) -> Self {
-        debug_assert!(x != 0, "PageAlignedUsize must be non-zero");
+    pub const fn new(x: usize) -> Self {
+        assert!(x != 0, "PageAlignedUsize must be non-zero");  // Ensure we don't cause UB
         debug_assert!(x%PAGE_ALIGN == 0, "PageAlignedUsize must be page-aligned.");
-        Self::new_unchecked(x)
+        unsafe{Self::new_unchecked(x)}
     }
     pub const unsafe fn new_unchecked(x: usize) -> Self {
         Self(NonZeroUsize::new_unchecked(x))
@@ -31,7 +31,7 @@ impl PageAlignedUsize {
     /// Returns Some() if page-aligned and non-zero. Otherwise, returns None.
     pub const fn new_checked(x: usize) -> Option<Self> {
         if x == 0 { None }
-        else if x%PAGE_ALIGN == 0 { Some(unsafe{Self::new(x)}) }
+        else if x%PAGE_ALIGN == 0 { Some(Self::new(x)) }
         else { None }
     }
     /// Round up to the next non-zero, page-aligned value.
@@ -42,10 +42,10 @@ impl PageAlignedUsize {
     /// In other words, where the input is x and the output is (y,rem): y = x+rem
     pub const fn new_rounded_with_excess(x: usize) -> (Self,usize) {
         if x == 0 { (Self(unsafe{NonZeroUsize::new_unchecked(PAGE_ALIGN)}), PAGE_ALIGN) }  // safety: PAGE_ALIGN is never zero
-        else if x%PAGE_ALIGN == 0 { (unsafe{Self::new(x)}, 0) }
+        else if x%PAGE_ALIGN == 0 { (Self::new(x), 0) }
         else {
             let excess = PAGE_ALIGN-(x%PAGE_ALIGN);
-            (unsafe{Self::new(x+excess)}, excess)
+            (Self::new(x+excess), excess)
         }
     }
     

@@ -131,9 +131,10 @@ impl AllocationBacking {
         }
     }
     
-    /// Split this allocation into two. One of `midpoint` bytes and one of the remainder (if nonzero)
-    pub fn split(self, midpoint: BackingSize) -> (Self,Option<Self>) {
-        if midpoint >= self.size { return (self,None); }
+    /// Split this allocation into two. One of `midpoint` bytes and one of the remainder
+    /// midpoint MUST be < self.size
+    pub fn split(self, midpoint: BackingSize) -> (Self,Self) {
+        //if midpoint >= self.size { return (self,None); }
         let midpoint: usize = midpoint.get();
         let lhs_size = midpoint;
         let rhs_size = self.size.get()-midpoint;
@@ -154,7 +155,7 @@ impl AllocationBacking {
             AllocationBackingMode::Zeroed => (AllocationBackingMode::Zeroed,AllocationBackingMode::Zeroed),
         };
         (Self::new(lhs_mode,BackingSize::new_checked(lhs_size).unwrap()),
-         Some(Self::new(rhs_mode,BackingSize::new_checked(rhs_size).unwrap())))
+         Self::new(rhs_mode,BackingSize::new_checked(rhs_size).unwrap()))
     }
     
     /// Load into physical memory
@@ -230,7 +231,7 @@ struct VirtualAllocation {
 }
 impl VirtualAllocation {
     pub fn new(alloc: Box<dyn AnyPageAllocation>, flags: VMemFlags,
-                  combined_alloc: Weak<CombinedAllocation>, virt_index: usize, section_identifier: usize) -> (Self,AbsentPagesHandleB) {
+                  combined_alloc: Weak<()>, virt_index: usize, section_identifier: usize) -> (Self,AbsentPagesHandleB) {
         // Populate an absent_pages_table entry
         let ate = ABSENT_PAGES_TABLE.create_new_descriptor();
         let apth = ate.commit(AbsentPagesItemA {
@@ -256,6 +257,18 @@ impl VirtualAllocation {
         self.allocation.set_absent(self.absent_pages_table_handle.get_id().try_into().unwrap());
     }
     
+    /// mid MUST be < size
+    pub fn split(self, mid: BackingSize, lhs_section_id: usize, rhs_section_id: usize) -> (Self,Self) {
+        let Self { allocation, flags, absent_pages_table_handle: apth } = self;
+        let apt_data = apth.get_a();
+        let apt_alloc_weak = &apt_data.allocation;
+        let virt_idx = apt_data.virt_allocation_index;
+        
+        let (allocation_left, allocation_right) = allocation.split_dyn(mid);
+        (Self::new(allocation_left, flags, Weak::clone(apt_alloc_weak), virt_idx, lhs_section_id).0,
+         Self::new(allocation_right, flags, Weak::clone(apt_alloc_weak), virt_idx, rhs_section_id).0)
+    }
+    
     pub fn start_addr(&self) -> usize {
         self.allocation.start()
     }
@@ -273,13 +286,13 @@ pub enum VirtualAllocationMode {
     FixedVirtAddr { addr: usize },
 }
 /// Lookup an "absent page" data item in the ABSENT_PAGES_TABLE
-pub fn lookup_absent_id(absent_id: usize) -> Option<(AllocationSection,usize)> {
+pub fn lookup_absent_id(absent_id: usize) -> Option<((),usize)> {
     let apth_a = ABSENT_PAGES_TABLE.acquire_a(absent_id.try_into().unwrap()).ok()?;
     let apt_item_a = apth_a.get_a();
     let combined_alloc = Weak::upgrade(&apt_item_a.allocation)?;
     let virt_index = apt_item_a.virt_allocation_index;
     let section_identifier = apt_item_a.section_identifier;
-    let section_obj = AllocationSection::new(combined_alloc,section_identifier);
+    let section_obj = todo!();//AllocationSection::new(combined_alloc,section_identifier);
     Some((section_obj,virt_index))
 }
 
@@ -293,10 +306,76 @@ bitflags! {
 // NOTE: CombinedAllocation must ALWAYS be locked BEFORE any page allocators (if you are nesting the locks, which isn't recommended but often necessary)!!
 
 // TODO
+/// Each "segment" is tied to a given allocation backing.
+/// Segments have a fixed size, but may be split and (possibly merged?).
+struct CombinedAllocationSegment {
+    vmem: Vec<Option<VirtualAllocation>>,  // vmem is placed first in drop order so it's dropped/cleared before the backing is
+    backing: AllocationBacking,
+}
+impl CombinedAllocationSegment {
+    pub fn get_size(&self) -> BackingSize {
+        self.backing.get_size()
+    }
+    
+    // SWAPPING
+    pub fn swap_in(&mut self) -> Result<BackingLoadSuccess,BackingLoadError> {
+        let result = self.backing.swap_in();
+        self.remap_all_pages();
+        result
+    }
+    
+    // SPLITTING/MERGING
+    pub fn split(self, mid: BackingSize) -> (Self,Option<Self>) {
+        if mid >= self.get_size() { return (self, None); }
+        let Self { backing, vmem } = self;
+        
+        // Split the backing
+        let (lhs_backing, rhs_backing) = backing.split(mid);
+        
+        // Split the vmem allocations
+        let mut lhs_vmem: Vec<Option<VirtualAllocation>> = vec_of_non_clone![None;vmem.len()];
+        let mut rhs_vmem: Vec<Option<VirtualAllocation>> = vec_of_non_clone![None;vmem.len()];
+        for (index, old_alloc) in vmem.into_iter().enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {  // We only process extant vmem allocations. Nones are skipped.
+            let (lhs_alloc, rhs_alloc) = old_alloc.split(mid, 0, 0);  // TODO: section identifiers?
+            lhs_vmem[index] = Some(lhs_alloc);
+            rhs_vmem[index] = Some(rhs_alloc);
+        }
+        
+        // Done :)
+        let lhs = Self { backing: lhs_backing, vmem: lhs_vmem }; lhs.remap_all_pages();
+        let rhs = Self { backing: rhs_backing, vmem: rhs_vmem }; rhs.remap_all_pages();
+        (lhs, rhs)
+    }
+    
+    // REMAPPING
+    /// Update the page table for the given virtual allocation to match any changes that have been made
+    fn remap_pages(&self, vidx: usize) {
+        let Some(valloc) = (try{ self.vmem.get(vidx)?.as_ref()? }) else { return };
+        self._remap_pages_inner(valloc)
+    }
+    /// Update the page table for all virtual allocations, with respect to this particular segment
+    fn remap_all_pages(&self) {
+        for valloc in self.vmem.iter().map(Option::as_ref).flatten() {
+            self._remap_pages_inner(valloc)
+        }
+    }
+    fn _remap_pages_inner(&self, valloc: &VirtualAllocation) {
+        match self.backing.get_addr() {
+            Some(addr) => valloc.map(addr),
+            None => valloc.set_absent(),
+        }
+    }
+}
+/// Each "section" is a logical division. For example, working memory and the guard page would be two different sections
+/// Sections may be transparently subdivided into multiple segments by the memory manager as it sees fit.
+struct CombinedAllocationSection {
+    segments: Vec<CombinedAllocationSegment>,
+}
+// TODO
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};
 struct AbsentPagesItemA {
-    allocation: Weak<CombinedAllocation>,
+    allocation: Weak<()>,
     virt_allocation_index: usize,
     section_identifier: usize,
 }

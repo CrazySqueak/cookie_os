@@ -135,6 +135,7 @@ impl AllocationBacking {
     /// midpoint MUST be < self.size
     pub fn split(self, midpoint: BackingSize) -> (Self,Self) {
         //if midpoint >= self.size { return (self,None); }
+        debug_assert!(midpoint < self.size);
         let midpoint: usize = midpoint.get();
         let lhs_size = midpoint;
         let rhs_size = self.size.get()-midpoint;
@@ -259,6 +260,7 @@ impl VirtualAllocation {
     
     /// mid MUST be < size
     pub fn split(self, mid: BackingSize, lhs_section_id: usize, rhs_section_id: usize) -> (Self,Self) {
+        debug_assert!(mid < self.size());
         let Self { allocation, flags, absent_pages_table_handle: apth } = self;
         let apt_data = apth.get_a();
         let apt_alloc_weak = &apt_data.allocation;
@@ -336,8 +338,10 @@ impl CombinedAllocationSegment {
     }
     
     // SPLITTING/MERGING
-    pub fn split(self, mid: BackingSize) -> (Self,Option<Self>) {
-        if mid >= self.get_size() { return (self, None); }
+    /// Midpoint MUST be < self.size
+    pub fn split(self, mid: BackingSize) -> (Self,Self) {
+        //if mid >= self.get_size() { return (self, None); }
+        debug_assert!(mid < self.get_size());
         let Self { backing, vmem } = self;
         
         // Split the backing
@@ -355,7 +359,7 @@ impl CombinedAllocationSegment {
         // Done :)
         let lhs = Self { backing: lhs_backing, vmem: lhs_vmem }; lhs.remap_all_pages();
         let rhs = Self { backing: rhs_backing, vmem: rhs_vmem }; rhs.remap_all_pages();
-        (lhs, Some(rhs))
+        (lhs, rhs)
     }
     
     // VMEM MAPPING
@@ -398,7 +402,10 @@ impl CombinedAllocationSegment {
 /// Sections may not be resized, but may be split/merged.
 struct CombinedAllocationSection {
     segments: Vec<CombinedAllocationSegment>,
+    
     total_size: BackingSize,
+    /// Offset from the allocation "base" in vmem
+    offset: isize,
 }
 impl CombinedAllocationSection {
     fn calculate_size(&self) -> BackingSize {
@@ -408,6 +415,9 @@ impl CombinedAllocationSection {
     pub fn get_size(&self) -> BackingSize {
         self.total_size
     }
+    pub fn get_offset(&self) -> isize {
+        self.offset
+    }
     
     // SPLITTING/MERGING
     // todo: splitting
@@ -415,19 +425,36 @@ impl CombinedAllocationSection {
     /// Merge the two sections together. Backing memory is left as-is unless overwritten afterwards.
     /// SAFETY: The caller must ensure that both sections are directly adjacent to each other, with no gaps, and with lhs occupying lower addresses than rhs.
     pub(self) unsafe fn merge(lhs: Self, rhs: Self) -> Self {
-        let Self { segments: lhs_segments, total_size: lhs_size } = lhs;
-        let Self { segments: rhs_segments, total_size: rhs_size } = rhs;
+        let Self { segments: lhs_segments, total_size: lhs_size, offset: lhs_offset } = lhs;
+        let Self { segments: rhs_segments, total_size: rhs_size, offset: rhs_offset } = rhs;
+        
+        debug_assert!(lhs_offset+(lhs_size.get() as isize) == rhs_offset);  // assert that sections are next to eachother in memory
         
         let sum_sizes = BackingSize::new(lhs_size.get()+rhs_size.get());
         let mut segments = lhs_segments;
         segments.reserve(rhs_segments.len());
         for segment in rhs_segments { segments.push(segment); }
         
-        Self { segments, total_size: sum_sizes }
+        Self { segments, total_size: sum_sizes, offset: lhs_offset }
     }
     
     // VMEM MAPPING
-    // todo: mapping
+    /// Takes one big VirtualAllocation and splits it into each piece
+    pub(self) fn map_vmem(&mut self, slot: usize, allocation: VirtualAllocation) {
+        debug_assert!(allocation.size() == self.total_size);
+        
+        // Chop off a piece for each segment, one by one
+        let mut remainder = allocation;
+        for segment in self.segments.iter_mut().rev().skip(1).rev() {  // Skip the final segment, as we handle that below
+            let (lhs,rhs) = remainder.split(segment.get_size(), 0, 0);  // TODO: Segment identifiers?
+            segment.map_vmem(slot, lhs);
+            remainder = rhs;
+        }
+        // The final segment was skipped above, because it simply takes the whole remainder
+        self.segments.last_mut().unwrap().map_vmem(slot, remainder);
+        
+        // All done :)
+    }
     pub(self) fn clear_vmem(&mut self, slot: usize) {
         for segment in self.segments.iter_mut() {
             segment.clear_vmem(slot)

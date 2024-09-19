@@ -3,7 +3,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use alloc::collections::VecDeque;
 use alloc::sync::{Arc,Weak};
-use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,MIN_PAGE_SIZE};
+use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,PAGE_ALIGN,PageAlignedUsize};
 use super::physical::{PhysicalMemoryAllocation,palloc};
 use bitflags::bitflags;
 use crate::sync::{YMutex,YMutexGuard};
@@ -63,7 +63,7 @@ pub enum GuardPageType {
     StackLimit = 0xF47B33F,  // Fat Beef
     NullPointer = 0x4E55_4C505452,  // "NULPTR"
 }
-pub type BackingSize = core::num::NonZero<usize>;
+pub type BackingSize = PageAlignedUsize;
 /// A request for allocation backing
 /// WARNING: Requests are not guaranteed to contain a size that has been rounded up to the minimum page size
 /// To get the size post-rounding, use the .get_size() method. Yes, even if you're using a match statement.
@@ -87,7 +87,7 @@ impl AllocationBackingRequest {
     /// Get the size, and round it to the next MIN_PAGE_SIZE
     pub fn get_size(&self) -> BackingSize {
         let rounded = core::alloc::Layout::from_size_align(self.get_size_unrounded().into(), MIN_PAGE_SIZE).unwrap().pad_to_align().size();
-        BackingSize::new(rounded).unwrap()
+        BackingSize::new_checked(rounded).unwrap()
     }
 }
 /// The memory that backs a given allocation
@@ -164,8 +164,8 @@ impl AllocationBacking {
             AllocationBackingMode::UninitMem => (AllocationBackingMode::UninitMem,AllocationBackingMode::UninitMem),
             AllocationBackingMode::Zeroed => (AllocationBackingMode::Zeroed,AllocationBackingMode::Zeroed),
         };
-        (Self::new(lhs_mode,BackingSize::new(lhs_size).unwrap()),
-         Some(Self::new(rhs_mode,BackingSize::new(rhs_size).unwrap())))
+        (Self::new(lhs_mode,BackingSize::new_checked(lhs_size).unwrap()),
+         Some(Self::new(rhs_mode,BackingSize::new_checked(rhs_size).unwrap())))
     }
     
     /// Load into physical memory

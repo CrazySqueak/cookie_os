@@ -240,12 +240,13 @@ struct VirtualAllocation {
 }
 impl VirtualAllocation {
     pub fn new(alloc: Box<dyn AnyPageAllocation>, flags: VMemFlags,
-                  combined_alloc: Weak<CombinedAllocation>, virt_index: usize) -> (Self,AbsentPagesHandleB) {
+                  combined_alloc: Weak<CombinedAllocation>, virt_index: usize, section_identifier: usize) -> (Self,AbsentPagesHandleB) {
         // Populate an absent_pages_table entry
         let ate = ABSENT_PAGES_TABLE.create_new_descriptor();
         let apth = ate.commit(AbsentPagesItemA {
             allocation: combined_alloc,
             virt_allocation_index: virt_index,
+            section_identifier: section_identifier,
         }, AbsentPagesItemB {});
         let apth_a = apth.clone_a_ref();
         
@@ -282,12 +283,14 @@ pub enum VirtualAllocationMode {
     FixedVirtAddr { addr: usize },
 }
 /// Lookup an "absent page" data item in the ABSENT_PAGES_TABLE
-pub fn lookup_absent_id(absent_id: usize) -> Option<(Arc<CombinedAllocation>,usize)> {
+pub fn lookup_absent_id(absent_id: usize) -> Option<(AllocationSection,usize)> {
     let apth_a = ABSENT_PAGES_TABLE.acquire_a(absent_id.try_into().unwrap()).ok()?;
     let apt_item_a = apth_a.get_a();
     let combined_alloc = Weak::upgrade(&apt_item_a.allocation)?;
     let virt_index = apt_item_a.virt_allocation_index;
-    Some((combined_alloc,virt_index))
+    let section_identifier = apt_item_a.section_identifier;
+    let section_obj = AllocationSection::new(combined_alloc,section_identifier);
+    Some((section_obj,virt_index))
 }
 
 bitflags! {
@@ -356,8 +359,8 @@ impl CombinedAllocationInner {
 }
 pub struct CombinedAllocation(YMutex<CombinedAllocationInner>);
 impl CombinedAllocation {
-    fn _new_single(size: usize, backing: AllocationBacking, alloc_flags: AllocationFlags) -> Arc<Self> {
-        Arc::new(Self(YMutex::new(CombinedAllocationInner{
+    fn _new_single(size: usize, backing: AllocationBacking, alloc_flags: AllocationFlags) -> AllocationSection {
+        let this = Arc::new(Self(YMutex::new(CombinedAllocationInner{
             sections: VecDeque::from([CombinedAllocationSegment{
                     size: size,
                     backing: backing,
@@ -368,40 +371,45 @@ impl CombinedAllocation {
             
             next_section_identifier: 1,
             allocation_flags: alloc_flags,
-        })))
+        })));
+        AllocationSection::new(this, 0)
     }
-    pub fn new_from_request(backing_req: AllocationBackingRequest, alloc_flags: AllocationFlags) -> (Arc<Self>,bool) {
+    pub fn new_from_request(backing_req: AllocationBackingRequest, alloc_flags: AllocationFlags) -> (AllocationSection,bool) {
         let (backing,success) = AllocationBacking::new_from_request(backing_req);
         let size = backing.get_size();
         (Self::_new_single(size,backing,alloc_flags), success)
     }
-    pub fn new_from_requests(backing_reqs: Vec<AllocationBackingRequest>, alloc_flags: AllocationFlags) -> Arc<Self> {
+    pub fn new_from_requests(backing_reqs: Vec<AllocationBackingRequest>, alloc_flags: AllocationFlags) -> Vec<AllocationSection> {
         let total_size = backing_reqs.iter().map(|r|r.get_size()).reduce(core::ops::Add::add).unwrap();  // total_size, rounded to account for page-alignment
         let (this,_) = Self::new_from_request(AllocationBackingRequest::Reservation { size: total_size, zeroed: false }, alloc_flags);
         
+        let mut finished: Vec<AllocationSection> = Vec::new();
         let mut size_remaining: usize = total_size;
-        let mut remainder_identifier: usize = 0;
+        let mut remainder: AllocationSection = this;
         let final_request = 'lp:{for (num_left,request) in backing_reqs.into_iter().enumerate().rev() {
             if num_left == 0 { break 'lp request; } // Final request needs to be handled differently (as lhs size must not be zero)
             // Split from right-to-left
-            let (lhs_id,rhs_id) = this.split_section(remainder_identifier, size_remaining).unwrap();
+            let (lhs,rhs) = remainder.split(size_remaining).unwrap();
             // rhs = this current request
             let size = request.get_size();
-            let ok = this.replace_section(rhs_id, request);
+            let ok = rhs.overwrite_type(request);
             assert!(ok);
+            finished.push(rhs);
             // lhs = remainder
-            remainder_identifier = lhs_id;
+            remainder = lhs;
             size_remaining -= size;
         } panic!("End of loop but not broken out?");};
-        let ok = this.replace_section(remainder_identifier,final_request);
+        let ok = remainder.overwrite_type(final_request);
         assert!(ok);
+        finished.push(remainder);
         
         // All good
-        this
+        finished.reverse();  // reverse order so that earlier allocations are earlier in the vec
+        finished  // and return
     }
     
     /// Allocate more memory, expanding downwards
-    pub fn expand_downwards(self: &Arc<Self>, request: AllocationBackingRequest) {
+    pub fn expand_downwards(self: &Arc<Self>, request: AllocationBackingRequest) -> AllocationSection {
         let mut inner = self.0.lock();
         
         // Allocate backing
@@ -433,7 +441,7 @@ impl CombinedAllocation {
                 // Carry across flags from the lowest vmem allocation in the section
                 let virt_flags = previous_bottom.flags.clone();
                 // Return new allocation
-                let (va, _) = VirtualAllocation::new(expansion, virt_flags, Arc::downgrade(self), index);
+                let (va, _) = VirtualAllocation::new(expansion, virt_flags, Arc::downgrade(self), index, new_section.section_identifier);
                 va
             });
         }
@@ -441,99 +449,10 @@ impl CombinedAllocation {
         // Update mappings
         new_section._update_mappings_section();
         // And append
+        let section_identifier = new_section.section_identifier;
         inner.sections.push_front(new_section);
-    }
-    
-    /// Split a section into two new sections, with new identifiers
-    /// The lower section is guaranteed to contain at least `mid` bytes, though this may be rounded based on page alignment
-    /// Returns Err if the section does not exist. Otherwise, returns the two section IDs
-    pub fn split_section(self: &Arc<Self>, section_identifier: usize, mid: usize) -> Result<(usize,usize),()> {
-        let mut inner = self.0.lock();
-        let section_idx = inner._find_section_with_identifier_index(section_identifier).ok_or(())?;
-        
-        let mut old_section = inner.sections.remove(section_idx).unwrap();
-        let left_size = core::alloc::Layout::from_size_align(mid, MIN_PAGE_SIZE).unwrap().pad_to_align().size();
-        let right_size = old_section.size-left_size;
-        
-        // Split backing allocation
-        let old_backing = core::mem::replace(&mut old_section.backing, AllocationBacking::new(AllocationBackingMode::UninitMem,old_section.size));  // (take, leaving a useless allocation in its place)
-        let (lhs_backing, rhs_backing) = old_backing.split(left_size);
-        let rhs_backing = rhs_backing.unwrap();  // rhs_backing is None if mid >= total size
-        
-        let mut left_section = CombinedAllocationSegment {
-            vmem: vec_of_non_clone![None;inner.available_virt_slots.len()],
-            backing: lhs_backing,
-            
-            size: left_size,
-            section_identifier: inner._get_new_section_identifier(),
-        };
-        let mut right_section = CombinedAllocationSegment {
-            vmem: vec_of_non_clone![None;inner.available_virt_slots.len()],
-            backing: rhs_backing,
-            
-            size: right_size,
-            section_identifier: inner._get_new_section_identifier(),
-        };
-        let left_identifier = left_section.section_identifier;
-        let right_identifier = right_section.section_identifier;
-        
-        // Split virtual memory allocations
-        for (index, valloc) in old_section.vmem.drain(0..).enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {
-            let VirtualAllocation { allocation, flags, .. } = valloc;
-            let (left_allocation, right_allocation) = allocation.split_dyn(left_size);
-            debug_assert!(left_allocation.size()==left_size);
-            debug_assert!(right_allocation.size()==right_size);
-            
-            let (la,_) = VirtualAllocation::new(
-                left_allocation, flags.clone(), Arc::downgrade(self), index
-            );
-            left_section.vmem[index] = Some(la);
-            let (ra, _) = VirtualAllocation::new(
-                right_allocation, flags.clone(), Arc::downgrade(self), index
-            );
-            right_section.vmem[index] = Some(ra);
-        }
-        
-        // Update mappings
-        left_section._update_mappings_section();
-        right_section._update_mappings_section();
-        // Insert into list : list now = [X-2] [X-1] LHS RHS [X+1] [X+2], where X±y was relative to the old section
-        inner.sections.insert(section_idx, right_section);
-        inner.sections.insert(section_idx, left_section);
-        // Return
-        Ok((left_identifier, right_identifier))
-    }
-    
-    /// Load a section from swap into physical memory
-    pub fn swap_in(self: &Arc<Self>, section_identifier: usize) -> Result<(),SwapInError> {
-        let mut inner = self.0.lock();
-        let section = inner._find_section_with_identifier_mut(section_identifier).ok_or(SwapInError::SectionNotFound)?;
-        
-        // Swap in
-        section.backing.swap_in().map_err(|x|SwapInError::LoadError(x))?;
-        
-        // Update mappings
-        section._update_mappings_section();
-        // Done :)
-        Ok(())
-    }
-    /// Overwrite a section with a new backing type, wiping the previous memory allocated to it and discarding its contents
-    /// (the size in new_request must equal the present size of the section)
-    /// true = success (overwrite ok), false = failure (previous state remains)
-    pub fn replace_section(self: &Arc<Self>, section_identifier: usize, new_request: AllocationBackingRequest) -> bool {
-        let mut inner = self.0.lock();
-        let Some(section) = inner._find_section_with_identifier_mut(section_identifier) else { return false; };
-        
-        debug_assert!(section.size == new_request.get_size());
-        // Allocate new backing
-        let (new_backing,_) = AllocationBacking::new_from_request(new_request);
-        // Overwrite previous allocation
-        section.backing = new_backing;
-        
-        // Update mappings
-        section._update_mappings_section();
-        // Done :)
-        true
+        // And return
+        AllocationSection::new(Arc::clone(self),section_identifier)
     }
     
     /// Map this into virtual memory in the given allocator
@@ -576,11 +495,11 @@ impl CombinedAllocation {
         
         // Convert from PageAllocation into VirtualAllocation
         let mut virtual_allocs = Vec::<VirtualAllocation>::with_capacity(n_sections);
-        for allocation in section_allocs {
+        for (allocation,section) in section_allocs.into_iter().zip(inner.sections.iter()) {
             let (va, _) = VirtualAllocation::new(
                 Box::new(allocation) as Box<dyn AnyPageAllocation>,
                 flags,
-                Arc::downgrade(self), index,
+                Arc::downgrade(self), index, section.section_identifier,
             );
             virtual_allocs.push(va);
         }
@@ -606,6 +525,126 @@ impl CombinedAllocation {
         inner._update_mappings_valloc(index);
         // And return a guard
         Some(VirtAllocationGuard { allocation: Arc::clone(self), index: index })
+    }
+}
+/// A newtype wrapper representing a given section in the unified allocation
+/// This is not tied to the given section - drop()ing it is harmless, and it conversely may be invalidated by anyone at any time.
+#[derive(Clone)]
+pub struct AllocationSection {
+    allocation: Arc<CombinedAllocation>,
+    section_identifier: usize,
+}
+impl AllocationSection {
+    fn new(allocation: Arc<CombinedAllocation>, section_identifier: usize) -> Self {
+        Self { allocation, section_identifier }
+    }
+    
+    pub fn allocation(&self) -> &Arc<CombinedAllocation> {
+        &self.allocation
+    }
+    pub fn section_identifier(&self) -> usize {
+        self.section_identifier
+    }
+    
+    fn allocation_inner(&self) -> YMutexGuard<'_,CombinedAllocationInner> {
+        core::ops::Deref::deref(&self.allocation).0.lock()
+    }
+    fn segment_inner(&self) -> Option<crate::sync::MappedYMutexGuard<'_,CombinedAllocationSegment>> {
+        YMutexGuard::try_map(self.allocation_inner(), |inner|inner._find_section_with_identifier_mut(self.section_identifier)).ok()
+    }
+    
+    /// Split a section into two new sections, with new identifiers
+    /// The lower section is guaranteed to contain at least `mid` bytes, though this may be rounded based on page alignment
+    /// Returns Err if the section does not exist. Otherwise, returns the two section IDs
+    pub fn split(self, mid: usize) -> Result<(Self,Self),()> {
+        let mut inner = self.allocation_inner();
+        let section_idx = inner._find_section_with_identifier_index(self.section_identifier).ok_or(())?;
+        
+        let mut old_section = inner.sections.remove(section_idx).unwrap();
+        let left_size = core::alloc::Layout::from_size_align(mid, MIN_PAGE_SIZE).unwrap().pad_to_align().size();
+        let right_size = old_section.size-left_size;
+        
+        // Split backing allocation
+        let old_backing = core::mem::replace(&mut old_section.backing, AllocationBacking::new(AllocationBackingMode::UninitMem,old_section.size));  // (take, leaving a useless allocation in its place)
+        let (lhs_backing, rhs_backing) = old_backing.split(left_size);
+        let rhs_backing = rhs_backing.unwrap();  // rhs_backing is None if mid >= total size
+        
+        let mut left_section = CombinedAllocationSegment {
+            vmem: vec_of_non_clone![None;inner.available_virt_slots.len()],
+            backing: lhs_backing,
+            
+            size: left_size,
+            section_identifier: inner._get_new_section_identifier(),
+        };
+        let mut right_section = CombinedAllocationSegment {
+            vmem: vec_of_non_clone![None;inner.available_virt_slots.len()],
+            backing: rhs_backing,
+            
+            size: right_size,
+            section_identifier: inner._get_new_section_identifier(),
+        };
+        let left_identifier = left_section.section_identifier;
+        let right_identifier = right_section.section_identifier;
+        
+        // Split virtual memory allocations
+        for (index, valloc) in old_section.vmem.drain(0..).enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {
+            let VirtualAllocation { allocation, flags, .. } = valloc;
+            let (left_allocation, right_allocation) = allocation.split_dyn(left_size);
+            debug_assert!(left_allocation.size()==left_size);
+            debug_assert!(right_allocation.size()==right_size);
+            
+            let (la,_) = VirtualAllocation::new(
+                left_allocation, flags.clone(), Arc::downgrade(&self.allocation), index, left_section.section_identifier,
+            );
+            left_section.vmem[index] = Some(la);
+            let (ra, _) = VirtualAllocation::new(
+                right_allocation, flags.clone(), Arc::downgrade(&self.allocation), index, right_section.section_identifier,
+            );
+            right_section.vmem[index] = Some(ra);
+        }
+        
+        // Update mappings
+        left_section._update_mappings_section();
+        right_section._update_mappings_section();
+        // Insert into list : list now = [X-2] [X-1] LHS RHS [X+1] [X+2], where X±y was relative to the old section
+        inner.sections.insert(section_idx, right_section);
+        inner.sections.insert(section_idx, left_section);
+        // Return
+        Ok((
+            Self::new(Arc::clone(&self.allocation),left_identifier),
+            Self::new(Arc::clone(&self.allocation),right_identifier),
+        ))
+    }
+    
+    /// Load a section from swap into physical memory
+    pub fn swap_in(&self) -> Result<(),SwapInError> {
+        let mut section = self.segment_inner().ok_or(SwapInError::SectionNotFound)?;
+        
+        // Swap in
+        section.backing.swap_in().map_err(|x|SwapInError::LoadError(x))?;
+        
+        // Update mappings
+        section._update_mappings_section();
+        // Done :)
+        Ok(())
+    }
+    
+    /// Overwrite a section with a new backing type, wiping the previous memory allocated to it and discarding its contents
+    /// (the size in new_request must equal the present size of the section)
+    /// true = success (overwrite ok), false = failure (previous state remains)
+    pub fn overwrite_type(&self, new_request: AllocationBackingRequest) -> bool {
+        let Some(mut section) = self.segment_inner() else { return false; };
+        
+        debug_assert!(section.size == new_request.get_size());
+        // Allocate new backing
+        let (new_backing,_) = AllocationBacking::new_from_request(new_request);
+        // Overwrite previous allocation
+        section.backing = new_backing;
+        
+        // Update mappings
+        section._update_mappings_section();
+        // Done :)
+        true
     }
 }
 pub enum SwapInError {
@@ -652,17 +691,17 @@ impl Drop for VirtAllocationGuard {
 }
 impl !Clone for VirtAllocationGuard{}
 
-impl super::alloc_util::AnyAllocatedStack for VirtAllocationGuard {
-    // assumes the stack grows downwards
-    fn bottom_vaddr(&self) -> usize {
-        self.end_addr()
-    }
-    fn expand(&mut self, bytes: usize) -> bool {
-        let start = self.start_addr();
-        self.combined_allocation().expand_downwards(AllocationBackingRequest::UninitPhysical { size: bytes });  // on success, this will change our start_addr
-        start != self.start_addr()
-    }
-}
+// impl super::alloc_util::AnyAllocatedStack for VirtAllocationGuard {
+//     // assumes the stack grows downwards
+//     fn bottom_vaddr(&self) -> usize {
+//         self.end_addr()
+//     }
+//     fn expand(&mut self, bytes: usize) -> bool {
+//         let start = self.start_addr();
+//         self.combined_allocation().expand_downwards(AllocationBackingRequest::UninitPhysical { size: bytes });  // on success, this will change our start_addr
+//         start != self.start_addr()
+//     }
+// }
 impl core::fmt::Debug for VirtAllocationGuard {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "VirtAllocationGuard [ {:x}..{:x} ]", self.start_addr(), self.end_addr())
@@ -673,6 +712,7 @@ use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};
 struct AbsentPagesItemA {
     allocation: Weak<CombinedAllocation>,
     virt_allocation_index: usize,
+    section_identifier: usize,
 }
 struct AbsentPagesItemB {
 }

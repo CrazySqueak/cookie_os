@@ -65,8 +65,6 @@ pub enum GuardPageType {
 }
 pub type BackingSize = PageAlignedUsize;
 /// A request for allocation backing
-/// WARNING: Requests are not guaranteed to contain a size that has been rounded up to the minimum page size
-/// To get the size post-rounding, use the .get_size() method. Yes, even if you're using a match statement.
 pub enum AllocationBackingRequest {
     UninitPhysical { size: BackingSize },
     ZeroedPhysical { size: BackingSize },
@@ -76,18 +74,13 @@ pub enum AllocationBackingRequest {
     GuardPage { gptype: GuardPageType, size: BackingSize },
 }
 impl AllocationBackingRequest {
-    pub fn get_size_unrounded(&self) -> BackingSize {
+    pub fn get_size(&self) -> BackingSize {
         match *self {
             Self::UninitPhysical{size} => size,
             Self::ZeroedPhysical{size} => size,
             Self::Reservation{size} => size,
             Self::GuardPage{size,..} => size,
         }
-    }
-    /// Get the size, and round it to the next MIN_PAGE_SIZE
-    pub fn get_size(&self) -> BackingSize {
-        let rounded = core::alloc::Layout::from_size_align(self.get_size_unrounded().into(), MIN_PAGE_SIZE).unwrap().pad_to_align().size();
-        BackingSize::new_checked(rounded).unwrap()
     }
 }
 /// The memory that backs a given allocation
@@ -109,13 +102,11 @@ struct AllocationBacking {
 }
 impl AllocationBacking {
     pub fn new(mode: AllocationBackingMode, size: BackingSize) -> Self {
-        debug_assert!(size.get()%MIN_PAGE_SIZE==0);
-        debug_assert!(size.get() > 0);
         Self { mode, size }
     }
     
-    fn _palloc(size: usize) -> Option<PhysicalMemoryAllocation> {
-        palloc(core::alloc::Layout::from_size_align(size, MIN_PAGE_SIZE).unwrap())
+    fn _palloc(size: PageAlignedUsize) -> Option<PhysicalMemoryAllocation> {
+        palloc(size)
     }
     /// Returns (self,true) if the request was fulfilled immediately. Returns (self,false) if it couldn't, and must be swapped in later when more RAM is available
     pub fn new_from_request(request: AllocationBackingRequest) -> (Self,bool) {
@@ -125,7 +116,7 @@ impl AllocationBacking {
             AllocationBackingRequest::Reservation { size } => (Self::new(AllocationBackingMode::UninitMem,size),true),
             
             AllocationBackingRequest::UninitPhysical { .. } => {
-                match Self::_palloc(size.get()) {
+                match Self::_palloc(size) {
                     Some(pma) => (Self::new(AllocationBackingMode::PhysMem(pma),size),true),
                     None => (Self::new(AllocationBackingMode::UninitMem,size),false),
                 }
@@ -144,8 +135,6 @@ impl AllocationBacking {
     pub fn split(self, midpoint: BackingSize) -> (Self,Option<Self>) {
         if midpoint >= self.size { return (self,None); }
         let midpoint: usize = midpoint.get();
-        debug_assert!(midpoint%MIN_PAGE_SIZE==0);
-        debug_assert!(midpoint != 0);
         let lhs_size = midpoint;
         let rhs_size = self.size.get()-midpoint;
         
@@ -179,14 +168,14 @@ impl AllocationBacking {
             AllocationBackingMode::GuardPage(gptype) => Err(BackingLoadError::GuardPage(gptype)),
             
             _ => {
-                 let phys_alloc = Self::_palloc(self.size.get()).ok_or(BackingLoadError::PhysicalAllocationFailed)?;
+                 let phys_alloc = Self::_palloc(self.size).ok_or(BackingLoadError::PhysicalAllocationFailed)?;
                  match self.mode {
                      AllocationBackingMode::PhysMem(_) | AllocationBackingMode::PhysMemShared{..} | AllocationBackingMode::GuardPage(_) => unreachable!(),
                      
                      AllocationBackingMode::UninitMem => {},  // uninit mem can be left as-is
                      AllocationBackingMode::Zeroed => {  // zeroed and other backing modes must be mapped into vmem and initialised
                         // Map into vmem and obtain pointer
-                        let vmap = KERNEL_PTABLE.allocate(self.size.get(), KALLOCATION_KERNEL_GENERALDYN).expect("How the fuck are you out of virtual memory???");
+                        let vmap = KERNEL_PTABLE.allocate(self.size, KALLOCATION_KERNEL_GENERALDYN).expect("How the fuck are you out of virtual memory???");
                         let ptr = vmap.start() as *mut u8;
                         // Initialise memory
                         match self.mode {
@@ -270,7 +259,7 @@ impl VirtualAllocation {
     pub fn start_addr(&self) -> usize {
         self.allocation.start()
     }
-    pub fn size(&self) -> usize {
+    pub fn size(&self) -> PageAlignedUsize {
         self.allocation.size()
     }
     pub fn end_addr(&self) -> usize {

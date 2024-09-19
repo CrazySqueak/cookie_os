@@ -225,7 +225,6 @@ use super::paging::PageAlignedUsize;
 /// So yes, you should still use .get_size() instead of reusing the size value
 pub fn palloc(size: PageAlignedUsize) -> Option<PhysicalMemoryAllocation> {
     klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Requested to allocate physical memory for {:?}", size);
-    let req_size = size;
     let alloc_size = size.get();
     klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Allocating {} bytes.", alloc_size);
     let (addr, order, size) = {
@@ -247,7 +246,7 @@ pub fn palloc(size: PageAlignedUsize) -> Option<PhysicalMemoryAllocation> {
     }?;
     Some(PhysicalMemoryAllocation { 
         addr: addr as usize,
-        size: req_size,
+        size: PageAlignedUsize::new_checked(PFrameAllocator::block_size(order)).unwrap(),
         block: (order, addr),
     })
 }

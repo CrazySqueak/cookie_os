@@ -318,10 +318,21 @@ impl CombinedAllocationSegment {
     }
     
     // SWAPPING
+    /// Swap the backing into memory
     pub fn swap_in(&mut self) -> Result<BackingLoadSuccess,BackingLoadError> {
         let result = self.backing.swap_in();
         self.remap_all_pages();
         result
+    }
+    
+    /// Replace the backing with a new backing, discarding any previously written data to the old backing
+    pub(self) fn overwrite_backing(&mut self, new_backing: AllocationBacking) {
+        debug_assert!(new_backing.get_size() == self.backing.get_size());
+        let old = core::mem::replace(&mut self.backing, new_backing);
+        
+        // Make sure to remap all pages before dropping the old backing
+        self.remap_all_pages();
+        drop(old);
     }
     
     // SPLITTING/MERGING
@@ -335,22 +346,38 @@ impl CombinedAllocationSegment {
         // Split the vmem allocations
         let mut lhs_vmem: Vec<Option<VirtualAllocation>> = vec_of_non_clone![None;vmem.len()];
         let mut rhs_vmem: Vec<Option<VirtualAllocation>> = vec_of_non_clone![None;vmem.len()];
-        for (index, old_alloc) in vmem.into_iter().enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {  // We only process extant vmem allocations. Nones are skipped.
+        for (slot, old_alloc) in vmem.into_iter().enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {  // We only process extant vmem allocations. Nones are skipped.
             let (lhs_alloc, rhs_alloc) = old_alloc.split(mid, 0, 0);  // TODO: section identifiers?
-            lhs_vmem[index] = Some(lhs_alloc);
-            rhs_vmem[index] = Some(rhs_alloc);
+            lhs_vmem[slot] = Some(lhs_alloc);
+            rhs_vmem[slot] = Some(rhs_alloc);
         }
         
         // Done :)
         let lhs = Self { backing: lhs_backing, vmem: lhs_vmem }; lhs.remap_all_pages();
         let rhs = Self { backing: rhs_backing, vmem: rhs_vmem }; rhs.remap_all_pages();
-        (lhs, rhs)
+        (lhs, Some(rhs))
     }
     
-    // REMAPPING
+    // VMEM MAPPING
+    pub(self) fn map_vmem(&mut self, slot: usize, valloc: VirtualAllocation) {
+        while slot < self.vmem.len() { self.vmem.push(None); }  // Ensure vmem has the requested slot
+        
+        debug_assert!(valloc.size()==self.get_size());  // ensure that the sizes match
+        let prev = self.vmem[slot].replace(valloc);
+        debug_assert!(prev.is_none());  // ensure we're not overwriting an in-use slot
+        
+        // Remap
+        self.remap_pages(slot);
+    }
+    pub(self) fn clear_vmem(&mut self, slot: usize) {
+        let old = self.vmem[slot].take();
+        debug_assert!(old.is_some());  // ensure the slot was actually in use
+        drop(old);  // clarity: manually drop `old` to ensure that the page table is cleared of the old mappings
+    }
+    
     /// Update the page table for the given virtual allocation to match any changes that have been made
-    fn remap_pages(&self, vidx: usize) {
-        let Some(valloc) = (try{ self.vmem.get(vidx)?.as_ref()? }) else { return };
+    fn remap_pages(&self, slot: usize) {
+        let Some(valloc) = (try{ self.vmem.get(slot)?.as_ref()? }) else { return };
         self._remap_pages_inner(valloc)
     }
     /// Update the page table for all virtual allocations, with respect to this particular segment
@@ -368,8 +395,44 @@ impl CombinedAllocationSegment {
 }
 /// Each "section" is a logical division. For example, working memory and the guard page would be two different sections
 /// Sections may be transparently subdivided into multiple segments by the memory manager as it sees fit.
+/// Sections may not be resized, but may be split/merged.
 struct CombinedAllocationSection {
     segments: Vec<CombinedAllocationSegment>,
+    total_size: BackingSize,
+}
+impl CombinedAllocationSection {
+    fn calculate_size(&self) -> BackingSize {
+        let total = self.segments.iter().fold(0usize, |a,x| a+x.backing.size.get());
+        unsafe{BackingSize::new(total)}
+    }
+    pub fn get_size(&self) -> BackingSize {
+        self.total_size
+    }
+    
+    // SPLITTING/MERGING
+    // todo: splitting
+    
+    /// Merge the two sections together. Backing memory is left as-is unless overwritten afterwards.
+    /// SAFETY: The caller must ensure that both sections are directly adjacent to each other, with no gaps, and with lhs occupying lower addresses than rhs.
+    pub(self) unsafe fn merge(lhs: Self, rhs: Self) -> Self {
+        let Self { segments: lhs_segments, total_size: lhs_size } = lhs;
+        let Self { segments: rhs_segments, total_size: rhs_size } = rhs;
+        
+        let sum_sizes = BackingSize::new(lhs_size.get()+rhs_size.get());
+        let mut segments = lhs_segments;
+        segments.reserve(rhs_segments.len());
+        for segment in rhs_segments { segments.push(segment); }
+        
+        Self { segments, total_size: sum_sizes }
+    }
+    
+    // VMEM MAPPING
+    // todo: mapping
+    pub(self) fn clear_vmem(&mut self, slot: usize) {
+        for segment in self.segments.iter_mut() {
+            segment.clear_vmem(slot)
+        }
+    }
 }
 // TODO
 

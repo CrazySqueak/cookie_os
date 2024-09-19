@@ -63,19 +63,20 @@ pub enum GuardPageType {
     StackLimit = 0xF47B33F,  // Fat Beef
     NullPointer = 0x4E55_4C505452,  // "NULPTR"
 }
+pub type BackingSize = core::num::NonZero<usize>;
 /// A request for allocation backing
 /// WARNING: Requests are not guaranteed to contain a size that has been rounded up to the minimum page size
 /// To get the size post-rounding, use the .get_size() method. Yes, even if you're using a match statement.
 pub enum AllocationBackingRequest {
-    UninitPhysical { size: usize },
-    ZeroedPhysical { size: usize },
+    UninitPhysical { size: BackingSize },
+    ZeroedPhysical { size: BackingSize },
     /// Similar to UninitPhysical, but isn't automatically allocated in physical memory. Instead, it's initialised as an UninitMem/Zeroed
-    Reservation { size: usize, zeroed: bool },
+    Reservation { size: BackingSize, zeroed: bool },
     
-    GuardPage { gptype: GuardPageType, size: usize },
+    GuardPage { gptype: GuardPageType, size: BackingSize },
 }
 impl AllocationBackingRequest {
-    pub fn get_size_unrounded(&self) -> usize {
+    pub fn get_size_unrounded(&self) -> BackingSize {
         match *self {
             Self::UninitPhysical{size} => size,
             Self::ZeroedPhysical{size} => size,
@@ -84,8 +85,9 @@ impl AllocationBackingRequest {
         }
     }
     /// Get the size, and round it to the next MIN_PAGE_SIZE
-    pub fn get_size(&self) -> usize {
-        core::alloc::Layout::from_size_align(self.get_size_unrounded(), MIN_PAGE_SIZE).unwrap().pad_to_align().size()
+    pub fn get_size(&self) -> BackingSize {
+        let rounded = core::alloc::Layout::from_size_align(self.get_size_unrounded().into(), MIN_PAGE_SIZE).unwrap().pad_to_align().size();
+        BackingSize::new(rounded).unwrap()
     }
 }
 /// The memory that backs a given allocation
@@ -103,12 +105,12 @@ enum AllocationBackingMode {
 }
 struct AllocationBacking {
     mode: AllocationBackingMode,
-    size: usize,
+    size: BackingSize,
 }
 impl AllocationBacking {
-    pub fn new(mode: AllocationBackingMode, size: usize) -> Self {
-        debug_assert!(size%MIN_PAGE_SIZE==0);
-        debug_assert!(size > 0);
+    pub fn new(mode: AllocationBackingMode, size: BackingSize) -> Self {
+        debug_assert!(size.get()%MIN_PAGE_SIZE==0);
+        debug_assert!(size.get() > 0);
         Self { mode, size }
     }
     
@@ -126,7 +128,7 @@ impl AllocationBacking {
             },
             
             AllocationBackingRequest::UninitPhysical { .. } => {
-                match Self::_palloc(size) {
+                match Self::_palloc(size.get()) {
                     Some(pma) => (Self::new(AllocationBackingMode::PhysMem(pma),size),true),
                     None => (Self::new(AllocationBackingMode::UninitMem,size),false),
                 }
@@ -142,12 +144,13 @@ impl AllocationBacking {
     }
     
     /// Split this allocation into two. One of `midpoint` bytes and one of the remainder (if nonzero)
-    pub fn split(self, midpoint: usize) -> (Self,Option<Self>) {
+    pub fn split(self, midpoint: BackingSize) -> (Self,Option<Self>) {
         if midpoint >= self.size { return (self,None); }
+        let midpoint: usize = midpoint.get();
         debug_assert!(midpoint%MIN_PAGE_SIZE==0);
         debug_assert!(midpoint != 0);
         let lhs_size = midpoint;
-        let rhs_size = self.size-midpoint;
+        let rhs_size = self.size.get()-midpoint;
         
         let (lhs_mode,rhs_mode) = match self.mode {
             AllocationBackingMode::PhysMem(allocation) => {
@@ -164,7 +167,8 @@ impl AllocationBacking {
             AllocationBackingMode::UninitMem => (AllocationBackingMode::UninitMem,AllocationBackingMode::UninitMem),
             AllocationBackingMode::Zeroed => (AllocationBackingMode::Zeroed,AllocationBackingMode::Zeroed),
         };
-        (Self::new(lhs_mode,lhs_size),Some(Self::new(rhs_mode,rhs_size)))
+        (Self::new(lhs_mode,BackingSize::new(lhs_size).unwrap()),
+         Some(Self::new(rhs_mode,BackingSize::new(rhs_size).unwrap())))
     }
     
     /// Load into physical memory
@@ -178,14 +182,14 @@ impl AllocationBacking {
             AllocationBackingMode::GuardPage(gptype) => Err(BackingLoadError::GuardPage(gptype)),
             
             _ => {
-                 let phys_alloc = Self::_palloc(self.size).ok_or(BackingLoadError::PhysicalAllocationFailed)?;
+                 let phys_alloc = Self::_palloc(self.size.get()).ok_or(BackingLoadError::PhysicalAllocationFailed)?;
                  match self.mode {
                      AllocationBackingMode::PhysMem(_) | AllocationBackingMode::PhysMemShared{..} | AllocationBackingMode::GuardPage(_) => unreachable!(),
                      
                      AllocationBackingMode::UninitMem => {},  // uninit mem can be left as-is
                      AllocationBackingMode::Zeroed => {  // zeroed and other backing modes must be mapped into vmem and initialised
                         // Map into vmem and obtain pointer
-                        let vmap = KERNEL_PTABLE.allocate(self.size, KALLOCATION_KERNEL_GENERALDYN).expect("How the fuck are you out of virtual memory???");
+                        let vmap = KERNEL_PTABLE.allocate(self.size.get(), KALLOCATION_KERNEL_GENERALDYN).expect("How the fuck are you out of virtual memory???");
                         let ptr = vmap.start() as *mut u8;
                         // Initialise memory
                         match self.mode {
@@ -194,7 +198,7 @@ impl AllocationBacking {
                             AllocationBackingMode::Zeroed => unsafe{
                                 // SAFETY: This pointer is to vmem which we have just allocated, and is to u8s which are robust
                                 // Guaranteed to be page-aligned and allocated
-                                core::ptr::write_bytes(ptr, 0, self.size)
+                                core::ptr::write_bytes(ptr, 0, self.size.get())
                             },
                         }
                         // Clear vmem allocation
@@ -216,7 +220,7 @@ impl AllocationBacking {
         }
     }
     /// Get the size of this allocation
-    pub fn get_size(&self) -> usize {
+    pub fn get_size(&self) -> BackingSize {
         self.size
     }
 }
@@ -308,13 +312,13 @@ struct CombinedAllocationSegment {  // vmem is placed before pmem as part of dro
     backing: AllocationBacking,
     
     /// Size in bytes
-    size: usize,
+    size: BackingSize,
     /// Section ID - a unique way of identifying a given section. Not equivalent to the index, which may vary as allocations and deallocations occur.
     section_identifier: usize,
 }
 impl CombinedAllocationSegment {
     pub fn _map_to_current(&self, valloc: &VirtualAllocation){
-        debug_assert!(valloc.size() == self.backing.get_size());
+        debug_assert!(valloc.size() == self.backing.get_size().get());
         match self.backing.get_addr() {
             Some(addr) => {
                 valloc.map(addr);  // valloc is normalized upon being added to the combinedallocation so we don't need to account for baseaddr_offset
@@ -359,7 +363,7 @@ impl CombinedAllocationInner {
 }
 pub struct CombinedAllocation(YMutex<CombinedAllocationInner>);
 impl CombinedAllocation {
-    fn _new_single(size: usize, backing: AllocationBacking, alloc_flags: AllocationFlags) -> AllocationSection {
+    fn _new_single(size: BackingSize, backing: AllocationBacking, alloc_flags: AllocationFlags) -> AllocationSection {
         let this = Arc::new(Self(YMutex::new(CombinedAllocationInner{
             sections: VecDeque::from([CombinedAllocationSegment{
                     size: size,
@@ -380,8 +384,8 @@ impl CombinedAllocation {
         (Self::_new_single(size,backing,alloc_flags), success)
     }
     pub fn new_from_requests(backing_reqs: Vec<AllocationBackingRequest>, alloc_flags: AllocationFlags) -> Vec<AllocationSection> {
-        let total_size = backing_reqs.iter().map(|r|r.get_size()).reduce(core::ops::Add::add).unwrap();  // total_size, rounded to account for page-alignment
-        let (this,_) = Self::new_from_request(AllocationBackingRequest::Reservation { size: total_size, zeroed: false }, alloc_flags);
+        let total_size = backing_reqs.iter().map(|r|r.get_size().get()).reduce(core::ops::Add::add).unwrap();  // total_size, rounded to account for page-alignment
+        let (this,_) = Self::new_from_request(AllocationBackingRequest::Reservation { size: BackingSize::new(total_size).unwrap(), zeroed: false }, alloc_flags);
         
         let mut finished: Vec<AllocationSection> = Vec::new();
         let mut size_remaining: usize = total_size;
@@ -389,7 +393,7 @@ impl CombinedAllocation {
         let final_request = 'lp:{for (num_left,request) in backing_reqs.into_iter().enumerate().rev() {
             if num_left == 0 { break 'lp request; } // Final request needs to be handled differently (as lhs size must not be zero)
             // Split from right-to-left
-            let (lhs,rhs) = remainder.split(size_remaining).unwrap();
+            let (lhs,rhs) = remainder.split(BackingSize::new(size_remaining).unwrap()).unwrap();
             // rhs = this current request
             let size = request.get_size();
             let ok = rhs.overwrite_type(request);
@@ -397,7 +401,7 @@ impl CombinedAllocation {
             finished.push(rhs);
             // lhs = remainder
             remainder = lhs;
-            size_remaining -= size;
+            size_remaining -= size.get();
         } panic!("End of loop but not broken out?");};
         let ok = remainder.overwrite_type(final_request);
         assert!(ok);
@@ -433,11 +437,11 @@ impl CombinedAllocation {
                 if let VirtualAllocationMode::OffsetMapped{..} = virt_mode { None? }  // We can't expand offset-mapped allocations at the moment (as the expanded block of physmem could be anywhere)
                 let previous_bottom = inner.sections[0].vmem[index].as_ref()?;
                 // Expand vmem allocation
-                let mut expansion = previous_bottom.allocation.alloc_downwards_dyn(new_section.size)?;
+                let mut expansion = previous_bottom.allocation.alloc_downwards_dyn(new_section.size.get())?;
                 expansion.normalize();
                 // Adjust size if necessary
                 //if new_section.size == 0 { new_section.size = expansion.size(); }
-                assert!(expansion.size() <= new_section.size);
+                assert!(expansion.size() <= new_section.size.get());
                 // Carry across flags from the lowest vmem allocation in the section
                 let virt_flags = previous_bottom.flags.clone();
                 // Return new allocation
@@ -460,9 +464,9 @@ impl CombinedAllocation {
         let mut inner = self.0.lock(); let n_sections = inner.sections.len();
         // Sum size and determine split positions
         let mut total_size = 0;
-        let mut split_lengths = Vec::<usize>::with_capacity(n_sections);  // final one isn't used but eh
+        let mut split_lengths = Vec::<BackingSize>::with_capacity(n_sections);  // final one isn't used but eh
         for section in inner.sections.iter() {
-            total_size += section.size;
+            total_size += section.size.get();
             split_lengths.push(section.size);
         }
         let _=split_lengths.pop();  // Pop the final one as it isn't needed
@@ -479,8 +483,8 @@ impl CombinedAllocation {
         let mut remainder = virt_allocation?; remainder.normalize();
         let mut section_allocs = Vec::<PageAllocation<PFA>>::new();
         for split_size in split_lengths {
-            (lhs, remainder) = remainder.split(split_size);
-            debug_assert!(lhs.size() == split_size);
+            (lhs, remainder) = remainder.split(split_size.get());
+            debug_assert!(lhs.size() == split_size.get());
             section_allocs.push(lhs);
         }
         section_allocs.push(remainder);  // The final section
@@ -556,13 +560,13 @@ impl AllocationSection {
     /// Split a section into two new sections, with new identifiers
     /// The lower section is guaranteed to contain at least `mid` bytes, though this may be rounded based on page alignment
     /// Returns Err if the section does not exist. Otherwise, returns the two section IDs
-    pub fn split(self, mid: usize) -> Result<(Self,Self),()> {
+    pub fn split(self, mid: BackingSize) -> Result<(Self,Self),()> {
         let mut inner = self.allocation_inner();
         let section_idx = inner._find_section_with_identifier_index(self.section_identifier).ok_or(())?;
         
         let mut old_section = inner.sections.remove(section_idx).unwrap();
-        let left_size = core::alloc::Layout::from_size_align(mid, MIN_PAGE_SIZE).unwrap().pad_to_align().size();
-        let right_size = old_section.size-left_size;
+        let left_size = BackingSize::new(core::alloc::Layout::from_size_align(mid.get(), MIN_PAGE_SIZE).unwrap().pad_to_align().size()).unwrap();
+        let right_size = BackingSize::new(old_section.size.get()-left_size.get()).unwrap();
         
         // Split backing allocation
         let old_backing = core::mem::replace(&mut old_section.backing, AllocationBacking::new(AllocationBackingMode::UninitMem,old_section.size));  // (take, leaving a useless allocation in its place)
@@ -589,9 +593,9 @@ impl AllocationSection {
         // Split virtual memory allocations
         for (index, valloc) in old_section.vmem.drain(0..).enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {
             let VirtualAllocation { allocation, flags, .. } = valloc;
-            let (left_allocation, right_allocation) = allocation.split_dyn(left_size);
-            debug_assert!(left_allocation.size()==left_size);
-            debug_assert!(right_allocation.size()==right_size);
+            let (left_allocation, right_allocation) = allocation.split_dyn(left_size.get());
+            debug_assert!(left_allocation.size()==left_size.get());
+            debug_assert!(right_allocation.size()==right_size.get());
             
             let (la,_) = VirtualAllocation::new(
                 left_allocation, flags.clone(), Arc::downgrade(&self.allocation), index, left_section.section_identifier,

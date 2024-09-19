@@ -65,7 +65,7 @@ fn _map_kernel(kernel_ptable: &GlobalPageTable){
     klog!(Info, MEMORY_PAGING_GLOBALPAGES, "Initialising KERNEL_PTABLE.");
     
     let (kstart, kend) = crate::memory::physical::get_kernel_bounds();
-    let ksize = kend - kstart;
+    let ksize = PageAlignedUsize::new_rounded(kend - kstart);
     let kvstart = kernel_ptable.get_vmem_offset() + kstart;
     
     // Map kernel
@@ -75,10 +75,11 @@ fn _map_kernel(kernel_ptable: &GlobalPageTable){
     
     // Map guard page
     let guard_vaddr = unsafe { core::ptr::addr_of!(kstack_guard_page) as usize };
-    let guard_offset = guard_vaddr - allocation.start();
+    let guard_offset = unsafe { PageAlignedUsize::new(guard_vaddr - allocation.start()) };
+    const GUARD_SIZE: PageAlignedUsize = unsafe { PageAlignedUsize::new(4096) };  // TODO: Move guard size to arch_specific section or make it its own asm-defined value
     klog!(Debug, MEMORY_PAGING_GLOBALPAGES, "Mapping stack guard page (vaddr={:x} offset={:x})", guard_vaddr, guard_offset);
     let (k1alloc, rem) = allocation.split(guard_offset);
-    let (guard, k2alloc) = rem.split(4096);  // guard page is 4096 bytes
+    let (guard, k2alloc) = rem.split(GUARD_SIZE);  // guard page is 4096 bytes
     guard.set_absent(0xFA7B_EEF0);
     
     k1alloc.leak(); guard.leak(); k2alloc.leak();

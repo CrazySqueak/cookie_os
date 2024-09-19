@@ -134,7 +134,7 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
         }
     }
 }
-pub type PFrameAllocator = BuddyAllocator<27,4096>;
+pub type PFrameAllocator = BuddyAllocator<27,{super::paging::PAGE_ALIGN}>;
 lazy_static! {
     static ref PHYSMEM_ALLOCATOR: YMutex<PFrameAllocator> = YMutex::new(BuddyAllocator {
         free_blocks: core::array::from_fn(|_| Vec::new()),
@@ -202,14 +202,13 @@ pub fn init_pmem(mmap: &Vec<crate::coredrivers::parse_multiboot::MemoryMapEntry>
 #[derive(Debug)]
 pub struct PhysicalMemoryAllocation {
     addr: usize,
-    layout: Layout,
-    size: usize,
+    size: PageAlignedUsize,
     
     block: (usize, usize),  // (order, addr)
 }
 impl PhysicalMemoryAllocation {
     pub fn get_addr(&self) -> usize { self.addr }
-    pub fn get_size(&self) -> usize { self.size }
+    pub fn get_size(&self) -> PageAlignedUsize { self.size }
 }
 // Memory allocations cannot be copied nor cloned,
 // as that would allow for use-after-free or double-free errors
@@ -220,14 +219,14 @@ impl !Copy for PhysicalMemoryAllocation{}
 impl !Clone for PhysicalMemoryAllocation{}
 // Physical memory allocations *can* be Sync, because they contain no support for mutation that isn't handled by Rust's borrowing rules
 
-// Return the size block to allocate for the given layout, assuming that the given block is aligned by itself (which is the case for allocations).
-fn calc_alloc_size(layout: &Layout) -> usize {
-    layout.pad_to_align().size()
-}
-
-pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
-    klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Requested to allocate physical memory for {:?}", layout);
-    let alloc_size = calc_alloc_size(&layout);
+use super::paging::PageAlignedUsize;
+/// Note: Allocated amount may be larger than size, even if page-aligned.
+/// This is because this can only allocate sizes of powers of two.
+/// So yes, you should still use .get_size() instead of reusing the size value
+pub fn palloc(size: PageAlignedUsize) -> Option<PhysicalMemoryAllocation> {
+    klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Requested to allocate physical memory for {:?}", size);
+    let req_size = size;
+    let alloc_size = size.get();
     klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Allocating {} bytes.", alloc_size);
     let (addr, order, size) = {
         let mut allocator = PHYSMEM_ALLOCATOR.lock();
@@ -248,8 +247,7 @@ pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
     }?;
     Some(PhysicalMemoryAllocation { 
         addr: addr as usize,
-        layout: layout,
-        size: size,
+        size: req_size,
         block: (order, addr),
     })
 }

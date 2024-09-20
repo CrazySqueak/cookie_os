@@ -296,6 +296,9 @@ impl CASegVirtAllocSlot {
     pub fn replace(&mut self, success: VirtualAllocation) -> Self {
         core::mem::replace(self, Self::Allocation(success))
     }
+    pub fn replace_with_failed(&mut self) -> Self {
+        core::mem::replace(self, Self::Failure)
+    }
     pub fn take(&mut self) -> Self {
         core::mem::replace(self, Self::Empty)
     }
@@ -543,6 +546,12 @@ impl CombinedAllocationSection {
                            |seg|seg.get_size(), |seg,valloc|seg.map_vmem(slot,valloc));
         // All done :)
     }
+    pub(self) fn _map_vmem_failure(&mut self, slot: usize) {
+        for segment in self.segments.iter_mut() {
+            let old = segment.vmem[slot].replace_with_failed();
+            debug_assert!(old.is_empty());
+        }
+    }
     pub(self) fn clear_vmem(&mut self, slot: usize) {
         for segment in self.segments.iter_mut() {
             segment.clear_vmem(slot)
@@ -570,7 +579,8 @@ impl<'r> CASectionWriter<'r> {
     
     /// Merge two sections together. This section must be directly below the next one in memory, with no gaps.
     /// Returns Ok(merged) on success, Err(self) on failure
-    pub fn merge(self, rhs: CASectionIndex) -> Result<Self,Self> {
+    pub fn merge(self, rhs: CASectionIdentifier) -> Result<Self,Self> {
+        let Some(rhs) = self.inner.get_section_index_from_identifier(rhs) else { return Err(self); };
         let lhs_offset = self.get_offset();
         let lhs_size = self.get_size().get() as isize;
         let rhs_offset = self.inner.get_section(rhs).get_offset();
@@ -673,6 +683,53 @@ impl CombinedAllocationInner {
     }
     fn segment_indexes_iter(&self) -> impl Iterator<Item=CASegmentIndex> + '_ {
         self.section_indexes_iter().flat_map(|sec_id|(0..self.get_section(sec_id).segments.len()).map(move|seg_id| CASegmentIndex { section: sec_id.0, segment: seg_id }))
+    }
+    
+    /// Push a new section to the lower end of this contract
+    fn push_new_section_lower(&mut self, backing: AllocationBacking, calloc: &Arc<CALocked>) -> CASectionWriter {
+        // Calculate size and offset
+        let size = backing.get_size();
+        let offset = self.sections[0].get_offset() - (size.get() as isize);
+        let vmem_slot_count = self.context.free_virt_slots.len();
+        // Create new section and push it
+        let section = CombinedAllocationSection::new(&mut self.context, offset, backing, vmem_slot_count);
+        self.sections.push_front(section);
+        
+        // (attempt) to map into vmem - extending existing allocations
+        // we look at the earliest allocation (after us) to determine how we extend the allocations/etc.
+        debug_assert!(self.sections[1].segments.len() >= 1);  // prev earliest allocation: only the first segment is relevant
+        let next_segment = &self.sections[1].segments[0];
+        // Because VecDeque doesn't have a method for borrowing two elements at once, we have to do this in two passes
+        // Pass 1: Attempt allocation
+        let mut new_allocations = Vec::<(usize,Option<VirtualAllocation>)>::with_capacity(vmem_slot_count);  // some = success, none = failure, not present = empty
+        for (slot_index,old_slot) in next_segment.vmem.iter().enumerate() {
+            match old_slot {
+                CASegVirtAllocSlot::Empty => continue,  // ignore empty allocs
+                CASegVirtAllocSlot::Failure => new_allocations.push((slot_index,None)),  // extend failures along
+                CASegVirtAllocSlot::Allocation(alloc) => {
+                    match alloc.allocation.alloc_downwards_dyn(size) {
+                        None => new_allocations.push((slot_index,None)),
+                        Some(new_alloc) => {
+                            let (virt,_) = VirtualAllocation::new(
+                                new_alloc, alloc.flags, Arc::downgrade(&calloc), slot_index, offset,
+                            );
+                            new_allocations.push((slot_index,Some(virt)));
+                        },
+                    };
+                },
+            }
+        }
+        // Pass 2: Map allocated vmem
+        let section = &mut self.sections[0];
+        for (slot_index,allocation_result) in new_allocations {
+            match allocation_result {
+                None => section._map_vmem_failure(slot_index),
+                Some(virt) => section.map_vmem(slot_index, virt),
+            }
+        }
+        
+        // All gucci
+        self.get_section_mut(CASectionIndex(0))
     }
     
     /// Take ownership of a free vmem slot
@@ -797,6 +854,19 @@ impl CombinedAllocationContract {
     }
 }
 impl CombinedAllocationContractGuard {
+    fn arc_ref(&self) -> &Arc<CALocked> {
+        ArcYMutexGuard::mutex(&self.0)
+    }
+    fn downgraded_ref(&self) -> Weak<CALocked> {
+        Arc::downgrade(self.arc_ref())
+    }
+    
+    pub fn push_new_section_lower(&mut self, request: AllocationBackingRequest) -> CASectionWriter {
+        let (backing, _) = AllocationBacking::new_from_request(request);
+        let arc_ref = Arc::clone(self.arc_ref());
+        self.0.push_new_section_lower(backing, &arc_ref)
+    }
+    
     fn map_vmem(&mut self, allocation: VirtualAllocation, slot: usize) -> VirtAllocationGuard {
         self.0.map_vmem(allocation, slot);
         let contract = self.allocation();
@@ -817,7 +887,7 @@ impl CombinedAllocationContractGuard {
         // Build allocation
         let (valloc,_) = VirtualAllocation::new(
             Box::new(virt_allocation) as Box<dyn AnyPageAllocation>,
-            flags, Arc::downgrade(ArcYMutexGuard::mutex(&self.0)), 
+            flags, self.downgraded_ref(), 
             slot, offset
         );
         // Map allocation

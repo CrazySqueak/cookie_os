@@ -17,48 +17,6 @@ macro_rules! vec_of_non_clone {
     }
 }
 
-/*
-pub enum PhysicalAllocationSharable {
-    Owned(PhysicalMemoryAllocation),
-    Shared { alloc: Arc<PhysicalMemoryAllocation>, offset: usize, size: usize },
-}
-impl PhysicalAllocationSharable {
-    pub fn get_addr(&self) -> usize {
-        match self {
-            &Self::Owned(ref alloc) => alloc.get_addr(),
-            &Self::Shared{ref alloc, offset,..} => alloc.get_addr()+offset,
-        }
-    }
-    pub fn get_size(&self) -> usize {
-        match self {
-            &Self::Owned(ref alloc) => alloc.get_size(),
-            &Self::Shared{size,..} => size,
-        }
-    }
-    
-    pub fn split(self, mid: usize) -> (Self,Self) {
-        let (alloc, base_offset, base_size) = match self {
-            Self::Owned(alloc) => {let size = alloc.get_size(); (Arc::new(alloc),0,size)},
-            Self::Shared { alloc, offset, size} => (alloc,offset,size),
-        };
-        //let base_limit = base_offset+base_size;
-        let mid = core::cmp::min(mid,base_size);
-        
-        let lhs = Self::Shared {
-            alloc: Arc::clone(&alloc),
-            offset: base_offset,
-            size: mid,
-        };
-        let rhs = Self::Shared {
-            alloc: alloc,
-            offset: base_offset+mid,
-            size: base_size-mid,
-        };
-        (lhs, rhs)
-    }
-}
-*/
-
 #[derive(Clone,Copy,Debug)]
 pub enum GuardPageType {
     StackLimit = 0xF47B33F,  // Fat Beef
@@ -97,12 +55,12 @@ enum AllocationBackingMode {
     /// Zeroed memory - when swapped in, memory will be zeroed
     Zeroed,
 }
-struct AllocationBacking {
+pub struct AllocationBacking {
     mode: AllocationBackingMode,
     size: BackingSize,
 }
 impl AllocationBacking {
-    pub fn new(mode: AllocationBackingMode, size: BackingSize) -> Self {
+    pub(self) fn new(mode: AllocationBackingMode, size: BackingSize) -> Self {
         Self { mode, size }
     }
     
@@ -233,7 +191,7 @@ struct VirtualAllocation {
 }
 impl VirtualAllocation {
     pub fn new(alloc: Box<dyn AnyPageAllocation>, flags: VMemFlags,
-                  combined_alloc: Weak<()>, virt_index: usize, apt_allocation_offset: isize) -> (Self,AbsentPagesHandleB) {
+                  combined_alloc: Weak<CALocked>, virt_index: usize, apt_allocation_offset: isize) -> (Self,AbsentPagesHandleB) {
         // Populate an absent_pages_table entry
         let ate = ABSENT_PAGES_TABLE.create_new_descriptor();
         let apth = ate.commit(AbsentPagesItemA {
@@ -291,15 +249,20 @@ pub enum VirtualAllocationMode {
     FixedVirtAddr { addr: usize },
 }
 /// Lookup an "absent page" data item in the ABSENT_PAGES_TABLE
-pub fn lookup_absent_id(absent_id: usize) -> Option<((),usize)> {
+/// Returns the CombinedAllocationBacking API object, the offset in memory relative to the "base", and the index of the virtual allocation.
+pub fn lookup_absent_id(absent_id: usize) -> Option<AbsentLookupResult> {
     let apth_a = ABSENT_PAGES_TABLE.acquire_a(absent_id.try_into().unwrap()).ok()?;
     let apt_item_a = apth_a.get_a();
-    let combined_alloc = Weak::upgrade(&apt_item_a.allocation)?;
+    let combined_alloc = CombinedAllocationBacking(Weak::upgrade(&apt_item_a.allocation)?);
     let virt_index = apt_item_a.virt_allocation_index;
     let allocation_offset = apt_item_a.allocation_offset;
     
-    let section_obj = todo!();//AllocationSection::new(combined_alloc,section_identifier);
-    Some((section_obj,virt_index))
+    Some(AbsentLookupResult { backing_api: combined_alloc, alloc_offset: allocation_offset, virt_index })
+}
+pub struct AbsentLookupResult {
+    backing_api: CombinedAllocationBacking,
+    alloc_offset: isize,
+    virt_index: usize,
 }
 
 bitflags! {
@@ -311,11 +274,44 @@ bitflags! {
 }
 // NOTE: CombinedAllocation must ALWAYS be locked BEFORE any page allocators (if you are nesting the locks, which isn't recommended but often necessary)!!
 
+enum CASegVirtAllocSlot {
+    /// An empty slot
+    Empty,
+    /// Occupied - failed allocation
+    Failure,
+    /// Occupied - successful allocation
+    Allocation(VirtualAllocation),
+}
+impl CASegVirtAllocSlot {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Empty => true,
+            _ => false,
+        }
+    }
+    pub fn is_filled(&self) -> bool {
+        !self.is_empty()
+    }
+    
+    pub fn replace(&mut self, success: VirtualAllocation) -> Self {
+        core::mem::replace(self, Self::Allocation(success))
+    }
+    pub fn take(&mut self) -> Self {
+        core::mem::replace(self, Self::Empty)
+    }
+    
+    pub fn allocation_ref(&self) -> Option<&VirtualAllocation> {
+        match self {
+            Self::Allocation(alloc) => Some(alloc),
+            _ => None,
+        }
+    }
+}
 // TODO
-/// Each "segment" is tied to a given allocation backing.
+/// Each "segment" is a logical division in the "backing", being tied to a given allocation backing.
 /// Segments have a fixed size, but may be split and (possibly merged?).
-struct CombinedAllocationSegment {
-    vmem: Vec<Option<VirtualAllocation>>,  // vmem is placed first in drop order so it's dropped/cleared before the backing is
+pub struct CombinedAllocationSegment {
+    vmem: Vec<CASegVirtAllocSlot>,  // vmem is placed first in drop order so it's dropped/cleared before the backing is
     backing: AllocationBacking,
 }
 impl CombinedAllocationSegment {
@@ -352,12 +348,21 @@ impl CombinedAllocationSegment {
         let (lhs_backing, rhs_backing) = backing.split(mid);
         
         // Split the vmem allocations
-        let mut lhs_vmem: Vec<Option<VirtualAllocation>> = vec_of_non_clone![None;vmem.len()];
-        let mut rhs_vmem: Vec<Option<VirtualAllocation>> = vec_of_non_clone![None;vmem.len()];
-        for (slot, old_alloc) in vmem.into_iter().enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {  // We only process extant vmem allocations. Nones are skipped.
-            let (lhs_alloc, rhs_alloc) = old_alloc.split(mid);
-            lhs_vmem[slot] = Some(lhs_alloc);
-            rhs_vmem[slot] = Some(rhs_alloc);
+        let mut lhs_vmem: Vec<CASegVirtAllocSlot> = vec_of_non_clone![CASegVirtAllocSlot::Empty;vmem.len()];
+        let mut rhs_vmem: Vec<CASegVirtAllocSlot> = vec_of_non_clone![CASegVirtAllocSlot::Empty;vmem.len()];
+        for (slot, old_alloc) in vmem.into_iter().enumerate() {
+            match old_alloc {
+                CASegVirtAllocSlot::Allocation(old_alloc) => {
+                    let (lhs_alloc, rhs_alloc) = old_alloc.split(mid);
+                    lhs_vmem[slot].replace(lhs_alloc);
+                    rhs_vmem[slot].replace(rhs_alloc);
+                },
+                CASegVirtAllocSlot::Failure => {
+                    lhs_vmem[slot] = CASegVirtAllocSlot::Failure;
+                    rhs_vmem[slot] = CASegVirtAllocSlot::Failure;
+                },
+                CASegVirtAllocSlot::Empty => {}, // We only process extant vmem allocations. Empty slots are skipped.
+            }
         }
         
         // Done :)
@@ -368,29 +373,29 @@ impl CombinedAllocationSegment {
     
     // VMEM MAPPING
     pub(self) fn map_vmem(&mut self, slot: usize, valloc: VirtualAllocation) {
-        while slot < self.vmem.len() { self.vmem.push(None); }  // Ensure vmem has the requested slot
+        while slot < self.vmem.len() { self.vmem.push(CASegVirtAllocSlot::Empty); }  // Ensure vmem has the requested slot
         
         debug_assert!(valloc.size()==self.get_size());  // ensure that the sizes match
         let prev = self.vmem[slot].replace(valloc);
-        debug_assert!(prev.is_none());  // ensure we're not overwriting an in-use slot
+        debug_assert!(prev.is_empty());  // ensure we're not overwriting an in-use slot
         
         // Remap
         self.remap_pages(slot);
     }
     pub(self) fn clear_vmem(&mut self, slot: usize) {
         let old = self.vmem[slot].take();
-        debug_assert!(old.is_some());  // ensure the slot was actually in use
+        debug_assert!(old.is_filled());  // ensure the slot was actually in use
         drop(old);  // clarity: manually drop `old` to ensure that the page table is cleared of the old mappings
     }
     
     /// Update the page table for the given virtual allocation to match any changes that have been made
     fn remap_pages(&self, slot: usize) {
-        let Some(valloc) = (try{ self.vmem.get(slot)?.as_ref()? }) else { return };
+        let Some(valloc) = (try{ self.vmem.get(slot)?.allocation_ref()? }) else { return };
         self._remap_pages_inner(valloc)
     }
     /// Update the page table for all virtual allocations, with respect to this particular segment
     fn remap_all_pages(&self) {
-        for valloc in self.vmem.iter().map(Option::as_ref).flatten() {
+        for valloc in self.vmem.iter().map(CASegVirtAllocSlot::allocation_ref).flatten() {
             self._remap_pages_inner(valloc)
         }
     }
@@ -402,8 +407,8 @@ impl CombinedAllocationSegment {
     }
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-struct CASegmentIndex { section: usize, segment: usize }
-struct CASegmentWriter<'r> {
+pub struct CASegmentIndex { section: usize, segment: usize }
+pub struct CASegmentWriter<'r> {
     inner: &'r mut CombinedAllocationInner,
     index: CASegmentIndex,
 }
@@ -446,10 +451,10 @@ impl DerefMut for CASegmentWriter<'_> {
     }
 }
 
-/// Each "section" is a logical division. For example, working memory and the guard page would be two different sections
+/// Each "section" is a logical division in the contract. For example, working memory and the guard page would be two different sections
 /// Sections may be transparently subdivided into multiple segments by the memory manager as it sees fit.
 /// Sections may not be resized, but may be split/merged.
-struct CombinedAllocationSection {
+pub struct CombinedAllocationSection {
     segments: Vec<CombinedAllocationSegment>,
     
     /// Section identifier - a unique value assigned to each section within an allocation. This does not change until the section itself is merged/split, even if other sections are added/removed.
@@ -463,6 +468,9 @@ impl CombinedAllocationSection {
     fn calculate_size(&self) -> BackingSize {
         let total = self.segments.iter().fold(0usize, |a,x| a+x.backing.size.get());
         BackingSize::new(total)
+    }
+    pub(self) fn recalculate_size(&mut self) {
+        self.total_size = self.calculate_size()
     }
     pub fn get_size(&self) -> BackingSize {
         self.total_size
@@ -494,7 +502,7 @@ impl CombinedAllocationSection {
     
     /// Merge the two sections together. Backing memory is left as-is unless overwritten afterwards.
     /// SAFETY: The caller must ensure that both sections are directly adjacent to each other, with no gaps, and with lhs occupying lower addresses than rhs.
-    pub unsafe fn merge(context: &mut CombinedAllocationContext, lhs: Self, rhs: Self) -> Self {
+    pub(self) unsafe fn merge(context: &mut CombinedAllocationContext, lhs: Self, rhs: Self) -> Self {
         let Self { segments: lhs_segments, total_size: lhs_size, offset: lhs_offset, .. } = lhs;
         let Self { segments: rhs_segments, total_size: rhs_size, offset: rhs_offset, .. } = rhs;
         
@@ -515,16 +523,8 @@ impl CombinedAllocationSection {
         debug_assert!(allocation.size() == self.total_size);
         debug_assert!(allocation.absent_pages_table_handle.get_a().allocation_offset == self.offset);
         
-        // Chop off a piece for each segment, one by one
-        let mut remainder = allocation;
-        for segment in self.segments.iter_mut().rev().skip(1).rev() {  // Skip the final segment, as we handle that below
-            let (lhs,rhs) = remainder.split(segment.get_size());
-            segment.map_vmem(slot, lhs);
-            remainder = rhs;
-        }
-        // The final segment was skipped above, because it simply takes the whole remainder
-        self.segments.last_mut().unwrap().map_vmem(slot, remainder);
-        
+        split_and_map_vmem(self.segments.iter_mut(), allocation,
+                           |seg|seg.get_size(), |seg,valloc|seg.map_vmem(slot,valloc));
         // All done :)
     }
     pub(self) fn clear_vmem(&mut self, slot: usize) {
@@ -534,8 +534,8 @@ impl CombinedAllocationSection {
     }
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-struct CASectionIndex(usize);
-struct CASectionWriter<'r> {
+pub struct CASectionIndex(usize);
+pub struct CASectionWriter<'r> {
     inner: &'r mut CombinedAllocationInner,
     index: CASectionIndex,
 }
@@ -583,6 +583,8 @@ impl DerefMut for CASectionWriter<'_> {
 struct CombinedAllocationContext {
     /// The section identifier for the next section to be created
     next_section_identifier: usize,
+    /// Which virtual allocation slots are free
+    free_virt_slots: Vec<bool>,
 }
 impl CombinedAllocationContext {
     pub(self) fn take_next_section_identifier(&mut self) -> usize {
@@ -594,8 +596,21 @@ impl CombinedAllocationContext {
 struct CombinedAllocationInner {
     sections: Vec<CombinedAllocationSection>,
     context: CombinedAllocationContext,
+    total_size: BackingSize,
 }
 impl CombinedAllocationInner {
+    fn calculate_size(&self) -> BackingSize {
+        let total = self.sections.iter().fold(0usize, |a,x| a+x.get_size().get());
+        BackingSize::new(total)
+    }
+    pub(self) fn recalculate_size(&mut self) {
+        self.sections.iter_mut().for_each(|sec|sec.recalculate_size());
+        self.total_size = self.calculate_size();
+    }
+    pub fn get_size(&self) -> BackingSize {
+        self.total_size
+    }
+    
     fn get_section_index_from_identifier(&self, identifier: usize) -> Option<CASectionIndex> {
         Some(CASectionIndex(self.sections.iter().position(|x|x.get_section_identifier()==identifier)?))
     }
@@ -636,12 +651,67 @@ impl CombinedAllocationInner {
     fn segment_indexes_iter(&self) -> impl Iterator<Item=CASegmentIndex> + '_ {
         self.section_indexes_iter().flat_map(|sec_id|(0..self.get_section(sec_id).segments.len()).map(move|seg_id| CASegmentIndex { section: sec_id.0, segment: seg_id }))
     }
+    
+    /// Add a new vmem mapping in the given slot
+    /// Takes one big VirtualAllocation and splits it into each piece
+    fn map_vmem(&mut self, slot: usize, allocation: VirtualAllocation) {
+        debug_assert!(self.get_size() == allocation.size());
+        
+        split_and_map_vmem(self.sections.iter_mut(), allocation,
+                           |sec|sec.get_size(), |sec,valloc|sec.map_vmem(slot,valloc));
+    }
+    fn clear_vmem(&mut self, slot: usize) {
+        for segment in self.sections.iter_mut() {
+            segment.clear_vmem(slot)
+        }
+    }
 }
-// TODO
+type CALocked = YMutex<CombinedAllocationInner>;
+
+fn split_and_map_vmem<'i,I:'i>(mut iterator: impl DoubleEndedIterator<Item=&'i mut I>, allocation: VirtualAllocation,
+                         get_size: impl Fn(&I)->BackingSize, map_vmem: impl Fn(&mut I,VirtualAllocation)) {
+    let final_item = iterator.next_back().unwrap();  // the final one takes the remainder, so it's handled separately
+    // Chop off a piece for each item, one by one
+    let mut remainder = allocation;
+    for item in iterator {
+        let (lhs,rhs) = remainder.split(get_size(item));
+        map_vmem(item, lhs);
+        remainder = rhs;
+    }
+    // The final item takes the remainder
+    map_vmem(final_item,remainder);
+    
+    // This is the duplicated code this is a generalisation of V
+    // // Chop off a piece for each segment, one by one
+    // let mut remainder = allocation;
+    // for segment in self.segments.iter_mut().rev().skip(1).rev() {  // Skip the final segment, as we handle that below
+    //     let (lhs,rhs) = remainder.split(segment.get_size());
+    //     segment.map_vmem(slot, lhs);
+    //     remainder = rhs;
+    // }
+    // // The final segment was skipped above, because it simply takes the whole remainder
+    // self.segments.last_mut().unwrap().map_vmem(slot, remainder);
+ }
+
+/// CombinedAllocations are an abstraction between the "contract" that the allocation obeys (which vmem is for what purpose), and the "backing" (the actual memory/swap/whatever allocated to fulfill the contract).
+/// While modifications to the contract entail modifying the backing to match, modifying the backing does not modify the contract.
+/// In other words, how the memory is laid out / split / managed by the manager is transparent.
+///
+/// The contract contains the APIs for managing sections, requesting memory/guard pages/reservations/etc.
+pub struct CombinedAllocationContract(Arc<CALocked>);
+/// The CombinedAllocationBacking is used by the memory manager, used for managing segments and swap, as well as for resolving demand paging and similar
+pub struct CombinedAllocationBacking(Arc<CALocked>);
+// (both are wrappers around an Arc<>, they just expose different APIs)
+
+/// VirtAllocationGuard are guards representing a mapping of a given contract/backing into virtual memory
+pub struct VirtAllocationGuard {
+    contract: CombinedAllocationContract,
+    virt_index: usize,
+}
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};
 struct AbsentPagesItemA {
-    allocation: Weak<()>,
+    allocation: Weak<CALocked>,
     virt_allocation_index: usize,
     /// Start of this specific virtual allocation, as an offset from the "base" address of the allocation
     allocation_offset: isize,

@@ -245,7 +245,7 @@ impl VirtualAllocation {
 #[derive(Debug,Clone,Copy)]
 pub enum VirtualAllocationMode {
     Dynamic { strategy: PageAllocationStrategies<'static> },
-    OffsetMapped { offset: usize },
+    // TODO OffsetMapped { offset: usize },
     FixedVirtAddr { addr: usize },
 }
 /// Lookup an "absent page" data item in the ABSENT_PAGES_TABLE
@@ -675,24 +675,24 @@ impl CombinedAllocationInner {
         self.section_indexes_iter().flat_map(|sec_id|(0..self.get_section(sec_id).segments.len()).map(move|seg_id| CASegmentIndex { section: sec_id.0, segment: seg_id }))
     }
     
-    /// Add a new vmem mapping, returning the slot chosen
-    /// Takes one big VirtualAllocation and splits it into each piece
-    fn map_vmem(&mut self, allocation: VirtualAllocation) -> usize {
-        debug_assert!(self.get_size() == allocation.size());
-        
+    /// Take ownership of a free vmem slot
+    fn pick_vmem_slot(&mut self) -> usize {
         // Select a slot
         let index_result = self.context.free_virt_slots.iter().position(|s|*s).ok_or(self.context.free_virt_slots.len());
         let slot = match index_result {
             Ok(index) => {self.context.free_virt_slots[index]=false;index},
             Err(new_index) => {self.context.free_virt_slots.push(false);new_index},
         };
+        slot
+    }
+    /// Add a new vmem mapping
+    /// Takes one big VirtualAllocation and splits it into each piece
+    fn map_vmem(&mut self, allocation: VirtualAllocation, slot: usize) {
+        debug_assert!(self.get_size() == allocation.size());
         
         // Allocate
         split_and_map_vmem(self.sections.iter_mut(), allocation,
                            |sec|sec.get_size(), |sec,valloc|sec.map_vmem(slot,valloc));
-        
-        // Return slot
-        slot
     }
     fn clear_vmem(&mut self, slot: usize) {
         // Free slot
@@ -797,10 +797,33 @@ impl CombinedAllocationContract {
     }
 }
 impl CombinedAllocationContractGuard {
-    fn map_vmem(&mut self, allocation: VirtualAllocation) -> VirtAllocationGuard {
-        let slot = self.0.map_vmem(allocation);
+    fn map_vmem(&mut self, allocation: VirtualAllocation, slot: usize) -> VirtAllocationGuard {
+        self.0.map_vmem(allocation, slot);
         let contract = self.allocation();
         VirtAllocationGuard { contract, virt_index: slot }
+    }
+    pub fn map_allocate_vmem<PFA:PageFrameAllocator+Send+Sync+'static>(&mut self, allocator: &LockedPageAllocator<PFA>, mode: VirtualAllocationMode, flags: VMemFlags) -> Option<VirtAllocationGuard> {
+        // Allocate vmem
+        let total_size = self.0.get_size();
+        let offset: isize = self.0.sections[0].get_offset();  // N.B. FixedVirtAddr is the base address, not the start address, so we need to know the offset of the start
+        let virt_allocation = match mode {
+            VirtualAllocationMode::Dynamic { strategy } => allocator.allocate(total_size, strategy)?,
+            VirtualAllocationMode::FixedVirtAddr { addr } => allocator.allocate_at(((addr as isize)+offset) as usize, total_size)?,
+        };
+        
+        // Allocate slot
+        let slot = self.0.pick_vmem_slot();
+        
+        // Build allocation
+        let (valloc,_) = VirtualAllocation::new(
+            Box::new(virt_allocation) as Box<dyn AnyPageAllocation>,
+            flags, Arc::downgrade(ArcYMutexGuard::mutex(&self.0)), 
+            slot, offset
+        );
+        // Map allocation
+        let guard = self.map_vmem(valloc, slot);
+        // Return guard
+        Some(guard)
     }
 }
 /// The CombinedAllocationBacking is used by the memory manager, used for managing segments and swap, as well as for resolving demand paging and similar

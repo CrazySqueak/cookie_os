@@ -1,4 +1,5 @@
 
+use core::ops::{Deref,DerefMut};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use alloc::collections::VecDeque;
@@ -397,12 +398,55 @@ impl CombinedAllocationSegment {
         }
     }
 }
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+struct CASegmentIndex { section: usize, segment: usize }
+struct CASegmentWriter<'r> {
+    inner: &'r mut CombinedAllocationInner,
+    index: CASegmentIndex,
+}
+impl<'r> CASegmentWriter<'r> {
+    /// Split a segment in two. Returns the left-hand-side, and the index of the right-hand-side
+    pub fn split(self, mid: BackingSize) -> (Self,Option<CASegmentIndex>) {
+        if mid >= self.get_size() { return (self,None); }  // mid must be < segment.size
+        
+        // Use swap_remove for magic
+        // (we set things right afterwards)
+        let Self { inner:self_inner, index:self_index } = self;  // destructure self to avoid accidental derefs
+        let segments = &mut self_inner.sections[self_index.section].segments;
+        let segment = segments.swap_remove(self_index.segment);
+        let (lhs,rhs) = segment.split(mid);
+        // Push lhs to the end, and swap it with the previously swapped element
+        let end_idx = segments.len();
+        segments.push(lhs);
+        segments.swap(self_index.segment, end_idx-1);  // swap the swapped element with our LHS
+        segments.insert(self_index.segment+1, rhs);  // insert rhs directly after lhs
+        
+        // Return new handles
+        let rhs_index = CASegmentIndex { section: self_index.section, segment: self_index.segment+1 };
+        (self_inner.get_segment_writer(self_index), Some(rhs_index))
+    }
+}
+impl Deref for CASegmentWriter<'_> {
+    type Target = CombinedAllocationSegment;
+    fn deref(&self) -> &Self::Target {
+        self.inner.get_segment(self.index)
+    }
+}
+impl DerefMut for CASegmentWriter<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.get_segment_mut(self.index)
+    }
+}
+
 /// Each "section" is a logical division. For example, working memory and the guard page would be two different sections
 /// Sections may be transparently subdivided into multiple segments by the memory manager as it sees fit.
 /// Sections may not be resized, but may be split/merged.
 struct CombinedAllocationSection {
     segments: Vec<CombinedAllocationSegment>,
     
+    /// Section identifier - a unique value assigned to each section within an allocation. This does not change until the section itself is merged/split, even if other sections are added/removed.
+    section_identifier: usize,
+    /// Total size in bytes
     total_size: BackingSize,
     /// Offset from the allocation "base" in vmem
     offset: isize,
@@ -410,7 +454,7 @@ struct CombinedAllocationSection {
 impl CombinedAllocationSection {
     fn calculate_size(&self) -> BackingSize {
         let total = self.segments.iter().fold(0usize, |a,x| a+x.backing.size.get());
-        unsafe{BackingSize::new(total)}
+        BackingSize::new(total)
     }
     pub fn get_size(&self) -> BackingSize {
         self.total_size
@@ -418,15 +462,18 @@ impl CombinedAllocationSection {
     pub fn get_offset(&self) -> isize {
         self.offset
     }
+    pub fn get_section_identifier(&self) -> usize {
+        self.section_identifier
+    }
     
     // SPLITTING/MERGING
     // todo: splitting
     
     /// Merge the two sections together. Backing memory is left as-is unless overwritten afterwards.
     /// SAFETY: The caller must ensure that both sections are directly adjacent to each other, with no gaps, and with lhs occupying lower addresses than rhs.
-    pub(self) unsafe fn merge(lhs: Self, rhs: Self) -> Self {
-        let Self { segments: lhs_segments, total_size: lhs_size, offset: lhs_offset } = lhs;
-        let Self { segments: rhs_segments, total_size: rhs_size, offset: rhs_offset } = rhs;
+    pub unsafe fn merge(context: &mut CombinedAllocationContext, lhs: Self, rhs: Self) -> Self {
+        let Self { segments: lhs_segments, total_size: lhs_size, offset: lhs_offset, .. } = lhs;
+        let Self { segments: rhs_segments, total_size: rhs_size, offset: rhs_offset, .. } = rhs;
         
         debug_assert!(lhs_offset+(lhs_size.get() as isize) == rhs_offset);  // assert that sections are next to eachother in memory
         
@@ -435,10 +482,11 @@ impl CombinedAllocationSection {
         segments.reserve(rhs_segments.len());
         for segment in rhs_segments { segments.push(segment); }
         
-        Self { segments, total_size: sum_sizes, offset: lhs_offset }
+        Self { segments, total_size: sum_sizes, offset: lhs_offset, section_identifier: context.take_next_section_identifier() }
     }
     
     // VMEM MAPPING
+    /// Add a new vmem mapping in the given slot
     /// Takes one big VirtualAllocation and splits it into each piece
     pub(self) fn map_vmem(&mut self, slot: usize, allocation: VirtualAllocation) {
         debug_assert!(allocation.size() == self.total_size);
@@ -461,6 +509,87 @@ impl CombinedAllocationSection {
         }
     }
 }
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+struct CASectionIndex(usize);
+struct CASectionWriter<'r> {
+    inner: &'r mut CombinedAllocationInner,
+    index: CASectionIndex,
+}
+impl<'r> CASectionWriter<'r> {
+    /// Merge two sections together. This section must be directly below the next one in memory, with no gaps.
+    /// Returns Ok(merged) on success, Err(self) on failure
+    pub fn merge(self, rhs: CASectionIndex) -> Result<Self,Self> {
+        let lhs_offset = self.get_offset();
+        let lhs_size = self.get_size().get() as isize;
+        let rhs_offset = self.inner.get_section(rhs).get_offset();
+        if lhs_offset+lhs_size != rhs_offset { return Err(self); }  // Not next to each other
+        
+        // Precondition has been validated - we can safely merge
+        let Self { inner:self_inner, index:self_index } = self;  // destructure self to avoid accidental derefs
+        let sections = &mut self_inner.sections;
+        let mut sections_to_merge = sections.drain(self_index.0..self_index.0+2);
+        let lhs = sections_to_merge.next().unwrap();
+        let rhs = sections_to_merge.next().unwrap();
+        drop(sections_to_merge);
+        let merged = unsafe { CombinedAllocationSection::merge(&mut self_inner.context, lhs, rhs) };  // safety: we've validated the preconditions
+        
+        // Add merged back to list
+        sections.insert(self_index.0, merged);
+        // And return a new writer
+        Ok(self_inner.get_section_writer(self_index))
+    }
+}
+impl Deref for CASectionWriter<'_> {
+    type Target = CombinedAllocationSection;
+    fn deref(&self) -> &Self::Target {
+        self.inner.get_section(self.index)
+    }
+}
+impl DerefMut for CASectionWriter<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.get_section_mut(self.index)
+    }
+}
+
+struct CombinedAllocationContext {
+    /// The section identifier for the next section to be created
+    next_section_identifier: usize,
+}
+impl CombinedAllocationContext {
+    pub(self) fn take_next_section_identifier(&mut self) -> usize {
+        let x = self.next_section_identifier;
+        self.next_section_identifier += 1;
+        x
+    }
+}
+struct CombinedAllocationInner {
+    sections: Vec<CombinedAllocationSection>,
+    context: CombinedAllocationContext,
+}
+impl CombinedAllocationInner {
+    fn get_section_index_from_identifier(&self, identifier: usize) -> Option<CASectionIndex> {
+        Some(CASectionIndex(self.sections.iter().position(|x|x.get_section_identifier()==identifier)?))
+    }
+    fn get_section(&self, index: CASectionIndex) -> &CombinedAllocationSection {
+        &self.sections[index.0]
+    }
+    fn get_section_mut(&mut self, index: CASectionIndex) -> &mut CombinedAllocationSection {
+        &mut self.sections[index.0]
+    }
+    fn get_section_writer(&mut self, index: CASectionIndex) -> CASectionWriter {
+        CASectionWriter { inner: self, index: index }
+    }
+    fn get_segment(&self, index: CASegmentIndex) -> &CombinedAllocationSegment {
+        &self.sections[index.section].segments[index.segment]
+    }
+    fn get_segment_mut(&mut self, index: CASegmentIndex) -> &mut CombinedAllocationSegment {
+        &mut self.sections[index.section].segments[index.segment]
+    }
+    fn get_segment_writer(&mut self, index: CASegmentIndex) -> CASegmentWriter {
+        CASegmentWriter { inner: self, index: index }
+    }
+}
+
 // TODO
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};

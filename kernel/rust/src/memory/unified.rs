@@ -7,7 +7,7 @@ use alloc::sync::{Arc,Weak};
 use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,PAGE_ALIGN,PageAlignedUsize};
 use super::physical::{PhysicalMemoryAllocation,palloc};
 use bitflags::bitflags;
-use crate::sync::{YMutex,YMutexGuard};
+use crate::sync::{YMutex,YMutexGuard,ArcYMutexGuard};
 
 use super::paging::{global_pages::KERNEL_PTABLE,strategy::KALLOCATION_KERNEL_GENERALDYN,strategy::PageAllocationStrategies};
 
@@ -652,15 +652,30 @@ impl CombinedAllocationInner {
         self.section_indexes_iter().flat_map(|sec_id|(0..self.get_section(sec_id).segments.len()).map(move|seg_id| CASegmentIndex { section: sec_id.0, segment: seg_id }))
     }
     
-    /// Add a new vmem mapping in the given slot
+    /// Add a new vmem mapping, returning the slot chosen
     /// Takes one big VirtualAllocation and splits it into each piece
-    fn map_vmem(&mut self, slot: usize, allocation: VirtualAllocation) {
+    fn map_vmem(&mut self, allocation: VirtualAllocation) -> usize {
         debug_assert!(self.get_size() == allocation.size());
         
+        // Select a slot
+        let index_result = self.context.free_virt_slots.iter().position(|s|*s).ok_or(self.context.free_virt_slots.len());
+        let slot = match index_result {
+            Ok(index) => {self.context.free_virt_slots[index]=false;index},
+            Err(new_index) => {self.context.free_virt_slots.push(false);new_index},
+        };
+        
+        // Allocate
         split_and_map_vmem(self.sections.iter_mut(), allocation,
                            |sec|sec.get_size(), |sec,valloc|sec.map_vmem(slot,valloc));
+        
+        // Return slot
+        slot
     }
     fn clear_vmem(&mut self, slot: usize) {
+        // Free slot
+        let old = core::mem::replace(&mut self.context.free_virt_slots[slot],false);
+        debug_assert!(old);
+        // Free allocations
         for segment in self.sections.iter_mut() {
             segment.clear_vmem(slot)
         }
@@ -693,20 +708,61 @@ fn split_and_map_vmem<'i,I:'i>(mut iterator: impl DoubleEndedIterator<Item=&'i m
     // self.segments.last_mut().unwrap().map_vmem(slot, remainder);
  }
 
+macro_rules! impl_ca_lock {
+    ($name:ident,$guard:ident) => {
+        impl $name {
+            pub fn lock(&self) -> $guard {
+                $guard(self.0.lock_arc())
+            }
+            pub fn try_lock(&self) -> Option<$guard> {
+                self.0.try_lock_arc().map(|g|$guard(g))
+            }
+            pub fn is_locked(&self) -> bool {
+                self.0.is_locked()
+            }
+        }
+        impl $guard {
+            pub fn allocation(&self) -> $name {
+                $name(Arc::clone(ArcYMutexGuard::mutex(&self.0)))
+            }
+            pub fn into_allocation(self) -> $name {
+                $name(ArcYMutexGuard::into_arc(self.0))
+            }
+        }
+    }
+}
+
 /// CombinedAllocations are an abstraction between the "contract" that the allocation obeys (which vmem is for what purpose), and the "backing" (the actual memory/swap/whatever allocated to fulfill the contract).
 /// While modifications to the contract entail modifying the backing to match, modifying the backing does not modify the contract.
 /// In other words, how the memory is laid out / split / managed by the manager is transparent.
 ///
 /// The contract contains the APIs for managing sections, requesting memory/guard pages/reservations/etc.
 pub struct CombinedAllocationContract(Arc<CALocked>);
+pub struct CombinedAllocationContractGuard(ArcYMutexGuard<CombinedAllocationInner>);
+impl_ca_lock!(CombinedAllocationContract,CombinedAllocationContractGuard);
+impl CombinedAllocationContractGuard {
+    fn map_vmem(&mut self, allocation: VirtualAllocation) -> VirtAllocationGuard {
+        let slot = self.0.map_vmem(allocation);
+        let contract = self.allocation();
+        VirtAllocationGuard { contract, virt_index: slot }
+    }
+}
 /// The CombinedAllocationBacking is used by the memory manager, used for managing segments and swap, as well as for resolving demand paging and similar
 pub struct CombinedAllocationBacking(Arc<CALocked>);
+pub struct CombinedAllocationBackingGuard(ArcYMutexGuard<CombinedAllocationInner>);
+impl_ca_lock!(CombinedAllocationBacking,CombinedAllocationBackingGuard);
 // (both are wrappers around an Arc<>, they just expose different APIs)
 
 /// VirtAllocationGuard are guards representing a mapping of a given contract/backing into virtual memory
 pub struct VirtAllocationGuard {
     contract: CombinedAllocationContract,
     virt_index: usize,
+}
+impl core::ops::Drop for VirtAllocationGuard {
+    fn drop(&mut self) {
+        let mut inner = self.contract.0.lock();
+        inner.clear_vmem(self.virt_index);
+    }
 }
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};

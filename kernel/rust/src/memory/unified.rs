@@ -408,6 +408,11 @@ struct CASegmentWriter<'r> {
     index: CASegmentIndex,
 }
 impl<'r> CASegmentWriter<'r> {
+    /// Select a different segment, using its index
+    pub fn with_index(self, index: CASegmentIndex) -> Self {
+        self.inner.get_segment_mut(index)
+    }
+    
     /// Split a segment in two. Returns the left-hand-side, and the index of the right-hand-side
     pub fn split(self, mid: BackingSize) -> (Self,Option<CASegmentIndex>) {
         if mid >= self.get_size() { return (self,None); }  // mid must be < segment.size
@@ -426,7 +431,7 @@ impl<'r> CASegmentWriter<'r> {
         
         // Return new handles
         let rhs_index = CASegmentIndex { section: self_index.section, segment: self_index.segment+1 };
-        (self_inner.get_segment_writer(self_index), Some(rhs_index))
+        (self_inner.get_segment_mut(self_index), Some(rhs_index))
     }
 }
 impl Deref for CASegmentWriter<'_> {
@@ -437,7 +442,7 @@ impl Deref for CASegmentWriter<'_> {
 }
 impl DerefMut for CASegmentWriter<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.get_segment_mut(self.index)
+        self.inner._get_segment_mut_inner(self.index)
     }
 }
 
@@ -535,6 +540,11 @@ struct CASectionWriter<'r> {
     index: CASectionIndex,
 }
 impl<'r> CASectionWriter<'r> {
+    /// Select a different section, using its index
+    pub fn with_index(self, index: CASectionIndex) -> Self {
+        self.inner.get_section_mut(index)
+    }
+    
     /// Merge two sections together. This section must be directly below the next one in memory, with no gaps.
     /// Returns Ok(merged) on success, Err(self) on failure
     pub fn merge(self, rhs: CASectionIndex) -> Result<Self,Self> {
@@ -555,7 +565,7 @@ impl<'r> CASectionWriter<'r> {
         // Add merged back to list
         sections.insert(self_index.0, merged);
         // And return a new writer
-        Ok(self_inner.get_section_writer(self_index))
+        Ok(self_inner.get_section_mut(self_index))
     }
 }
 impl Deref for CASectionWriter<'_> {
@@ -566,7 +576,7 @@ impl Deref for CASectionWriter<'_> {
 }
 impl DerefMut for CASectionWriter<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.get_section_mut(self.index)
+        self.inner._get_section_mut_inner(self.index)
     }
 }
 
@@ -592,23 +602,41 @@ impl CombinedAllocationInner {
     fn get_section(&self, index: CASectionIndex) -> &CombinedAllocationSection {
         &self.sections[index.0]
     }
-    fn get_section_mut(&mut self, index: CASectionIndex) -> &mut CombinedAllocationSection {
+    fn _get_section_mut_inner(&mut self, index: CASectionIndex) -> &mut CombinedAllocationSection {
         &mut self.sections[index.0]
     }
-    fn get_section_writer(&mut self, index: CASectionIndex) -> CASectionWriter {
+    fn get_section_mut(&mut self, index: CASectionIndex) -> CASectionWriter {
         CASectionWriter { inner: self, index: index }
     }
+    fn sections_iter(&self) -> impl Iterator<Item=&CombinedAllocationSection> {
+        self.sections.iter()
+    }
+    fn sections_iter_mut(&mut self) -> impl Iterator<Item=&mut CombinedAllocationSection> {
+        self.sections.iter_mut()
+    }
+    fn section_indexes_iter(&self) -> impl Iterator<Item=CASectionIndex> {
+        (0..self.sections.len()).map(|sec_id| CASectionIndex(sec_id))
+    }
+    
     fn get_segment(&self, index: CASegmentIndex) -> &CombinedAllocationSegment {
         &self.sections[index.section].segments[index.segment]
     }
-    fn get_segment_mut(&mut self, index: CASegmentIndex) -> &mut CombinedAllocationSegment {
+    fn _get_segment_mut_inner(&mut self, index: CASegmentIndex) -> &mut CombinedAllocationSegment {
         &mut self.sections[index.section].segments[index.segment]
     }
-    fn get_segment_writer(&mut self, index: CASegmentIndex) -> CASegmentWriter {
+    fn get_segment_mut(&mut self, index: CASegmentIndex) -> CASegmentWriter {
         CASegmentWriter { inner: self, index: index }
     }
+    fn segments_iter(&self) -> impl Iterator<Item=&CombinedAllocationSegment> {
+        self.sections.iter().flat_map(|sec|sec.segments.iter())
+    }
+    fn segments_iter_mut(&mut self) -> impl Iterator<Item=&mut CombinedAllocationSegment> {
+        self.sections.iter_mut().flat_map(|sec|sec.segments.iter_mut())
+    }
+    fn segment_indexes_iter(&self) -> impl Iterator<Item=CASegmentIndex> + '_ {
+        self.section_indexes_iter().flat_map(|sec_id|(0..self.get_section(sec_id).segments.len()).map(move|seg_id| CASegmentIndex { section: sec_id.0, segment: seg_id }))
+    }
 }
-
 // TODO
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};

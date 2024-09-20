@@ -685,20 +685,25 @@ impl CombinedAllocationInner {
         self.section_indexes_iter().flat_map(|sec_id|(0..self.get_section(sec_id).segments.len()).map(move|seg_id| CASegmentIndex { section: sec_id.0, segment: seg_id }))
     }
     
-    /// Push a new section to the lower end of this contract
-    fn push_new_section_lower(&mut self, backing: AllocationBacking, calloc: &Arc<CALocked>) -> CASectionWriter {
+    fn _push_new_section_inner(&mut self, backing: AllocationBacking, calloc: &Arc<CALocked>,
+                                fn_calc_offset: impl FnOnce(&Self,usize)->isize,  // (this, backing.size) -> new_offset
+                                fn_push_section: impl FnOnce(&mut Self,CombinedAllocationSection),  // (this, new_section)
+                                fn_get_inherit_from_segment: impl FnOnce(&mut Self)->&CombinedAllocationSegment,  // (this) -> segment_to_inherit_from
+                                fn_alloc_next_dyn: impl Fn(&Box<dyn AnyPageAllocation>,PageAlignedUsize)->Option<Box<dyn AnyPageAllocation>>, // (allocation,size) -> new_allocation
+                                fn_get_pushed_section: impl FnOnce(&mut Self)->&mut CombinedAllocationSection,  // (this) -> new_section
+                                fn_get_pushed_section_writer: impl FnOnce(&mut Self)->CASectionWriter, // (this) -> new_section
+                                ) -> CASectionWriter {
         // Calculate size and offset
         let size = backing.get_size();
-        let offset = self.sections[0].get_offset() - (size.get() as isize);
+        let offset = fn_calc_offset(self,size.get());
         let vmem_slot_count = self.context.free_virt_slots.len();
         // Create new section and push it
         let section = CombinedAllocationSection::new(&mut self.context, offset, backing, vmem_slot_count);
-        self.sections.push_front(section);
+        fn_push_section(self, section);
         
         // (attempt) to map into vmem - extending existing allocations
         // we look at the earliest allocation (after us) to determine how we extend the allocations/etc.
-        debug_assert!(self.sections[1].segments.len() >= 1);  // prev earliest allocation: only the first segment is relevant
-        let next_segment = &self.sections[1].segments[0];
+        let next_segment = fn_get_inherit_from_segment(self);
         // Because VecDeque doesn't have a method for borrowing two elements at once, we have to do this in two passes
         // Pass 1: Attempt allocation
         let mut new_allocations = Vec::<(usize,Option<VirtualAllocation>)>::with_capacity(vmem_slot_count);  // some = success, none = failure, not present = empty
@@ -707,7 +712,7 @@ impl CombinedAllocationInner {
                 CASegVirtAllocSlot::Empty => continue,  // ignore empty allocs
                 CASegVirtAllocSlot::Failure => new_allocations.push((slot_index,None)),  // extend failures along
                 CASegVirtAllocSlot::Allocation(alloc) => {
-                    match alloc.allocation.alloc_downwards_dyn(size) {
+                    match fn_alloc_next_dyn(&alloc.allocation,size) {
                         None => new_allocations.push((slot_index,None)),
                         Some(new_alloc) => {
                             let (virt,_) = VirtualAllocation::new(
@@ -720,7 +725,7 @@ impl CombinedAllocationInner {
             }
         }
         // Pass 2: Map allocated vmem
-        let section = &mut self.sections[0];
+        let section = fn_get_pushed_section(self);
         for (slot_index,allocation_result) in new_allocations {
             match allocation_result {
                 None => section._map_vmem_failure(slot_index),
@@ -729,7 +734,41 @@ impl CombinedAllocationInner {
         }
         
         // All gucci
-        self.get_section_mut(CASectionIndex(0))
+        fn_get_pushed_section_writer(self)
+    }
+    /// Push a new section to the lower end of this contract
+    fn push_new_section_lower(&mut self, backing: AllocationBacking, calloc: &Arc<CALocked>) -> CASectionWriter {
+        self._push_new_section_inner(backing, calloc,
+            // fn_calc_offset
+            |this,backing_size| this.sections[0].get_offset() - (backing_size as isize),
+            // fn_push_section
+            |this,new_section| this.sections.push_front(new_section),
+            // fn_get_inherit_from_segment
+            |this| &this.sections[1].segments[0],
+            // fn_alloc_next_dyn
+            |allocation,size| allocation.alloc_downwards_dyn(size),
+            // fn_get_pushed_section
+            |this| &mut this.sections[0],
+            // fn_get_pushed_section_writer
+            |this| this.get_section_mut(CASectionIndex(0)),
+        )
+    }
+    /// Push a new section to the higher end of this contract (maybe?? TODO: check this is correct once im more awake)
+    fn push_new_section_higher(&mut self, backing: AllocationBacking, calloc: &Arc<CALocked>) -> CASectionWriter {
+        self._push_new_section_inner(backing, calloc,
+            // fn_calc_offset
+            |this,_backing_size| this.sections.back().unwrap().get_offset() + (this.sections.back().unwrap().get_size().get() as isize),
+            // fn_push_section
+            |this,new_section| this.sections.push_back(new_section),
+            // fn_get_inherit_from_segment
+            |this| this.sections[this.sections.len()-2].segments.last().unwrap(),
+            // fn_alloc_next_dyn
+            |allocation,size| todo!(),//allocation.alloc_downwards_dyn(size),
+            // fn_get_pushed_section
+            |this| this.sections.back_mut().unwrap(),
+            // fn_get_pushed_section_writer
+            |this| this.get_section_mut(CASectionIndex(this.sections.len()-1)),
+        )
     }
     
     /// Take ownership of a free vmem slot

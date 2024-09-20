@@ -233,13 +233,13 @@ struct VirtualAllocation {
 }
 impl VirtualAllocation {
     pub fn new(alloc: Box<dyn AnyPageAllocation>, flags: VMemFlags,
-                  combined_alloc: Weak<()>, virt_index: usize, section_identifier: usize) -> (Self,AbsentPagesHandleB) {
+                  combined_alloc: Weak<()>, virt_index: usize, apt_allocation_offset: isize) -> (Self,AbsentPagesHandleB) {
         // Populate an absent_pages_table entry
         let ate = ABSENT_PAGES_TABLE.create_new_descriptor();
         let apth = ate.commit(AbsentPagesItemA {
             allocation: combined_alloc,
             virt_allocation_index: virt_index,
-            section_identifier: section_identifier,
+            allocation_offset: apt_allocation_offset,
         }, AbsentPagesItemB {});
         let apth_a = apth.clone_a_ref();
         
@@ -260,16 +260,18 @@ impl VirtualAllocation {
     }
     
     /// mid MUST be < size
-    pub fn split(self, mid: BackingSize, lhs_section_id: usize, rhs_section_id: usize) -> (Self,Self) {
+    pub fn split(self, mid: BackingSize) -> (Self,Self) {
         debug_assert!(mid < self.size());
         let Self { allocation, flags, absent_pages_table_handle: apth } = self;
         let apt_data = apth.get_a();
         let apt_alloc_weak = &apt_data.allocation;
         let virt_idx = apt_data.virt_allocation_index;
+        let lhs_apt_offset = apt_data.allocation_offset;
+        let rhs_apt_offset = lhs_apt_offset + (mid.get() as isize);
         
         let (allocation_left, allocation_right) = allocation.split_dyn(mid);
-        (Self::new(allocation_left, flags, Weak::clone(apt_alloc_weak), virt_idx, lhs_section_id).0,
-         Self::new(allocation_right, flags, Weak::clone(apt_alloc_weak), virt_idx, rhs_section_id).0)
+        (Self::new(allocation_left, flags, Weak::clone(apt_alloc_weak), virt_idx, lhs_apt_offset).0,
+         Self::new(allocation_right, flags, Weak::clone(apt_alloc_weak), virt_idx, rhs_apt_offset).0)
     }
     
     pub fn start_addr(&self) -> usize {
@@ -294,7 +296,8 @@ pub fn lookup_absent_id(absent_id: usize) -> Option<((),usize)> {
     let apt_item_a = apth_a.get_a();
     let combined_alloc = Weak::upgrade(&apt_item_a.allocation)?;
     let virt_index = apt_item_a.virt_allocation_index;
-    let section_identifier = apt_item_a.section_identifier;
+    let allocation_offset = apt_item_a.allocation_offset;
+    
     let section_obj = todo!();//AllocationSection::new(combined_alloc,section_identifier);
     Some((section_obj,virt_index))
 }
@@ -352,7 +355,7 @@ impl CombinedAllocationSegment {
         let mut lhs_vmem: Vec<Option<VirtualAllocation>> = vec_of_non_clone![None;vmem.len()];
         let mut rhs_vmem: Vec<Option<VirtualAllocation>> = vec_of_non_clone![None;vmem.len()];
         for (slot, old_alloc) in vmem.into_iter().enumerate().filter_map(|(i,o)|o.map(|x|(i,x))) {  // We only process extant vmem allocations. Nones are skipped.
-            let (lhs_alloc, rhs_alloc) = old_alloc.split(mid, 0, 0);  // TODO: section identifiers?
+            let (lhs_alloc, rhs_alloc) = old_alloc.split(mid);
             lhs_vmem[slot] = Some(lhs_alloc);
             rhs_vmem[slot] = Some(rhs_alloc);
         }
@@ -466,6 +469,21 @@ impl CombinedAllocationSection {
         self.section_identifier
     }
     
+    // BACKING TYPES
+    pub fn overwrite_backing(&mut self, new_backing: AllocationBacking) {
+        debug_assert!(self.get_size() == new_backing.get_size());
+        
+        // We have to split the backing into pieces for each segment
+        let mut remainder = new_backing;
+        for segment in self.segments.iter_mut().rev().skip(1).rev() {  // skip the final segment
+            let (lhs, rhs) = remainder.split(segment.get_size());
+            segment.overwrite_backing(lhs);
+            remainder = rhs;
+        }
+        // Handle the last one
+        self.segments.last_mut().unwrap().overwrite_backing(remainder);
+    }
+    
     // SPLITTING/MERGING
     // todo: splitting
     
@@ -490,11 +508,12 @@ impl CombinedAllocationSection {
     /// Takes one big VirtualAllocation and splits it into each piece
     pub(self) fn map_vmem(&mut self, slot: usize, allocation: VirtualAllocation) {
         debug_assert!(allocation.size() == self.total_size);
+        debug_assert!(allocation.absent_pages_table_handle.get_a().allocation_offset == self.offset);
         
         // Chop off a piece for each segment, one by one
         let mut remainder = allocation;
         for segment in self.segments.iter_mut().rev().skip(1).rev() {  // Skip the final segment, as we handle that below
-            let (lhs,rhs) = remainder.split(segment.get_size(), 0, 0);  // TODO: Segment identifiers?
+            let (lhs,rhs) = remainder.split(segment.get_size());
             segment.map_vmem(slot, lhs);
             remainder = rhs;
         }
@@ -596,7 +615,8 @@ use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};
 struct AbsentPagesItemA {
     allocation: Weak<()>,
     virt_allocation_index: usize,
-    section_identifier: usize,
+    /// Start of this specific virtual allocation, as an offset from the "base" address of the allocation
+    allocation_offset: isize,
 }
 struct AbsentPagesItemB {
 }

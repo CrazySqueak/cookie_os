@@ -1,7 +1,7 @@
 
 use core::ops::{Deref,DerefMut};
 use alloc::boxed::Box;
-use alloc::vec::Vec;
+use alloc::vec::Vec; use alloc::vec;
 use alloc::collections::VecDeque;
 use alloc::sync::{Arc,Weak};
 use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,PAGE_ALIGN,PageAlignedUsize};
@@ -315,6 +315,13 @@ pub struct CombinedAllocationSegment {
     backing: AllocationBacking,
 }
 impl CombinedAllocationSegment {
+    pub(self) fn new(backing: AllocationBacking, vmem_slot_count: usize) -> Self {
+        Self {
+            vmem: vec_of_non_clone![CASegVirtAllocSlot::Empty;vmem_slot_count],
+            backing: backing,
+        }
+    }
+    
     pub fn get_size(&self) -> BackingSize {
         self.backing.get_size()
     }
@@ -458,13 +465,22 @@ pub struct CombinedAllocationSection {
     segments: Vec<CombinedAllocationSegment>,
     
     /// Section identifier - a unique value assigned to each section within an allocation. This does not change until the section itself is merged/split, even if other sections are added/removed.
-    section_identifier: usize,
+    section_identifier: CASectionIdentifier,
     /// Total size in bytes
     total_size: BackingSize,
     /// Offset from the allocation "base" in vmem
     offset: isize,
 }
 impl CombinedAllocationSection {
+    pub(self) fn new(context: &mut CombinedAllocationContext, offset: isize, backing: AllocationBacking, vmem_slot_count: usize) -> Self {
+        Self {
+            offset: offset,
+            total_size: backing.size,
+            section_identifier: context.take_next_section_identifier(),
+            segments: vec![CombinedAllocationSegment::new(backing, vmem_slot_count)],
+        }
+    }
+    
     fn calculate_size(&self) -> BackingSize {
         let total = self.segments.iter().fold(0usize, |a,x| a+x.backing.size.get());
         BackingSize::new(total)
@@ -478,7 +494,7 @@ impl CombinedAllocationSection {
     pub fn get_offset(&self) -> isize {
         self.offset
     }
-    pub fn get_section_identifier(&self) -> usize {
+    pub fn get_section_identifier(&self) -> CASectionIdentifier {
         self.section_identifier
     }
     
@@ -533,8 +549,10 @@ impl CombinedAllocationSection {
         }
     }
 }
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
 pub struct CASectionIndex(usize);
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct CASectionIdentifier(usize);
 pub struct CASectionWriter<'r> {
     inner: &'r mut CombinedAllocationInner,
     index: CASectionIndex,
@@ -543,6 +561,11 @@ impl<'r> CASectionWriter<'r> {
     /// Select a different section, using its index
     pub fn with_index(self, index: CASectionIndex) -> Self {
         self.inner.get_section_mut(index)
+    }
+    /// Select a different section, using its identifier
+    pub fn with_identifier(self, identifier: CASectionIdentifier) -> Option<Self> {
+        let index = self.inner.get_section_index_from_identifier(identifier)?;
+        Some(self.with_index(index))
     }
     
     /// Merge two sections together. This section must be directly below the next one in memory, with no gaps.
@@ -587,14 +610,14 @@ struct CombinedAllocationContext {
     free_virt_slots: Vec<bool>,
 }
 impl CombinedAllocationContext {
-    pub(self) fn take_next_section_identifier(&mut self) -> usize {
+    pub(self) fn take_next_section_identifier(&mut self) -> CASectionIdentifier {
         let x = self.next_section_identifier;
         self.next_section_identifier += 1;
-        x
+        CASectionIdentifier(x)
     }
 }
 struct CombinedAllocationInner {
-    sections: Vec<CombinedAllocationSection>,
+    sections: VecDeque<CombinedAllocationSection>,
     context: CombinedAllocationContext,
     total_size: BackingSize,
 }
@@ -611,7 +634,7 @@ impl CombinedAllocationInner {
         self.total_size
     }
     
-    fn get_section_index_from_identifier(&self, identifier: usize) -> Option<CASectionIndex> {
+    fn get_section_index_from_identifier(&self, identifier: CASectionIdentifier) -> Option<CASectionIndex> {
         Some(CASectionIndex(self.sections.iter().position(|x|x.get_section_identifier()==identifier)?))
     }
     fn get_section(&self, index: CASectionIndex) -> &CombinedAllocationSection {
@@ -740,6 +763,39 @@ macro_rules! impl_ca_lock {
 pub struct CombinedAllocationContract(Arc<CALocked>);
 pub struct CombinedAllocationContractGuard(ArcYMutexGuard<CombinedAllocationInner>);
 impl_ca_lock!(CombinedAllocationContract,CombinedAllocationContractGuard);
+impl CombinedAllocationContract {
+    pub fn new(requests: Vec<AllocationBackingRequest>) -> (Self,Vec<(CASectionIdentifier,bool)>) {  // (identifier, backing ready?)
+        let mut context = CombinedAllocationContext {
+            next_section_identifier: 0,
+            free_virt_slots: vec![true],
+        };
+        let mut offset: isize = 0;
+        let mut sections: VecDeque<CombinedAllocationSection> = VecDeque::with_capacity(requests.len());
+        let mut section_results = Vec::with_capacity(requests.len());
+        for request in requests {
+            let (backing,backing_ready) = AllocationBacking::new_from_request(request);
+            let section = CombinedAllocationSection::new(&mut context, offset, backing, 1);
+            
+            offset += section.get_size().get() as isize;
+            section_results.push((section.get_section_identifier(), backing_ready));
+            sections.push_back(section);
+        }
+        
+        let this = Self(Arc::new(YMutex::new(CombinedAllocationInner {
+            sections: sections,
+            context: context,
+            total_size: BackingSize::new(offset as usize),  // Since offset starts counting from zero, and we count from left-to-right, the final offset is equal to the total size. Huh, neat
+        })));
+        (this, section_results)
+    }
+    
+    pub fn clone_ref(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+    pub fn backing(self) -> CombinedAllocationBacking {
+        CombinedAllocationBacking(self.0)
+    }
+}
 impl CombinedAllocationContractGuard {
     fn map_vmem(&mut self, allocation: VirtualAllocation) -> VirtAllocationGuard {
         let slot = self.0.map_vmem(allocation);
@@ -749,6 +805,11 @@ impl CombinedAllocationContractGuard {
 }
 /// The CombinedAllocationBacking is used by the memory manager, used for managing segments and swap, as well as for resolving demand paging and similar
 pub struct CombinedAllocationBacking(Arc<CALocked>);
+impl CombinedAllocationBacking {
+    pub fn clone_ref(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
 pub struct CombinedAllocationBackingGuard(ArcYMutexGuard<CombinedAllocationInner>);
 impl_ca_lock!(CombinedAllocationBacking,CombinedAllocationBackingGuard);
 // (both are wrappers around an Arc<>, they just expose different APIs)

@@ -516,7 +516,36 @@ impl CombinedAllocationSection {
     }
     
     // SPLITTING/MERGING
-    // todo: splitting
+    /// midpoint MUST be < self.size
+    pub(self) fn split(self, context: &mut CombinedAllocationContext, mid: BackingSize) -> (Self,Self) {
+        let Self { segments, total_size, offset, .. } = self;
+        
+        let lhs_size = mid;
+        let lhs_offset: isize = offset;
+        let rhs_size = BackingSize::new(total_size.get()-lhs_size.get());
+        let rhs_offset: isize = offset + (mid.get() as isize);
+        
+        let mut lhs_segments = Vec::<CombinedAllocationSegment>::new();
+        let mut rhs_segments = Vec::<CombinedAllocationSegment>::new();
+        let mut processed: usize = 0;
+        for segment in segments {  // Segments before mid -> lhs, segments after mid -> rhs, segment overlapping mid gets split
+            let segment_size = segment.get_size().get();
+            let segment_start = processed; let segment_end = processed+segment_size;
+            processed += segment_size;
+            if segment_end <= mid.get() { lhs_segments.push(segment) }
+            else if segment_start >= mid.get() { rhs_segments.push(segment) }
+            else {
+                let lhs_seg_size = BackingSize::new(mid.get()-segment_start);
+                let (lhs,rhs) = segment.split(lhs_seg_size);
+                lhs_segments.push(lhs);
+                rhs_segments.push(rhs);
+            }
+        }
+        
+        let lhs = Self { segments: lhs_segments, total_size: lhs_size, offset: lhs_offset, section_identifier: context.take_next_section_identifier() };
+        let rhs = Self { segments: rhs_segments, total_size: rhs_size, offset: rhs_offset, section_identifier: context.take_next_section_identifier() };
+        (lhs, rhs)
+    }
     
     /// Merge the two sections together. Backing memory is left as-is unless overwritten afterwards.
     /// SAFETY: The caller must ensure that both sections are directly adjacent to each other, with no gaps, and with lhs occupying lower addresses than rhs.
@@ -566,6 +595,9 @@ pub struct CASectionWriter<'r> {
     index: CASectionIndex,
 }
 impl<'r> CASectionWriter<'r> {
+    pub fn get_index(&self) -> CASectionIndex {
+        self.index
+    }
     /// Select a different section, using its index
     pub fn with_index(self, index: CASectionIndex) -> Self {
         self.inner.get_section_mut(index)
@@ -576,6 +608,20 @@ impl<'r> CASectionWriter<'r> {
         Some(self.with_index(index))
     }
     
+    /// Split a section in two.
+    /// Returns (lhs,Option<rhs>) - rhs is provided only if mid < self.size
+    pub fn split(self, mid: BackingSize) -> (Self,Option<CASectionIdentifier>) {
+        if mid >= self.get_size() { return (self, None); }  // mid must be < size
+        
+        let Self { inner:self_inner, index:self_index } = self;
+        let section = self_inner.sections.remove(self_index.0).unwrap();
+        let (lhs, rhs) = section.split(&mut self_inner.context, mid);
+        let rhs_id = rhs.get_section_identifier();
+        self_inner.sections.insert(self_index.0, lhs);
+        self_inner.sections.insert(self_index.0+1,rhs);  // TODO: optimize this?
+        
+        (self_inner.get_section_mut(self_index), Some(rhs_id))
+    }
     /// Merge two sections together. This section must be directly below the next one in memory, with no gaps.
     /// Returns Ok(merged) on success, Err(self) on failure
     pub fn merge(self, rhs: CASectionIdentifier) -> Result<Self,Self> {
@@ -945,6 +991,25 @@ impl CombinedAllocationContractGuard {
         Arc::downgrade(self.arc_ref())
     }
     
+    pub fn get_section_index_from_identifier(&self, identifier: CASectionIdentifier) -> Option<CASectionIndex> {
+        self.0.get_section_index_from_identifier(identifier)
+    }
+    pub fn get_section(&self, index: CASectionIndex) -> &CombinedAllocationSection {
+        self.0.get_section(index)
+    }
+    pub fn get_section_mut(&mut self, index: CASectionIndex) -> CASectionWriter {
+        self.0.get_section_mut(index)
+    }
+    pub fn sections_iter(&self) -> impl DoubleEndedIterator<Item=&CombinedAllocationSection> {
+        self.0.sections_iter()
+    }
+    pub fn sections_iter_mut(&mut self) -> impl DoubleEndedIterator<Item=&mut CombinedAllocationSection> {
+        self.0.sections_iter_mut()
+    }
+    pub fn section_indexes_iter(&self) -> impl DoubleEndedIterator<Item=CASectionIndex> {
+        self.0.section_indexes_iter()
+    }
+    
     pub fn push_new_section_lower(&mut self, request: AllocationBackingRequest) -> CASectionWriter {
         let (backing, _) = AllocationBacking::new_from_request(request);
         let arc_ref = Arc::clone(self.arc_ref());
@@ -997,17 +1062,91 @@ pub struct VirtAllocationGuard {
     virt_index: usize,
 }
 impl VirtAllocationGuard {
+    pub fn contract(&self) -> &CombinedAllocationContract {
+        &self.contract
+    }
     pub fn get_start_addr(&self) -> Option<usize> {
         self.contract.0.lock().get_vmem_start(self.virt_index)
     }
     pub fn get_end_addr(&self) -> Option<usize> {
         self.contract.0.lock().get_vmem_end(self.virt_index)
     }
+    pub fn get_true_start_addr(&self) -> usize {
+        self.contract.0.lock().get_true_vmem_start(self.virt_index).unwrap().2
+    }
+    pub fn get_true_end_addr(&self) -> usize {
+        self.contract.0.lock().get_true_vmem_end(self.virt_index).unwrap().2
+    }
 }
 impl core::ops::Drop for VirtAllocationGuard {
     fn drop(&mut self) {
         let mut inner = self.contract.0.lock();
         inner.clear_vmem(self.virt_index);
+    }
+}
+
+pub struct AllocatedStack {  // grows downwards
+    virt_allocation: VirtAllocationGuard,
+    guard_id: CASectionIdentifier,
+}
+impl AllocatedStack {
+    pub fn allocate_new<PFA:PageFrameAllocator+Send+Sync+'static>(stack_size: BackingSize, guard_size: BackingSize, allocator: &LockedPageAllocator<PFA>, strategy: PageAllocationStrategies<'static>, flags: VMemFlags) -> Option<Self> {
+        let (contract,section_ids) = CombinedAllocationContract::new(vec![
+            // Guard page
+            AllocationBackingRequest::GuardPage { gptype: GuardPageType::StackLimit, size: guard_size },
+            // Stack
+            AllocationBackingRequest::UninitPhysical { size: stack_size },
+        ]);
+        let mut contract_guard = contract.lock();
+        let virt_allocation = contract_guard.map_allocate_vmem(allocator, VirtualAllocationMode::Dynamic { strategy }, flags)?;
+        let guard_id = section_ids[0].0;
+        Some(Self {
+            virt_allocation,
+            guard_id
+        })
+    }
+    pub fn bottom_vaddr(&self) -> usize {
+        self.virt_allocation.get_true_end_addr()
+    }
+    pub fn expand(&mut self, size: BackingSize) -> bool {
+        let mut lock_guard = self.virt_allocation.contract().lock();
+        
+        let guard_size = lock_guard.get_section(lock_guard.get_section_index_from_identifier(self.guard_id).unwrap()).get_size();
+        let expansion_size: isize = size.get() as isize - guard_size.get() as isize;
+        let expansion_size: Option<BackingSize> = if expansion_size > 0 { Some(BackingSize::new_rounded(expansion_size as usize)) }
+                                                    else { None };
+        let total_expansion_size: BackingSize = BackingSize::new(expansion_size.map(|s|s.get()).unwrap_or(0) + size.get());
+        
+        // Allocate new expansion for the new guard page + extra stack
+        let full_expansion = lock_guard.push_new_section_lower(AllocationBackingRequest::Reservation { size: total_expansion_size });
+        // Check that vmem allocation has succeeded
+        if self.virt_allocation.get_start_addr().is_none() {
+            // Failed: Deallocate and return false
+            todo!()
+        }
+        // Split into guard page + extra stack
+        let (new_guard_idx, stack_expansion_idx) = if let Some(expansion_size) = expansion_size {
+            let (guard_page, expansion_id) = full_expansion.split(guard_size);
+            (guard_page.get_index(), Some(lock_guard.get_section_index_from_identifier(expansion_id.unwrap()).unwrap()))
+        } else {
+            (full_expansion.get_index(), None)
+        };
+        
+        
+        // Set sections to fulfill their new purpose
+        // Old guard: Now part of the expansion
+        let old_guard_idx = lock_guard.get_section_index_from_identifier(self.guard_id).unwrap();
+        lock_guard.get_section_mut(old_guard_idx).overwrite_backing(AllocationBacking::new_from_request(AllocationBackingRequest::UninitPhysical { size: guard_size }).0);
+        // Expansion (if present): part of the expansion
+        if let Some(stack_expansion_idx) = stack_expansion_idx {
+            lock_guard.get_section_mut(stack_expansion_idx).overwrite_backing(AllocationBacking::new_from_request(AllocationBackingRequest::UninitPhysical { size: expansion_size.unwrap() }).0)
+        }
+        // New guard: now a guard page
+        lock_guard.get_section_mut(new_guard_idx).overwrite_backing(AllocationBacking::new_from_request(AllocationBackingRequest::GuardPage { gptype: GuardPageType::StackLimit, size: guard_size }).0);
+        self.guard_id = lock_guard.get_section(new_guard_idx).get_section_identifier();
+        
+        // All done :)
+        true
     }
 }
 

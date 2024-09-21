@@ -310,7 +310,6 @@ impl CASegVirtAllocSlot {
         }
     }
 }
-// TODO
 /// Each "segment" is a logical division in the "backing", being tied to a given allocation backing.
 /// Segments have a fixed size, but may be split and (possibly merged?).
 pub struct CombinedAllocationSegment {
@@ -417,7 +416,7 @@ impl CombinedAllocationSegment {
     }
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub struct CASegmentIndex { section: usize, segment: usize }
+pub struct CASegmentIndex { section: CASectionIndex, segment: usize }
 pub struct CASegmentWriter<'r> {
     inner: &'r mut CombinedAllocationInner,
     index: CASegmentIndex,
@@ -435,7 +434,7 @@ impl<'r> CASegmentWriter<'r> {
         // Use swap_remove for magic
         // (we set things right afterwards)
         let Self { inner:self_inner, index:self_index } = self;  // destructure self to avoid accidental derefs
-        let segments = &mut self_inner.sections[self_index.section].segments;
+        let segments = &mut self_inner.sections[self_index.section.0].segments;
         let segment = segments.swap_remove(self_index.segment);
         let (lhs,rhs) = segment.split(mid);
         // Push lhs to the end, and swap it with the previously swapped element
@@ -656,33 +655,33 @@ impl CombinedAllocationInner {
     fn get_section_mut(&mut self, index: CASectionIndex) -> CASectionWriter {
         CASectionWriter { inner: self, index: index }
     }
-    fn sections_iter(&self) -> impl Iterator<Item=&CombinedAllocationSection> {
+    fn sections_iter(&self) -> impl DoubleEndedIterator<Item=&CombinedAllocationSection> {
         self.sections.iter()
     }
-    fn sections_iter_mut(&mut self) -> impl Iterator<Item=&mut CombinedAllocationSection> {
+    fn sections_iter_mut(&mut self) -> impl DoubleEndedIterator<Item=&mut CombinedAllocationSection> {
         self.sections.iter_mut()
     }
-    fn section_indexes_iter(&self) -> impl Iterator<Item=CASectionIndex> {
+    fn section_indexes_iter(&self) -> impl DoubleEndedIterator<Item=CASectionIndex> {
         (0..self.sections.len()).map(|sec_id| CASectionIndex(sec_id))
     }
     
     fn get_segment(&self, index: CASegmentIndex) -> &CombinedAllocationSegment {
-        &self.sections[index.section].segments[index.segment]
+        &self.sections[index.section.0].segments[index.segment]
     }
     fn _get_segment_mut_inner(&mut self, index: CASegmentIndex) -> &mut CombinedAllocationSegment {
-        &mut self.sections[index.section].segments[index.segment]
+        &mut self.sections[index.section.0].segments[index.segment]
     }
     fn get_segment_mut(&mut self, index: CASegmentIndex) -> CASegmentWriter {
         CASegmentWriter { inner: self, index: index }
     }
-    fn segments_iter(&self) -> impl Iterator<Item=&CombinedAllocationSegment> {
+    fn segments_iter(&self) -> impl DoubleEndedIterator<Item=&CombinedAllocationSegment> {
         self.sections.iter().flat_map(|sec|sec.segments.iter())
     }
-    fn segments_iter_mut(&mut self) -> impl Iterator<Item=&mut CombinedAllocationSegment> {
+    fn segments_iter_mut(&mut self) -> impl DoubleEndedIterator<Item=&mut CombinedAllocationSegment> {
         self.sections.iter_mut().flat_map(|sec|sec.segments.iter_mut())
     }
-    fn segment_indexes_iter(&self) -> impl Iterator<Item=CASegmentIndex> + '_ {
-        self.section_indexes_iter().flat_map(|sec_id|(0..self.get_section(sec_id).segments.len()).map(move|seg_id| CASegmentIndex { section: sec_id.0, segment: seg_id }))
+    fn segment_indexes_iter(&self) -> impl DoubleEndedIterator<Item=CASegmentIndex> + '_ {
+        self.section_indexes_iter().flat_map(|sec_id|(0..self.get_section(sec_id).segments.len()).map(move|seg_id| CASegmentIndex { section: sec_id, segment: seg_id }))
     }
     
     fn _push_new_section_inner(&mut self, backing: AllocationBacking, calloc: &Arc<CALocked>,
@@ -798,6 +797,52 @@ impl CombinedAllocationInner {
         for segment in self.sections.iter_mut() {
             segment.clear_vmem(slot)
         }
+    }
+    /// Get the "lowest" vmem address for the given slot - returns None if the slot is empty or allocation for the lowest segment failed
+    fn get_vmem_start(&self, slot: usize) -> Option<usize> {
+        match self.sections.front().unwrap().segments.first().unwrap().vmem[slot] {
+            CASegVirtAllocSlot::Empty => None,
+            CASegVirtAllocSlot::Failure => None,  // failed - therefore we don't have a "start" that matches our first section
+            CASegVirtAllocSlot::Allocation(ref alloc) => Some(alloc.start_addr()),
+        }
+    }
+    /// Get the "highest" vmem address (exclusive) for the given slot - returns None if the slot is empty or allocation for the highest segment failed
+    fn get_vmem_end(&self, slot: usize) -> Option<usize> {
+        match self.sections.back().unwrap().segments.last().unwrap().vmem[slot] {
+            CASegVirtAllocSlot::Empty => None,
+            CASegVirtAllocSlot::Failure => None,  // failed - therefore we don't have a "end" that matches our last section
+            CASegVirtAllocSlot::Allocation(ref alloc) => Some(alloc.end_addr()),
+        }
+    }
+    /// Get the lowest vmem address for the given slot. Returns (section ID, segment index, start_addr) if the slot is filled, or None if the slot is free
+    /// This may differ from get_vmem_start() if the allocation failed when expanding (if this happened, get_vmem_start will return None whereas get_true_vmem_start will return the same value as before)
+    fn get_true_vmem_start(&self, slot: usize) -> Option<(CASectionIdentifier,CASegmentIndex,usize)> {
+        if self.context.free_virt_slots[slot] { return None; }  // slot is free
+        for segment_index in self.segment_indexes_iter() {
+            let section_id = self.get_section(segment_index.section).get_section_identifier();
+            let segment = self.get_segment(segment_index);
+            match segment.vmem[slot] {
+                CASegVirtAllocSlot::Empty => unreachable!(),
+                CASegVirtAllocSlot::Failure => continue,  // allocation for that segment failed
+                CASegVirtAllocSlot::Allocation(ref alloc) => return Some((section_id,segment_index,alloc.start_addr())),
+            }
+        }
+        unreachable!()  // allocation must have succeeded at least once
+    }
+    /// Get the highest vmem address for the given slot. Returns (section ID, segment index, end_addr) if the slot is filled, or None if the slot is free
+    /// This may differ from get_vmem_end() if the allocation failed when expanding (if this happened, get_vmem_end will return None whereas get_true_vmem_end will return the same value as before)
+    fn get_true_vmem_end(&self, slot: usize) -> Option<(CASectionIdentifier,CASegmentIndex,usize)> {
+        if self.context.free_virt_slots[slot] { return None; }  // slot is free
+        for segment_index in self.segment_indexes_iter().rev() {
+            let section_id = self.get_section(segment_index.section).get_section_identifier();
+            let segment = self.get_segment(segment_index);
+            match segment.vmem[slot] {
+                CASegVirtAllocSlot::Empty => unreachable!(),
+                CASegVirtAllocSlot::Failure => continue,  // allocation for that segment failed
+                CASegVirtAllocSlot::Allocation(ref alloc) => return Some((section_id,segment_index,alloc.end_addr())),
+            }
+        }
+        unreachable!()  // allocation must have succeeded at least once
     }
 }
 type CALocked = YMutex<CombinedAllocationInner>;
@@ -950,6 +995,14 @@ impl_ca_lock!(CombinedAllocationBacking,CombinedAllocationBackingGuard);
 pub struct VirtAllocationGuard {
     contract: CombinedAllocationContract,
     virt_index: usize,
+}
+impl VirtAllocationGuard {
+    pub fn get_start_addr(&self) -> Option<usize> {
+        self.contract.0.lock().get_vmem_start(self.virt_index)
+    }
+    pub fn get_end_addr(&self) -> Option<usize> {
+        self.contract.0.lock().get_vmem_end(self.virt_index)
+    }
 }
 impl core::ops::Drop for VirtAllocationGuard {
     fn drop(&mut self) {

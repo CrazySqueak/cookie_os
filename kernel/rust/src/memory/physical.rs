@@ -219,7 +219,7 @@ impl !Copy for PhysicalMemoryAllocation{}
 impl !Clone for PhysicalMemoryAllocation{}
 // Physical memory allocations *can* be Sync, because they contain no support for mutation that isn't handled by Rust's borrowing rules
 
-use super::paging::PageAlignedUsize;
+use super::paging::{PageAlignedValue,PageAlignedUsize};
 /// Note: Allocated amount may be larger than size, even if page-aligned.
 /// This is because this can only allocate sizes of powers of two.
 /// So yes, you should still use .get_size() instead of reusing the size value

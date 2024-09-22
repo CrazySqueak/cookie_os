@@ -4,7 +4,7 @@ use alloc::vec::Vec; use alloc::vec;
 use alloc::boxed::Box;
 
 use crate::memory::physical::{PhysicalMemoryAllocation,palloc};
-use crate::memory::paging::{KALLOCATION_KERNEL_STACK,PageFlags,TransitivePageFlags,MappingSpecificPageFlags,PageFrameAllocator,PageAllocation,TLPageFrameAllocator,LockedPageAllocator,PageAllocationStrategies,ALLOCATION_USER_STACK,PagingContext,AnyPageAllocation,PageAlignedUsize};
+use crate::memory::paging::{KALLOCATION_KERNEL_STACK,PageFlags,TransitivePageFlags,MappingSpecificPageFlags,PageFrameAllocator,PageAllocation,TLPageFrameAllocator,LockedPageAllocator,PageAllocationStrategies,ALLOCATION_USER_STACK,PagingContext,AnyPageAllocation,PageAlignedValue,PageAlignedUsize};
 use crate::memory::paging::global_pages::{GPageFrameAllocator,KERNEL_PTABLE};
 
 pub const MARKER_STACK_GUARD: usize = 0xF47B33F;  // "Fat Beef"

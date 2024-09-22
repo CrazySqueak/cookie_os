@@ -76,7 +76,7 @@ fn _map_kernel(kernel_ptable: &GlobalPageTable){
     // Map guard page
     let guard_vaddr = unsafe { core::ptr::addr_of!(kstack_guard_page) as usize };
     let guard_offset = PageAlignedUsize::new(guard_vaddr - allocation.start());
-    const GUARD_SIZE: PageAlignedUsize = PageAlignedUsize::new(4096);  // TODO: Move guard size to arch_specific section or make it its own asm-defined value
+    const GUARD_SIZE: PageAlignedUsize = PageAlignedUsize::new_const(4096);  // TODO: Move guard size to arch_specific section or make it its own asm-defined value
     klog!(Debug, MEMORY_PAGING_GLOBALPAGES, "Mapping stack guard page (vaddr={:x} offset={:x})", guard_vaddr, guard_offset);
     let (k1alloc, rem) = allocation.split(guard_offset);
     let (guard, k2alloc) = rem.split(GUARD_SIZE);  // guard page is 4096 bytes

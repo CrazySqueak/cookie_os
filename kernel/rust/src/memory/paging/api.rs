@@ -14,43 +14,116 @@ use arch::{set_active_page_table,inval_tlb_pg};
 /// The alignment (in bytes) for pages. In other words, the minimum possible amount of memory worth caring about for system-wide memory management.
 pub const PAGE_ALIGN: usize = super::MIN_PAGE_SIZE;
 use core::num::NonZeroUsize;
+
+#[deprecated]
+pub type PageAlignedUsize = PageAllocationSizeT;
+pub trait PageAlignedValue<Wraps>: Sized + Copy {
+    /// Panics if an invalid value is provided.
+    #[track_caller]
+    fn new(x: Wraps) -> Self;
+    /// May cause undefined behaviour if an invalid value is provided
+    unsafe fn new_unchecked(x: Wraps) -> Self;
+    /// Returns Some() if valid, None if invalid.
+    fn new_checked(x: Wraps) -> Option<Self>;
+    /// Rounds to the next valid value, returning both the new value and the amount rounded by. (round up for sizes, down for offsets)
+    fn new_rounded_with_excess(x: Wraps) -> (Self,usize);
+    /// Rounds to the next valid value (round up for sizes, down for offsets)
+    fn new_rounded(x: Wraps) -> Self {
+        Self::new_rounded_with_excess(x).0
+    }
+    
+    /// Get the contained value
+    fn get(self) -> Wraps;
+}
+
+macro_rules! ftorawiiwctc {  // I'm sure you can guess what this stands for.
+    ($T:ident, $Wraps:ident) => {
+        impl core::convert::From<$T> for $Wraps {
+            fn from(value: $T) -> $Wraps {
+                <$T as PageAlignedValue<$Wraps>>::get(value)
+            }
+        }
+        impl core::convert::TryFrom<$Wraps> for $T {
+            type Error = ();
+            fn try_from(value: $Wraps) -> Result<$T,()> {
+                <$T as PageAlignedValue<$Wraps>>::new_checked(value).ok_or(())
+            }
+        }
+        
+        impl core::fmt::LowerHex for $T {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::LowerHex::fmt(&<$T as PageAlignedValue<$Wraps>>::get(*self),f)
+            }
+        }
+        impl core::fmt::UpperHex for $T {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::UpperHex::fmt(&<$T as PageAlignedValue<$Wraps>>::get(*self),f)
+            }
+        }
+        impl core::fmt::Octal for $T {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::Octal::fmt(&<$T as PageAlignedValue<$Wraps>>::get(*self),f)
+            }
+        }
+        impl core::fmt::Binary for $T {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::Binary::fmt(&<$T as PageAlignedValue<$Wraps>>::get(*self),f)
+            }
+        }
+        impl core::fmt::Display for $T {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::Display::fmt(&<$T as PageAlignedValue<$Wraps>>::get(*self),f)
+            }
+        }
+    }
+}
+
 #[repr(transparent)]
 #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]
-pub struct PageAlignedUsize(NonZeroUsize);
-impl PageAlignedUsize {
+/// A non-zero, page-aligned value, suitable for specifying the size of page allocations. Rounds up.
+pub struct PageAllocationSizeT(NonZeroUsize);
+impl PageAlignedValue<usize> for PageAllocationSizeT {
     /// Returns self if page-aligned and non-zero. Otherwise, panics (in debug builds). If debug assertions are disabled and these conditions are not met, behaviour is undefined.
-    #[track_caller]
-    pub const fn new(x: usize) -> Self {
-        assert!(x != 0, "PageAlignedUsize must be non-zero");  // Ensure we don't cause UB
-        debug_assert!(x%PAGE_ALIGN == 0, "PageAlignedUsize must be page-aligned.");
-        unsafe{Self::new_unchecked(x)}
+    fn new(x: usize) -> Self {
+        Self::new_const(x)  // const_trait_impl doesn't seem to be going anywhere yet...
     }
-    pub const unsafe fn new_unchecked(x: usize) -> Self {
-        Self(NonZeroUsize::new_unchecked(x))
+    unsafe fn new_unchecked(x: usize) -> Self {
+        Self::new_unchecked_const(x)
     }
     /// Returns Some() if page-aligned and non-zero. Otherwise, returns None.
-    pub const fn new_checked(x: usize) -> Option<Self> {
+    fn new_checked(x: usize) -> Option<Self> {
         if x == 0 { None }
         else if x%PAGE_ALIGN == 0 { Some(Self::new(x)) }
         else { None }
     }
-    /// Round up to the next non-zero, page-aligned value.
-    pub const fn new_rounded(x: usize) -> Self {
-        Self::new_rounded_with_excess(x).0
-    }
     /// Round up to the next non-zero, page-aligned value, and return both the rounded value and the amount added to do this.
     /// In other words, where the input is x and the output is (y,rem): y = x+rem
-    pub const fn new_rounded_with_excess(x: usize) -> (Self,usize) {
+    fn new_rounded_with_excess(x: usize) -> (Self,usize) {
         if x == 0 { (Self(unsafe{NonZeroUsize::new_unchecked(PAGE_ALIGN)}), PAGE_ALIGN) }  // safety: PAGE_ALIGN is never zero
         else if x%PAGE_ALIGN == 0 { (Self::new(x), 0) }
         else {
+            // Round up since this is a size
             let excess = PAGE_ALIGN-(x%PAGE_ALIGN);
             (Self::new(x+excess), excess)
         }
     }
     
     /// Get the stored integer
-    pub const fn get(self) -> usize {
+    fn get(self) -> usize {
+        self.get_const()
+    }
+}
+impl PageAllocationSizeT {
+    pub const fn new_const(x: usize) -> Self {
+        assert!(x != 0, "PageAllocationSizeT must be non-zero");  // Ensure we don't cause UB
+        debug_assert!(x%PAGE_ALIGN == 0, "PageAllocationSizeT must be page-aligned.");
+        unsafe{Self::new_unchecked_const(x)}
+    }
+    pub const unsafe fn new_unchecked_const(x: usize) -> Self {
+        Self(NonZeroUsize::new_unchecked(x))
+    }
+    
+    pub const fn get_const(self) -> usize {
         self.0.get()
     }
     /// Get the stored integer as a NonZeroUsize
@@ -58,53 +131,106 @@ impl PageAlignedUsize {
         self.0
     }
 }
-impl core::convert::From<PageAlignedUsize> for usize {
-    fn from(value: PageAlignedUsize) -> usize {
-        value.get()
-    }
-}
-impl core::convert::TryFrom<usize> for PageAlignedUsize {
-    type Error = ();
-    fn try_from(value: usize) -> Result<PageAlignedUsize,()> {
-        PageAlignedUsize::new_checked(value).ok_or(())
-    }
-}
-impl core::convert::From<PageAlignedUsize> for NonZeroUsize {
-    fn from(value: PageAlignedUsize) -> NonZeroUsize {
+ftorawiiwctc!(PageAllocationSizeT, usize);
+impl core::convert::From<PageAllocationSizeT> for NonZeroUsize {
+    fn from(value: PageAllocationSizeT) -> NonZeroUsize {
         value.get_nz()
     }
 }
-impl core::convert::TryFrom<NonZeroUsize> for PageAlignedUsize {
+impl core::convert::TryFrom<NonZeroUsize> for PageAllocationSizeT {
     type Error = ();
-    fn try_from(value: NonZeroUsize) -> Result<PageAlignedUsize,()> {
-        PageAlignedUsize::new_checked(value.get()).ok_or(())
+    fn try_from(value: NonZeroUsize) -> Result<PageAllocationSizeT,()> {
+        PageAllocationSizeT::new_checked(value.get()).ok_or(())
     }
 }
-impl core::fmt::LowerHex for PageAlignedUsize {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::LowerHex::fmt(&self.0.get(),f)
+
+#[repr(transparent)]
+#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]
+/// A page-aligned, signed value, suitable for specifying offsets in page-aligned increments. Rounds down.
+pub struct PageAlignedOffsetT(isize);
+impl PageAlignedValue<isize> for PageAlignedOffsetT {
+    fn new(x: isize) -> Self {
+        Self::new_const(x)
+    }
+    unsafe fn new_unchecked(x: isize) -> Self {
+        Self::new_unchecked_const(x)
+    }
+    fn new_checked(x: isize) -> Option<Self> {
+        if x.rem_euclid(PAGE_ALIGN as isize) == 0 { Some(Self::new(x)) }
+        else { None }
+    }
+    
+    fn new_rounded_with_excess(x: isize) -> (Self,usize) {
+        if x.rem_euclid(PAGE_ALIGN as isize) == 0 { (Self::new(x), 0) }
+        else {
+            // Round down since this is an offset
+            let excess = x.rem_euclid(PAGE_ALIGN as isize);
+            (Self::new(x-excess), excess as usize)
+        }
+    }
+    
+    fn get(self) -> isize {
+        self.get_const()
     }
 }
-impl core::fmt::UpperHex for PageAlignedUsize {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::UpperHex::fmt(&self.0.get(),f)
+impl PageAlignedOffsetT {
+    pub const fn new_const(x: isize) -> Self {
+        debug_assert!(x.rem_euclid(PAGE_ALIGN as isize) == 0, "PageAlignedOffsetT must be page-aligned.");
+        unsafe{Self::new_unchecked_const(x)}
+    }
+    pub const unsafe fn new_unchecked_const(x: isize) -> Self {
+        Self(x)
+    }
+    
+    pub const fn get_const(self) -> isize {
+        self.0
     }
 }
-impl core::fmt::Octal for PageAlignedUsize {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Octal::fmt(&self.0.get(),f)
+ftorawiiwctc!(PageAlignedOffsetT, isize);
+
+#[repr(transparent)]
+#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]
+/// A page-aligned, unsigned value, suitable for specifying virtual addresses at page boundraries. Rounds down.
+pub struct PageAlignedAddressT(usize);
+impl PageAlignedValue<usize> for PageAlignedAddressT {
+    fn new(x: usize) -> Self {
+        Self::new_const(x)
+    }
+    unsafe fn new_unchecked(x: usize) -> Self {
+        Self::new_unchecked_const(x)
+    }
+    fn new_checked(x: usize) -> Option<Self> {
+        if x%PAGE_ALIGN == 0 { Some(Self::new(x)) }
+        else { None }
+    }
+    
+    fn new_rounded_with_excess(x: usize) -> (Self,usize) {
+        if x%PAGE_ALIGN == 0 { (Self::new(x), 0) }
+        else {
+            // Round down since this is an offset
+            let excess = x%PAGE_ALIGN;
+            (Self::new(x-excess), excess as usize)
+        }
+    }
+    
+    fn get(self) -> usize {
+        self.get_const()
     }
 }
-impl core::fmt::Binary for PageAlignedUsize {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Binary::fmt(&self.0.get(),f)
+impl PageAlignedAddressT {
+    pub const fn new_const(x: usize) -> Self {
+        debug_assert!(x%PAGE_ALIGN == 0, "PageAlignedAddressT must be page-aligned.");
+        unsafe{Self::new_unchecked_const(x)}
+    }
+    pub const unsafe fn new_unchecked_const(x: usize) -> Self {
+        Self(x)
+    }
+    
+    pub const fn get_const(self) -> usize {
+        self.0
     }
 }
-impl core::fmt::Display for PageAlignedUsize {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Display::fmt(&self.0.get(),f)
-    }
-}
+ftorawiiwctc!(PageAlignedAddressT, usize);
 
 // FLAGS & STUFF
 #[derive(Debug,Clone,Copy)]

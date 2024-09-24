@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec; use alloc::vec;
 use alloc::collections::VecDeque;
 use alloc::sync::{Arc,Weak};
-use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,PageAlignedValue,PageAllocationSizeT,PageAlignedOffsetT,PageFlags};
+use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,PageAlignedValue,PageAllocationSizeT,PageAlignedOffsetT,PageAlignedAddressT,PageFlags,pageFlags};
 use super::physical::{PhysicalMemoryAllocation,palloc};
 use bitflags::bitflags;
 use crate::sync::{YMutex,YMutexGuard,ArcYMutexGuard};
@@ -34,16 +34,103 @@ pub enum GuardPageType {
     StackLimit = 0xF47B33F,  // Fat Beef
     NullPointer = 0x4E55_4C505452,  // "NULPTR"
 }
-
-// TODO
-
-struct BackingSection {
-    // TODO
+/// The type of allocation requested
+#[derive(Clone,Copy,Debug)]
+pub enum AllocationType {
+    /// RAM - starts uninitialized
+    UninitMem,
+    /// RAM - starts zeroed
+    ZeroedMem,
     
+    /// Guard Page - attempting to access it is an error (and a sign of dodgy pointers or stack overflow)
+    GuardPage(GuardPageType),
+}
+impl AllocationType {
+    fn _map_into_vmem(phys_addr: usize, size: PageAllocationSizeT) -> (impl AnyPageAllocation,*mut u8) {
+        // Map requested physmem into kernel space
+        let vmap = KERNEL_PTABLE.allocate(size, KALLOCATION_KERNEL_GENERALDYN).unwrap();
+        vmap.set_base_addr(phys_addr, pageFlags!(m:PINNED));
+        let ptr = vmap.start().get() as *mut u8;
+        // Done :)
+        (vmap, ptr)
+    }
+    
+    pub fn needs_initialisation(&self) -> bool {
+        match self {
+            Self::UninitMem => false,
+            Self::GuardPage(_) => false,
+            
+            Self::ZeroedMem => true,
+        }
+    }
+    /// SAFETY: One must ensure that `phys_addr` is an actual, page-aligned, physical address,
+    ///             pointing to a minimum of `size` bytes of read-write memory
+    ///             that is not in use anywhere else (noalias)
+    ///             and that will remain valid and not otherwise used for the duration of this function.
+    ///             (generally, holding the corresponding PhysicalMemoryAllocation in a local in the calling function is sufficient for 1,2, and 4)
+    pub(self) unsafe fn initialise(&self, phys_addr: usize, size: PageAllocationSizeT) {
+        if !self.needs_initialisation() { return };
+        
+        let (vmap, ptr) = Self::_map_into_vmem(phys_addr, size);
+        // Initialise memory as requested
+        match self {
+            Self::UninitMem | Self::GuardPage(_) => unreachable!(),
+            
+            Self::ZeroedMem => {
+                core::ptr::write_bytes(ptr, 0, size.get());  // zero out the memory. FIXME: ensure this doesn't get optimized out
+            },
+        }
+        // And free the mapping now that we're done
+        drop(vmap);
+    }
+}
+
+/// The type of backing currently in use
+enum BackingType {
+    /// Physical memory (not shared)
+    PhysMemExclusive(PhysicalMemoryAllocation),
+    /// Physical memory (shared due to splitting or similar reasons)
+    PhysMemShared { allocation: Arc<PhysicalMemoryAllocation>, offset: usize },
+    
+    /// Copy-on-write (DRAFT)
+    CopyOnWrite(Arc<BackingType>),
+    
+    /// Reserved memory - not ready yet, should be initialised on access
+    ReservedMem,
+}
+struct BackingSection {
+    mode: BackingType,
     size: PageAllocationSizeT,
+}
+impl BackingSection {
+    /// Get the physical address, if currently in physical memory
+    pub fn get_phys_addr(&self) -> Option<usize> {
+        match self.mode {
+            BackingType::PhysMemExclusive(ref alloc) => Some(alloc.get_addr()),
+            BackingType::PhysMemShared { ref allocation, offset } => Some(allocation.get_addr()+offset),
+            BackingType::CopyOnWrite(ref cow) => cow.get_addr(),
+            BackingType::ReservedMem => None,
+        }
+    }
+    /// Get the size
+    pub fn get_size(&self) -> PageAllocationSizeT {
+        self.size
+    }
+    
+    /// Get whether this is read-only or read-write
+    /// (for unreadable types (such as reserved) -> an undefined but valid boolean)
+    pub fn can_write(&self) -> bool {
+        const UD: bool = true;
+        match self.mode {
+            BackingType::PhysMemExclusive(_) | BackingType::PhysMemShared { .. } => true,
+            BackingType::CopyOnWrite(_) => false,
+            BackingType::ReservedMem => UD,
+        }
+    }
 }
 struct AllocationBacking {
     sections: VecDeque<BackingSection>,
+    requested_type: AllocationType,
     
     offset: PageAlignedOffsetT,
 }
@@ -68,7 +155,7 @@ struct UnifiedAllocationInner {
 impl UnifiedAllocationInner {
     fn _remap_page(backing: &AllocationBacking, section: &BackingSection,
                    slot: &VirtualSlot, virt: &VirtualAllocation, mapping_addr_offset: usize) {
-        let addr: Option<usize> = None;  // TODO
+        let addr: Option<usize> = section.get_phys_addr();
         match addr {
             Some(addr) => {
                 let addr = addr + mapping_addr_offset;

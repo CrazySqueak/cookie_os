@@ -187,6 +187,18 @@ impl PageAlignedOffsetT {
     }
 }
 ftorawiiwctc!(PageAlignedOffsetT, isize);
+impl core::ops::Add for PageAlignedOffsetT {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        Self::new(self.0 + rhs.0)
+    }
+}
+impl core::ops::Sub for PageAlignedOffsetT {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        Self::new(self.0 - rhs.0)
+    }
+}
 
 #[repr(transparent)]
 #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]

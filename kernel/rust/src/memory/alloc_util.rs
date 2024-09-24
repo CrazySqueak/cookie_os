@@ -4,7 +4,7 @@ use alloc::vec::Vec; use alloc::vec;
 use alloc::boxed::Box;
 
 use crate::memory::physical::{PhysicalMemoryAllocation,palloc};
-use crate::memory::paging::{KALLOCATION_KERNEL_STACK,PageFlags,TransitivePageFlags,MappingSpecificPageFlags,PageFrameAllocator,PageAllocation,TLPageFrameAllocator,LockedPageAllocator,PageAllocationStrategies,ALLOCATION_USER_STACK,PagingContext,AnyPageAllocation,PageAlignedValue,PageAlignedUsize};
+use crate::memory::paging::{KALLOCATION_KERNEL_STACK,PageFlags,TransitivePageFlags,MappingSpecificPageFlags,PageFrameAllocator,PageAllocation,TLPageFrameAllocator,LockedPageAllocator,PageAllocationStrategies,ALLOCATION_USER_STACK,PagingContext,AnyPageAllocation,PageAlignedValue,PageAllocationSizeT as PageAlignedUsize,PageAlignedAddressT};
 use crate::memory::paging::global_pages::{GPageFrameAllocator,KERNEL_PTABLE};
 
 pub const MARKER_STACK_GUARD: usize = 0xF47B33F;  // "Fat Beef"
@@ -29,14 +29,14 @@ impl RealMemAllocation {
     pub fn allocate_at<PFA:PageFrameAllocator + Send + Sync + 'static>(allocator: &LockedPageAllocator<PFA>, vaddr: usize, size: usize, flags: PageFlags) -> Option<Self> {
         let size = PageAlignedUsize::new_rounded(size);
         let phys = palloc(size)?;
-        let virt = allocator.allocate_at(vaddr, phys.get_size())?;
+        let virt = allocator.allocate_at(PageAlignedAddressT::new_rounded(vaddr), phys.get_size())?;
         virt.set_base_addr(phys.get_addr(), flags);
         Some(Self { virt: Box::new(virt), phys: Some(phys) })
     }
     pub fn allocate_offset_mapped<PFA:PageFrameAllocator + Send + Sync + 'static>(allocator: &LockedPageAllocator<PFA>, offset: usize, size: usize, flags: PageFlags) -> Option<Self> {
         let size = PageAlignedUsize::new_rounded(size);
         let phys = palloc(size)?;
-        let virt = allocator.allocate_at(phys.get_addr() + offset, phys.get_size())?;
+        let virt = allocator.allocate_at(PageAlignedAddressT::new_rounded(phys.get_addr() + offset), phys.get_size())?;
         virt.set_base_addr(phys.get_addr(), flags);
         Some(Self { virt: Box::new(virt), phys: Some(phys) })
     }
@@ -80,7 +80,7 @@ impl<PFA: PageFrameAllocator + Send + Sync + 'static> AllocatedStack<PFA> {
     /* Get the virtual address of the bottom of the stack (exclusive, so could in theory be directly assigned to RSP in x86 and grow from there with no issues). */
     pub fn bottom_vaddr(&self) -> usize {
         // Later items in allocations[] are higher in the stack (lower vmem address)
-        self.allocations[0].virt.end()
+        self.allocations[0].virt.end().get()
     }
     
     /* Expand the stack limit downwards by the requested number of bytes. Returns true on a success. */
@@ -151,7 +151,7 @@ impl GAllocatedStack {
         let (physalloc, vmemalloc) = loop {
             let physalloc = palloc(PageAlignedUsize::new_rounded(alloc_size))?;
               // make sure the guard page factored in despite not occupying any real memory
-            match KERNEL_PTABLE.allocate_at(KERNEL_PTABLE.get_vmem_offset()+physalloc.get_addr()-guard_size, PageAlignedUsize::new_rounded(physalloc.get_size().get()+guard_size)){
+            match KERNEL_PTABLE.allocate_at(PageAlignedAddressT::new_rounded(KERNEL_PTABLE.get_vmem_offset().get()+physalloc.get_addr()-guard_size), PageAlignedUsize::new_rounded(physalloc.get_size().get()+guard_size)){
                 Some(vmemalloc) => break (physalloc, vmemalloc),  // OK :)
                 None => {
                     // We failed to offset-map that section of memory, so try again.
@@ -186,7 +186,7 @@ pub fn new_user_paging_context() -> PagingContext {
     let context = PagingContext::new();
     
     // null guard - 1MiB at the start to catch any null pointers
-    let nullguard = context.allocate_at(0, PageAlignedUsize::new_rounded(1*1024*1024)).unwrap();
+    let nullguard = context.allocate_at(PageAlignedAddressT::new(0), PageAlignedUsize::new_rounded(1*1024*1024)).unwrap();
     nullguard.set_absent(MARKER_NULL_GUARD);
     nullguard.leak();  // (we'll never need to de-allocate the null guard)
     

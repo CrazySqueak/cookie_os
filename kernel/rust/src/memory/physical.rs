@@ -202,13 +202,13 @@ pub fn init_pmem(mmap: &Vec<crate::coredrivers::parse_multiboot::MemoryMapEntry>
 #[derive(Debug)]
 pub struct PhysicalMemoryAllocation {
     addr: usize,
-    size: PageAlignedUsize,
+    size: PageAllocationSizeT,
     
     block: (usize, usize),  // (order, addr)
 }
 impl PhysicalMemoryAllocation {
     pub fn get_addr(&self) -> usize { self.addr }
-    pub fn get_size(&self) -> PageAlignedUsize { self.size }
+    pub fn get_size(&self) -> PageAllocationSizeT { self.size }
 }
 // Memory allocations cannot be copied nor cloned,
 // as that would allow for use-after-free or double-free errors
@@ -219,11 +219,11 @@ impl !Copy for PhysicalMemoryAllocation{}
 impl !Clone for PhysicalMemoryAllocation{}
 // Physical memory allocations *can* be Sync, because they contain no support for mutation that isn't handled by Rust's borrowing rules
 
-use super::paging::{PageAlignedValue,PageAlignedUsize};
+use super::paging::{PageAlignedValue,PageAllocationSizeT};
 /// Note: Allocated amount may be larger than size, even if page-aligned.
 /// This is because this can only allocate sizes of powers of two.
 /// So yes, you should still use .get_size() instead of reusing the size value
-pub fn palloc(size: PageAlignedUsize) -> Option<PhysicalMemoryAllocation> {
+pub fn palloc(size: PageAllocationSizeT) -> Option<PhysicalMemoryAllocation> {
     klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Requested to allocate physical memory for {:?}", size);
     let alloc_size = size.get();
     klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Allocating {} bytes.", alloc_size);
@@ -246,7 +246,7 @@ pub fn palloc(size: PageAlignedUsize) -> Option<PhysicalMemoryAllocation> {
     }?;
     Some(PhysicalMemoryAllocation { 
         addr: addr as usize,
-        size: PageAlignedUsize::new_checked(PFrameAllocator::block_size(order)).unwrap(),
+        size: PageAllocationSizeT::new_checked(PFrameAllocator::block_size(order)).unwrap(),
         block: (order, addr),
     })
 }

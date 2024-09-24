@@ -12,8 +12,8 @@ impl GlobalPageTable {
         let mut dopts = LPAWGOptions::new_default(); dopts.is_global_page = true;
         Self(LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: canonical_addr(vmemaddr), default_options: dopts }), flags)
     }
-    pub fn get_vmem_offset(&self) -> usize {
-        self.0.metadata().offset
+    pub fn get_vmem_offset(&self) -> PageAlignedAddressT {
+        PageAlignedAddressT::new(self.0.metadata().offset)
     }
     
     /* Called to leak the pointer that will be put into every page table to reference this global page mapping */
@@ -65,8 +65,8 @@ fn _map_kernel(kernel_ptable: &GlobalPageTable){
     klog!(Info, MEMORY_PAGING_GLOBALPAGES, "Initialising KERNEL_PTABLE.");
     
     let (kstart, kend) = crate::memory::physical::get_kernel_bounds();
-    let ksize = PageAlignedUsize::new_rounded(kend - kstart);
-    let kvstart = kernel_ptable.get_vmem_offset() + kstart;
+    let ksize = PageAllocationSizeT::new_rounded(kend - kstart);
+    let kvstart = PageAlignedAddressT::new(kernel_ptable.get_vmem_offset().get() + kstart);
     
     // Map kernel
     klog!(Debug, MEMORY_PAGING_GLOBALPAGES, "Mapping kernel into KERNEL_PTABLE. (kstart={:x} kend={:x} ksize={:x} kvstart={:x})", kstart, kend, ksize, kvstart);
@@ -75,8 +75,8 @@ fn _map_kernel(kernel_ptable: &GlobalPageTable){
     
     // Map guard page
     let guard_vaddr = unsafe { core::ptr::addr_of!(kstack_guard_page) as usize };
-    let guard_offset = PageAlignedUsize::new(guard_vaddr - allocation.start());
-    const GUARD_SIZE: PageAlignedUsize = PageAlignedUsize::new_const(4096);  // TODO: Move guard size to arch_specific section or make it its own asm-defined value
+    let guard_offset = PageAllocationSizeT::new(guard_vaddr - allocation.start().get());
+    const GUARD_SIZE: PageAllocationSizeT = PageAllocationSizeT::new_const(4096);  // TODO: Move guard size to arch_specific section or make it its own asm-defined value
     klog!(Debug, MEMORY_PAGING_GLOBALPAGES, "Mapping stack guard page (vaddr={:x} offset={:x})", guard_vaddr, guard_offset);
     let (k1alloc, rem) = allocation.split(guard_offset);
     let (guard, k2alloc) = rem.split(GUARD_SIZE);  // guard page is 4096 bytes

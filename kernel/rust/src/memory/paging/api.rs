@@ -482,10 +482,10 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         }
     }
     
-    pub fn allocate(&self, size: PageAlignedUsize, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
+    pub fn allocate(&self, size: PageAllocationSizeT, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
         self.write_when_active().allocate(size, alloc_strat)
     }
-    pub fn allocate_at(&self, addr: usize, size: PageAlignedUsize) -> Option<PageAllocation<PFA>> {
+    pub fn allocate_at(&self, addr: PageAlignedAddressT, size: PageAllocationSizeT) -> Option<PageAllocation<PFA>> {
         self.write_when_active().allocate_at(addr, size)
     }
     /// Allocate page(s) dynamically such that the given physical address would be able to be mapped using a simple .set_addr (i.e. such that phys minus base would be page-aligned)
@@ -631,32 +631,33 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     
     // Allocating
     // (we don't need to flush the TLB for allocation as the page has gone from NOT PRESENT -> NOT PRESENT - instead we flush it when it's mapped to an address)
-    pub(super) fn allocate(&mut self, size: PageAlignedUsize, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
+    pub(super) fn allocate(&mut self, size: PageAllocationSizeT, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
         let allocator = self.get_page_table();
-        let allocation = allocator.allocate(size.into(), alloc_strat)?;
+        let allocation = allocator.allocate(size.get(), alloc_strat)?;
         Some(PageAllocation::new(LockedPageAllocator::clone_ref(&self.allocator), allocation))
     }
-    pub(super) fn allocate_at(&mut self, addr: usize, size: PageAlignedUsize) -> Option<PageAllocation<PFA>> {
+    pub(super) fn allocate_at(&mut self, addr: PageAlignedAddressT, size: PageAllocationSizeT) -> Option<PageAllocation<PFA>> {
         // Convert the address
+        let addr: usize = addr.get();  // (page-alignment is really only an API restriction)
         // Subtract the offset from the vmem address (as we need it to be relative to the start of our table)
         let rel_addr = addr.checked_sub(self.meta().offset).unwrap_or_else(||panic!("Cannot allocate memory before the start of the page! addr=0x{:x} page_start=0x{:x}",addr,self.meta().offset));
         
         // Allocate
         let allocator = self.get_page_table();
-        let allocation = allocator.allocate_at(rel_addr, size.into())?;
+        let allocation = allocator.allocate_at(rel_addr, size.get())?;
         let mut palloc = PageAllocation::new(LockedPageAllocator::clone_ref(&self.allocator), allocation);
-        palloc.baseaddr_offset = addr - palloc.start();  // Figure out the offset between the requested address and the actual start of the allocation, if required
+        palloc.baseaddr_offset = 0; debug_assert!(addr == palloc.start().get());  // Rounding is no longer done implicitly, so the start() will be equal to the addr.
         Some(palloc)
     }
     /// Allocate page(s) dynamically such that the given physical address would be able to be mapped using a simple .set_addr (i.e. such that phys minus base would be page-aligned)
     pub(super) fn allocate_alignedoffset(&mut self, size: usize, alloc_strat: PageAllocationStrategies, phys_addr: usize) -> Option<PageAllocation<PFA>> {
         // Step 1: round down the physical address to page alignment
         use super::MIN_PAGE_SIZE;
-        let (_, allocation_offset) = (phys_addr / MIN_PAGE_SIZE, phys_addr % MIN_PAGE_SIZE);
+        let (phys_addr_aligned, allocation_offset) = PageAlignedAddressT::new_rounded_with_excess(phys_addr);
         // Step 2: increase size by the remainder to compensate
         let allocated_size = size + allocation_offset;
         // Step 3: Allocate
-        let mut allocation = self.allocate(PageAlignedUsize::new_rounded(allocated_size), KALLOCATION_DYN_MMIO)?;
+        let mut allocation = self.allocate(PageAllocationSizeT::new_rounded(allocated_size), KALLOCATION_DYN_MMIO)?;
         allocation.baseaddr_offset += allocation_offset;
         Some(allocation)
     }
@@ -664,12 +665,12 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     /* Split the allocation into two separate allocations. The first one will contain bytes [0,n), and the second one will contain the rest.
        If necessary, huge pages will be split to meet the midpoint as accurately as possible.
        Note: It is not guaranteed that the second allocation will not be empty. */
-    pub(super) fn split_allocation(&mut self, allocation: PageAllocation<PFA>, mid: PageAlignedUsize) -> (PageAllocation<PFA>, PageAllocation<PFA>) {
+    pub(super) fn split_allocation(&mut self, allocation: PageAllocation<PFA>, mid: PageAllocationSizeT) -> (PageAllocation<PFA>, PageAllocation<PFA>) {
         allocation.assert_pt_tag(self);
         let baseaddr_offset = allocation.baseaddr_offset;
         let (allocation, allocator, metadata) = allocation.leak();
         
-        let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid.into());
+        let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid.get());
         (
             PageAllocation { allocator: LockedPageAllocator::clone_ref(&allocator), allocation: lhs, metadata, baseaddr_offset },
             PageAllocation { allocator:                                 allocator , allocation: rhs, metadata, baseaddr_offset },
@@ -878,23 +879,23 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
     }
     
     /* Find the start address of this allocation in VMem */
-    pub fn start(&self) -> usize {
-        canonical_addr(self.allocation.start_addr() + self.metadata.offset)
+    pub fn start(&self) -> PageAlignedAddressT {
+        PageAlignedAddressT::new(canonical_addr(self.allocation.start_addr() + self.metadata.offset))
     }
     /* Find the "base" address of this allocation in VMem.
         This will be different from start() if e.g. the address passed to allocate_at was not page aligned.
         start() -> the very start of the allocation (including any padding added to ensure it is page-aligned).
         base() -> the VMem address that was requested. */
     pub fn base(&self) -> usize {
-        self.start()+self.baseaddr_offset
+        self.start().get()+self.baseaddr_offset
     }
     /* Find the end address of this allocation in VMem. (exclusive) */
-    pub fn end(&self) -> usize {
-        canonical_addr(self.allocation.end_addr() + self.metadata.offset)
+    pub fn end(&self) -> PageAlignedAddressT {
+        PageAlignedAddressT::new(canonical_addr(self.allocation.end_addr() + self.metadata.offset))
     }
     /* The total size of this allocation from start to end (not adjusted by the "base" address) */
-    pub fn size(&self) -> PageAlignedUsize {
-        PageAlignedUsize::new_checked(self.allocation.size()).unwrap()
+    pub fn size(&self) -> PageAllocationSizeT {
+        PageAllocationSizeT::new_checked(self.allocation.size()).unwrap()
     }
     /* The length of this allocation following the base (i.e. from base to end)  */
     pub fn length_after_base(&self) -> usize {
@@ -911,13 +912,13 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
         self.allocator.write_when_active().invalidate_tlb(self)
     }
     
-    pub fn split(self, mid: PageAlignedUsize) -> (Self, Self) {
+    pub fn split(self, mid: PageAllocationSizeT) -> (Self, Self) {
         let allocator = LockedPageAllocator::clone_ref(&self.allocator);
         let result = allocator.write_when_active().split_allocation(self, mid);
         result
     }
-    pub fn alloc_downwards(&self, size: PageAlignedUsize) -> Option<Self> {
-        let start = self.start()-size.get();
+    pub fn alloc_downwards(&self, size: PageAllocationSizeT) -> Option<Self> {
+        let start = PageAlignedAddressT::new(self.start().get()-size.get());
         self.allocator.allocate_at(start, size)
     }
 }
@@ -943,36 +944,36 @@ use alloc::boxed::Box;
 pub trait AnyPageAllocation: core::fmt::Debug + Send {
     fn normalize(&mut self);
     
-    fn start(&self) -> usize;
-    fn end(&self) -> usize;
-    fn size(&self) -> PageAlignedUsize;
+    fn start(&self) -> PageAlignedAddressT;
+    fn end(&self) -> PageAlignedAddressT;
+    fn size(&self) -> PageAllocationSizeT;
     fn set_base_addr(&self, base_addr: usize, flags: PageFlags);
     fn set_absent(&self, data: usize);
     fn flush_tlb(&self);
     
     /// Split this page allocation in half
-    fn split_dyn(self: Box<Self>, mid: PageAlignedUsize) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>);
+    fn split_dyn(self: Box<Self>, mid: PageAllocationSizeT) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>);
     /// Allocate more virtual memory directly below this allocation
     /// This is made available as a new allocation
-    fn alloc_downwards_dyn(&self, size: PageAlignedUsize) -> Option<Box<dyn AnyPageAllocation>>;
+    fn alloc_downwards_dyn(&self, size: PageAllocationSizeT) -> Option<Box<dyn AnyPageAllocation>>;
 }
 impl<PFA:PageFrameAllocator + Send + Sync + 'static> AnyPageAllocation for PageAllocation<PFA> {
     fn normalize(&mut self){ self.normalize() }
     
-    fn start(&self) -> usize { self.start() }
-    fn end(&self) -> usize { self.end() }
-    fn size(&self) -> PageAlignedUsize { self.size() }
+    fn start(&self) -> PageAlignedAddressT { self.start() }
+    fn end(&self) -> PageAlignedAddressT { self.end() }
+    fn size(&self) -> PageAllocationSizeT { self.size() }
     fn set_base_addr(&self, base_addr: usize, flags: PageFlags) { self.set_base_addr(base_addr, flags) }
     fn set_absent(&self, data: usize) { self.set_absent(data) }
     fn flush_tlb(&self) { self.flush_tlb() }
     
     // Note: Self is not always Sized
-    fn split_dyn(self: Box<Self>, mid: PageAlignedUsize) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>) {
+    fn split_dyn(self: Box<Self>, mid: PageAllocationSizeT) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>) {
         let (left, right) = self.split(mid);
         (Box::new(left) as Box<dyn AnyPageAllocation>,
          Box::new(right) as Box<dyn AnyPageAllocation>)
     }
-    fn alloc_downwards_dyn(&self, size: PageAlignedUsize) -> Option<Box<dyn AnyPageAllocation>> {
+    fn alloc_downwards_dyn(&self, size: PageAllocationSizeT) -> Option<Box<dyn AnyPageAllocation>> {
         self.alloc_downwards(size).map(|pa|Box::new(pa) as Box<dyn AnyPageAllocation>)
     }
 }

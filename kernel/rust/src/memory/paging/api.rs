@@ -124,11 +124,16 @@ impl PageAllocationSizeT {
     }
     
     pub const fn get_const(self) -> usize {
-        self.0.get()
+        let x = self.0.get();
+        debug_assert!(x%PAGE_ALIGN==0);  // this is already checked for when setting it, but for safety's sake let's check it before returning it as well
+        debug_assert!(x != 0); 
+        x
     }
     /// Get the stored integer as a NonZeroUsize
     pub const fn get_nz(self) -> NonZeroUsize {
-        self.0
+        let x = self.0;
+        debug_assert!(x.get()%PAGE_ALIGN==0);  // this is already checked for when setting it, but for safety's sake let's check it before returning it as well
+        x
     }
 }
 ftorawiiwctc!(PageAllocationSizeT, usize);
@@ -183,7 +188,9 @@ impl PageAlignedOffsetT {
     }
     
     pub const fn get_const(self) -> isize {
-        self.0
+        let x = self.0;
+        debug_assert!(x.rem_euclid(PAGE_ALIGN as isize)==0);  // this is already checked for when setting it, but for safety's sake let's check it before returning it as well
+        x
     }
 }
 ftorawiiwctc!(PageAlignedOffsetT, isize);
@@ -239,7 +246,9 @@ impl PageAlignedAddressT {
     }
     
     pub const fn get_const(self) -> usize {
-        self.0
+        let x = self.0;
+        debug_assert!(x%PAGE_ALIGN==0);  // this is already checked for when setting it, but for safety's sake let's check it before returning it as well
+        x
     }
 }
 ftorawiiwctc!(PageAlignedAddressT, usize);

@@ -66,6 +66,22 @@ struct UnifiedAllocationInner {
     backing: AllocationBacking,
 }
 impl UnifiedAllocationInner {
+    fn _remap_page(backing: &AllocationBacking, section: &BackingSection,
+                   slot: &VirtualSlot, virt: &VirtualAllocation, mapping_addr_offset: usize) {
+        let addr: Option<usize> = None;  // TODO
+        match addr {
+            Some(addr) => {
+                let addr = addr + mapping_addr_offset;
+                let flags: PageFlags = slot.default_flags;  // TODO: adjust flags if needed based on conditions
+                virt.allocation.set_base_addr(addr, flags);
+            },
+            None => {
+                let abt_id: usize = virt.absent_pages_table_handle.get_id().try_into().unwrap();
+                virt.allocation.set_absent(abt_id);
+            },
+        }
+    }
+    
     /// Remap all pages to point to the newly modified backing
     fn _remap_pages(&mut self) {
         let mut backing_processed = 0usize; let mut backing_remaining = self.backing.sections.len();
@@ -125,7 +141,7 @@ impl UnifiedAllocationInner {
                         // It's entirely within us, so we simply have to map it
                         let addr_offset: isize = (virt_start_offset-backing_start_offset).into();  // offset in memory against the backing
                         let addr_offset: usize = addr_offset.try_into().unwrap();
-                        todo!();
+                        Self::_remap_page(&self.backing, backing_item, &*virt.slot, &virt_alloc, addr_offset);
                         // And then push it
                         virt.slot.allocations.push_back(virt_alloc);
                         continue;

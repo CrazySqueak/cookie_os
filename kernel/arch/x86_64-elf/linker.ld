@@ -2,7 +2,8 @@
    designated as the entry point. */
 ENTRY(start)
 
-higher_half_offset = 0xFFFF800000000000;
+hh_data_offset = 0xFFFF800000000000;
+higher_half_offset = 0xFFFFFFFF80000000;
 /* Physical addresses so the protected mode boot program can access labels that will be used in the higher half. */
 multiboot_info_ptr_P = multiboot_info_ptr - higher_half_offset;
 kstack_guard_page_P = kstack_guard_page - higher_half_offset;

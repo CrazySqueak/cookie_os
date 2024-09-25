@@ -1,4 +1,5 @@
 global long_mode_start
+extern higher_half_offset
 
 section .text
 bits 64
@@ -19,7 +20,7 @@ long_mode_start:
     ; (we couldn't do this in 32-bit code for obvious reasons)
     mov rdx, multiboot_info_ptr
     mov rax, [rdx]
-    mov rcx, 0xFFFF800000000000
+    mov rcx, higher_half_offset
     add rax, rcx
     mov [rdx], rax
     

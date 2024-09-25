@@ -141,6 +141,19 @@ struct VirtualAllocation {
     
     absent_pages_table_handle: AbsentPagesHandleA,
 }
+impl VirtualAllocation {
+    pub fn new(allocation: Box<dyn AnyPageAllocation>,
+                meta_offset: PageAlignedOffsetT,
+                ) -> Self {
+        let size = allocation.size();
+        let apt_initialiser = ABSENT_PAGES_TABLE.create_new_descriptor();
+        let apth = apt_initialiser.commit(AbsentPagesItemA {
+            offset: meta_offset,
+        }, AbsentPagesItemB{});
+        let apth_a = apth.downgrade();
+        Self { allocation: allocation, size: size, absent_pages_table_handle: apth_a }
+    }
+}
 struct VirtualSlot {
     allocations: VecDeque<VirtualAllocation>,
     default_flags: PageFlags,
@@ -244,10 +257,10 @@ impl UnifiedAllocationInner {
                         let VirtualAllocation { allocation: old_alloc, .. } = virt_alloc;
                         let (lhs, rhs) = old_alloc.split_dyn(part_of_us_size);
                         // Push rhs back to be processed later
-                        let rhs: VirtualAllocation = todo!();
+                        let rhs: VirtualAllocation = VirtualAllocation::new(rhs, backing_end_offset);
                         virt.to_process.push_front(rhs);
                         // Push lhs back to be processed momentarily
-                        let lhs: VirtualAllocation = todo!();
+                        let lhs: VirtualAllocation = VirtualAllocation::new(lhs, virt_start_offset);
                         virt.to_process.push_front(lhs);
                         continue;
                     } else if virt_start_offset < backing_start_offset {
@@ -259,7 +272,7 @@ impl UnifiedAllocationInner {
                         let VirtualAllocation { allocation: old_alloc, .. } = virt_alloc;
                         let (lhs, rhs) = old_alloc.split_dyn(start_overran_by);
                         // Push rhs back to be processed later
-                        let rhs: VirtualAllocation = todo!();
+                        let rhs: VirtualAllocation = VirtualAllocation::new(rhs, backing_start_offset);
                         virt.to_process.push_front(rhs);
                         // The lhs must either be out-of-bounds (no longer needed), or we've missed it
                         if is_first_section { drop(lhs) }
@@ -287,6 +300,9 @@ impl UnifiedAllocationInner {
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};
 struct AbsentPagesItemA {
+    // TODO
+    /// Offset within the unified allocation
+    offset: PageAlignedOffsetT,
 }
 struct AbsentPagesItemB {
 }

@@ -11,6 +11,7 @@ bits 64
 ; This is the basic foundation of modern multitasking.
 global _cs_push
 extern contextswitch_scheduler_cb
+extern contextswitch_pop_cb
 _cs_push:
     ; Prologue
     ; RIP is saved on the stack for us, and the stack is 8-byte aligned (not 16-byte)
@@ -62,8 +63,9 @@ _cs_push:
     pop RBP  ; Load the previous RBP
     ret      ; Return (thus loading RIP)
 
-; extern "sysv64" _cs_pop(rsp: *const u8) -> !
+; extern "sysv64" _cs_pop(rsp: *const u8, cb_args: *mut T) -> !
 ; Switch to the given stack frame, and then "return" into it
+; The callback is called once the stack has been switched
 global _cs_pop
 _cs_pop:
     ; We've been passed the stack pointer in RDI
@@ -71,10 +73,15 @@ _cs_pop:
     
     ; TOS -> RBP, RIP, [data for _cs_push.resume]
     pop RBP  ; Load the previous RBP
+    
+    ; call callback
+    mov RDI, RSI
+    call contextswitch_pop_cb
+    ; jump to resume
     jmp _cs_push.resume  ; Resume (effectively a "return" but always to the same place so we don't need to waste stack space)
 
 
-; extern "sysv64" _cs_newv(entrypoint: extern "sysv64" fn() -> !, stack: *const u8, task_args: *mut u8) -> *const u8 (rsp)
+; extern "sysv64" _cs_newv(entrypoint: extern "sysv64" fn(*mut T) -> !, stack: *const u8, task_args: *mut T) -> *const u8 (rsp)
 global _cs_newv
 _cs_newv:
     ; prologue

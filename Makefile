@@ -8,8 +8,9 @@ export QEMU := qemu-system-x86_64
 export GRUB_MKRESCUE := grub-mkrescue
 export LIMINE := limine
 
-export KBUILDFEATURES ?= per_page_NXE_bit enable_amd64_TCE page_global_bit 1G_huge_pages
-QEMUCPU ?= qemu64,+pdpe1gb,+smep,+tce,+apic -smp 2
+export KBUILDFEATURES ?= enable_amd64_TCE 1G_huge_pages per_page_NXE_bit page_global_bit
+export KDBGFEATURES ?= dbg_scheduler_yield_errinfo dbg_track_nointerrupt_source
+QEMUCPU ?= max -smp 4
 
 export BUILDNAME := $(ARCH)
 
@@ -33,6 +34,7 @@ else
 $(info Building rust code in development mode.)
 export RS_TARGET_DIR := target-$(ARCH)/debug
 export BUILDNAME := $(BUILDNAME)-rsdev
+export KBUILDFEATURES := $(KBUILDFEATURES) $(KDBGFEATURES)
 endif
 
 export BUILDROOT := build

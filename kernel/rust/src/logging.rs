@@ -46,36 +46,63 @@ impl LogFormatter for DefaultLogFormatter {
 }
 
 // LOG DESTINATIONS
-use crate::util::{LockedWrite,LockedWriteWrapper};
+pub struct GuardFmtWriter<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>>(G,core::marker::PhantomData<T>);
+impl<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>> GuardFmtWriter<T,G> {
+    pub fn new(guard: G) -> Self {
+        Self(guard, core::marker::PhantomData)
+    }
+    pub fn into_guard(self) -> G {
+        self.0
+    }
+}
+impl<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>> core::fmt::Write for GuardFmtWriter<T,G> {
+    fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error> {
+        self.0.write_str(s)
+    }
+}
+impl<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>> core::ops::Deref for GuardFmtWriter<T,G> {
+    type Target = G;
+    fn deref(&self) -> &G {
+        &self.0
+    }
+}
+impl<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>> core::ops::DerefMut for GuardFmtWriter<T,G> {
+    fn deref_mut(&mut self) -> &mut G {
+        &mut self.0
+    }
+}
 
 // FORMATTER/DESTINATION SELECTION
-pub struct LoggingContext {
+pub struct LoggingPipeline {
     formatter: Box<dyn LogFormatter>,
     destinations: Vec<Box<dyn core::fmt::Write + Send>>,
 }
-impl core::default::Default for LoggingContext {
+impl core::default::Default for LoggingPipeline {
     fn default() -> Self {
-        let serial1: Box<dyn core::fmt::Write + Send> = Box::new(LockedWriteWrapper(&*crate::coredrivers::serial_uart::SERIAL1));
+        // Note: the logger permanently locks serial1. Literally nothing else uses serial1 so it's fine.
+        let serial1 = crate::coredrivers::serial_uart::SERIAL1.lock();
+        let (serial1, ni) = unsafe { crate::sync::nointerruptionslocks::NoInterruptionsGuardWrapper::into_separate_guards(serial1) };
+        let serial1 = Box::new(GuardFmtWriter::new(serial1));
         Self {
             formatter: Box::new(DefaultLogFormatter()),
-            destinations: Vec::from([serial1]),
+            destinations: Vec::from([serial1 as Box<dyn core::fmt::Write + Send + 'static>]),
         }
     }
 }
 
 lazy_static! {
-    static ref CONTEXT: crate::sync::Mutex<LoggingContext> = crate::sync::Mutex::default();
+    static ref PIPELINE: crate::sync::kspin::KMutex<LoggingPipeline> = crate::sync::kspin::KMutex::default();
 }
 
 pub fn _kernel_log(level: LogLevel, component: &str, msg: &(impl core::fmt::Display + ?Sized), file: &str, line: u32, column: u32){
-    let mut context = CONTEXT.lock();
+    let mut context = PIPELINE.lock();
     let formatted = context.formatter.format_log_message(level, component, &format!("{}",msg), file, line, column);
     for dest in context.destinations.iter_mut() {
         let _=write!(dest,"{}\r\n",formatted);
     }
 }
-pub fn update_logging_context(updater: impl FnOnce(&mut LoggingContext)) {
-    let mut context = CONTEXT.lock();
+pub fn update_logging_pipeline(updater: impl FnOnce(&mut LoggingPipeline)){
+    let mut context = PIPELINE.lock();
     updater(&mut context);
 }
 
@@ -99,16 +126,16 @@ pub(crate) use klog;
 // generally if you're using this function, shit is fucked and the program should be due to abort any second now
 macro_rules! emergency_kernel_log {
     ($($msg:tt)*) => {
-        crate::lowlevel::without_interrupts(||{
-            use crate::coredrivers::serial_uart::SERIAL1;
+        unsafe{$crate::multitasking::interruptions::_without_interruptions_noalloc(||{
+            use $crate::coredrivers::serial_uart::SERIAL1;
             use core::fmt::Write;
-            let mut serial = unsafe { loop { match SERIAL1.inner.try_lock() {
+            let mut serial = loop { match SERIAL1.try_lock() {
                     Some(lock) => break lock,
-                    None => SERIAL1.inner.force_unlock(),
+                    None => SERIAL1.force_unlock(),
                 }
-            }};
+            };
             let _ = write!(serial, $($msg)*);
-        })
+        })}
     }
 }
 pub(crate) use emergency_kernel_log;
@@ -137,7 +164,9 @@ pub mod contexts {
         def_context!(MEMORY_PAGING_ALLOCATOR, MEMORY_PAGING);
           def_context!(MEMORY_PAGING_ALLOCATOR_MLFF, MEMORY_PAGING_ALLOCATOR);
         def_context!(MEMORY_PAGING_MAPPINGS, MEMORY_PAGING);
-        def_context!(MEMORY_PAGING_TLB, MEMORY_PAGING, Info);
+        def_context!(MEMORY_PAGING_TLB, MEMORY_PAGING);
+          def_context!(MEMORY_PAGING_TLB_APIC, MEMORY_PAGING_TLB);
+          def_context!(MEMORY_PAGING_TLB_RECUR, MEMORY_PAGING_TLB, Info);
       def_context!(MEMORY_KHEAP, MEMORY);
       def_context!(MEMORY_PHYSICAL, MEMORY);
         def_context!(MEMORY_PHYSICAL_BUDDIES, MEMORY_PHYSICAL, Warning);

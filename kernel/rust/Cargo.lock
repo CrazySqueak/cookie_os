@@ -67,6 +67,7 @@ dependencies = [
  "cfg-if",
  "either",
  "lazy_static",
+ "lock_api",
  "pc-keyboard",
  "pic8259",
  "raw-cpuid 11.1.0",

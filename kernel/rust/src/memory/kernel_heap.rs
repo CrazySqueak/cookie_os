@@ -1,7 +1,9 @@
 
+use core::alloc::Layout;
 use buddy_system_allocator::LockedHeap;
 
 use crate::logging::klog;
+use crate::multitasking::interruptions::_without_interruptions_noalloc;
 
 extern "C" {
     // Provided by longmode.intel.asm (64-bit)
@@ -11,27 +13,26 @@ extern "C" {
 
 struct KernelHeap {
     heap: LockedHeap<32>,
-    rescue: Mutex<Option<RescueT>>,
 }
 impl KernelHeap {
     pub const fn new() -> Self {
-        Self { heap: LockedHeap::new(), rescue: Mutex::new(None), }
+        Self { heap: LockedHeap::new() }
     }
     
     pub unsafe fn init(&self, addr: usize, size: usize){
-        crate::lowlevel::without_interrupts(||self.heap.lock().init(addr, size))
+        self.heap.lock().init(addr, size)
     }
 }
 unsafe impl core::alloc::GlobalAlloc for KernelHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // We MUST not be interrupted while the heap is locked
-        crate::lowlevel::without_interrupts(||{
+        _without_interruptions_noalloc(||unsafe{  // Safety: We do not call disable_interruptions at any point during this closure. on_oom might but said behaviour must be thouroughly checked.
             let result = self.heap.lock().alloc(layout);
             match result {
                 Ok(result)=>result.as_ptr(),
                 Err(_) => {
                     // Attempt rescue
-                    on_oom(&self.heap, &layout, &self.rescue);
+                    on_oom(&self.heap, &layout);
                     // Attempt re-allocation
                     self.heap.alloc(layout)
                 }
@@ -39,7 +40,9 @@ unsafe impl core::alloc::GlobalAlloc for KernelHeap {
         })
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.heap.dealloc(ptr, layout)
+        _without_interruptions_noalloc(||unsafe{
+            self.heap.dealloc(ptr, layout)
+         })
     }
 }
 
@@ -51,15 +54,22 @@ pub unsafe fn init_kheap(){
     KHEAP_ALLOCATOR.init(kheap_initial_addr as usize,kheap_initial_size as usize);
     
     // Success
-    klog!(Info, MEMORY_KHEAP, "Initialised kernel heap with {} bytes.", kheap_initial_size);
+    // Note: Logging would be unsafe here as the CPU locals have not been initialised yet (including the CPU number, which is referenced by the logger)
+    //klog!(Info, MEMORY_KHEAP, "Initialised kernel heap with {} bytes.", kheap_initial_size);
 }
 
 pub unsafe fn init_kheap_2(){
     // Init rescue
-    let mut rescue = KHEAP_ALLOCATOR.rescue.lock();
-    _reinit_rescue(&mut rescue);
+    // _reinit_rescue::spawn();
 }
 
+unsafe fn on_oom(heap: &LockedHeap<32>, layout: &Layout) {
+    // N.B. Calling disable_interruptions in this function is unsafe unless it can be proven that the previous no_interruptions state will be restored exactly as it was by the end of this function.
+    // This means that using KMutexes is probably safe provided you DROP THE GUARD before the end of the function, but not much else can be guaranteed.
+    todo!()
+}
+
+/*
 /* Allocate some extra physical memory to the kernel heap.
     (note: the kernel heap's PhysicalMemoryAllocations are currently not kept anywhere, so they cannot be freed again. Use this function with care.)
     Size is in bytes.
@@ -106,38 +116,41 @@ use super::paging::PageAllocation;
 use super::physical::{palloc,PhysicalMemoryAllocation};
 use buddy_system_allocator::Heap;
 use core::alloc::Layout;
-use spin::Mutex;  // use a spinlock for the heap rather than scheduler yield - the scheduler could easily end up using the heap
+use crate::sync::kspin::KMutex;  // use a spinlock for the heap rather than scheduler yield - the scheduler could easily end up using the heap
 // As allocating new memory may require heap memory, we keep a 1MiB rescue section pre-allocated.
 const RESCUE_SIZE: usize = 1*1024*1024;  // 1MiB
 type RescueT = (PhysicalMemoryAllocation,PageAllocation<super::paging::global_pages::GlobalPTType>);
+static GLOBAL_RESCUE: KMutex<Option<RescueT>> = KMutex::new(None);
 
-fn on_oom(heap: &LockedHeap<32>, layout: &Layout, rescue: &Mutex<Option<RescueT>>){
+fn on_oom(heap: &LockedHeap<32>, layout: &Layout){
     unsafe {
-        let mut rescue = rescue.lock();
-        if _use_rescue(heap, &mut rescue).is_ok() {
+        if _use_rescue(heap).is_ok() {
             // Reinit rescue if we successfully used the previous one
             // (we can't re-init if rescue failed because there might not be enough heap space to allocate more memory)
             // (which is the reason why we have a pre-allocated rescue in the first place)
-            _reinit_rescue(&mut rescue);
+            //_reinit_rescue(&mut rescue);
+            _reinit_rescue::spawn();
         }
     }
 }
 
-unsafe fn _use_rescue(heap: &LockedHeap<32>, rescue: &mut Option<RescueT>) -> Result<(),()> {
+// note: interrupts are already disabled when _use_rescue is called
+unsafe fn _use_rescue(heap: &LockedHeap<32>) -> Result<(),()> {
     // Expand heap
-    let (pallocation, vallocation) = match rescue.take(){ Some(x)=>x, None=>return Err(()), };
+    let (pallocation, vallocation) = match GLOBAL_RESCUE.try_lock().and_then(|mut r|r.take()){ Some(x)=>x, None=>return Err(()), };
     heap.lock().init(vallocation.start(), vallocation.size());  // (note: this assumes that the allocation is contiguous (which it should be))
     // Forget allocation so that it doesn't get Drop'd and deallocated
     core::mem::forget(pallocation); vallocation.leak();
-    klog!(Info, MEMORY_KHEAP, "Rescued kernel heap.");
+    // klog!(Info, MEMORY_KHEAP, "Rescued kernel heap.");
     Ok(())
 }
 
-unsafe fn _reinit_rescue(rescue: &mut Option<RescueT>){
+use crate::multitasking::util::def_task_fn;
+def_task_fn!(task fn _reinit_rescue(){
     klog!(Debug, MEMORY_KHEAP, "Allocating new rescue...");
     let kernel_table = &KERNEL_PTABLE;
     let newrescue = (||{
-        use super::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
+        use crate::memory::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
         let pallocation = palloc(Layout::from_size_align(RESCUE_SIZE,1).unwrap())?;
         let vallocation = kernel_table.allocate_at(KERNEL_PTABLE.get_vmem_offset()+pallocation.get_addr(), pallocation.get_size())?;
         vallocation.set_base_addr(pallocation.get_addr(), PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::empty()));
@@ -146,11 +159,12 @@ unsafe fn _reinit_rescue(rescue: &mut Option<RescueT>){
     match newrescue {
         Some(nr) => {
             let paddr = nr.0.get_addr(); let vaddr = nr.1.start(); let vsize = nr.1.size();
-            let _ = rescue.insert(nr);
+            crate::multitasking::without_interruptions(||{let _=GLOBAL_RESCUE.lock().insert(nr);});
             klog!(Info, MEMORY_KHEAP, "Allocated new rescue @ V={:x} size {} | P={:x}", vaddr, vsize, paddr);
         },
         None => {
             klog!(Severe, MEMORY_KHEAP, "Unable to allocate new rescue! Next kernel OOM will crash!");
         },
     }
-}
+});
+*/

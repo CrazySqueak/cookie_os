@@ -6,22 +6,22 @@ Unlike regular drivers, they do not execute as processes, nor load from disk, as
 By the time the OS has finished booting, these should have been replaced with normal drivers that operate normally.
 */
 
-#[path = "base/mmio32.rs"]
-pub mod util_mmio32;
+// #[path = "base/mmio32.rs"]
+// pub mod util_mmio32;
 
-#[cfg_attr(target_arch = "x86_64", path = "keyboard/ps2_x86_64.rs")]
-pub mod keyboard_ps2;
+// #[cfg_attr(target_arch = "x86_64", path = "keyboard/ps2_x86_64.rs")]
+// pub mod keyboard_ps2;
 
 #[cfg_attr(target_arch = "x86_64", path = "serial/uart_x86_64.rs")]
 pub mod serial_uart;
 
-#[cfg_attr(target_arch = "x86_64", path = "system/xapic_x86_64.rs")]
-pub mod system_apic;
+// #[cfg_attr(target_arch = "x86_64", path = "system/xapic_x86_64.rs")]
+// pub mod system_apic;
 
-#[cfg_attr(target_arch = "x86_64", path = "display/vga_x86.rs")]
-pub mod display_vga;
+// #[cfg_attr(target_arch = "x86_64", path = "display/vga_x86.rs")]
+// pub mod display_vga;
 
-#[path = "parser/acpi_tables.rs"]
-pub mod parse_acpi_tables;
+// #[path = "parser/acpi_tables.rs"]
+// pub mod parse_acpi_tables;
 #[path="parser/multiboot.rs"]
 pub mod parse_multiboot;

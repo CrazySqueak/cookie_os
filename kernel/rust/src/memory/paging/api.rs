@@ -310,8 +310,10 @@ bitflags::bitflags! {
     pub struct TransitivePageFlags: u16 {
         // User can access this page.
         const USER_READABLE = 1<<0;
-        // User can write to this page (provided they have access to it).
-        const USER_WRITEABLE = 1<<1;
+        // This page can be written to. (both by the kernel, and by the user if they have access to it)
+        const WRITEABLE = 1<<1;
+        #[deprecated]
+        const USER_WRITEABLE = 1<<1;  // old alias for WRITEABLE
         // Execution is allowed. (if feature per_page_NXE_bit is not enabled then this is ignored)
         const EXECUTABLE = 1<<2;
     }

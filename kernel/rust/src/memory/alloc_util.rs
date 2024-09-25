@@ -167,7 +167,7 @@ pub type TLAllocatedStack = AllocatedStack<TLPageFrameAllocator>;
 impl TLAllocatedStack {
     #[inline]
     pub fn allocate_user(context: &LockedPageAllocator<TLPageFrameAllocator>) -> Option<Self> {
-        Self::allocate_new(context, PageAlignedUsize::new_rounded(1*1024*1024), PageAlignedUsize::new_rounded(4*4096), ALLOCATION_USER_STACK, PageFlags::new(TransitivePageFlags::USER_READABLE | TransitivePageFlags::USER_WRITEABLE, MappingSpecificPageFlags::empty()))
+        Self::allocate_new(context, PageAlignedUsize::new_rounded(1*1024*1024), PageAlignedUsize::new_rounded(4*4096), ALLOCATION_USER_STACK, PageFlags::new(TransitivePageFlags::USER_READABLE | TransitivePageFlags::WRITEABLE, MappingSpecificPageFlags::empty()))
     }
 }
 

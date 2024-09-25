@@ -93,7 +93,7 @@ enum BackingType {
     PhysMemShared { allocation: Arc<PhysicalMemoryAllocation>, offset: usize },
     
     /// Copy-on-write (DRAFT)
-    CopyOnWrite(Arc<BackingType>),
+    CopyOnWrite(Arc<BackingSection>),
     
     /// Reserved memory - not ready yet, should be initialised on access
     ReservedMem,
@@ -108,7 +108,7 @@ impl BackingSection {
         match self.mode {
             BackingType::PhysMemExclusive(ref alloc) => Some(alloc.get_addr()),
             BackingType::PhysMemShared { ref allocation, offset } => Some(allocation.get_addr()+offset),
-            BackingType::CopyOnWrite(ref cow) => cow.get_addr(),
+            BackingType::CopyOnWrite(ref cow) => cow.get_phys_addr(),
             BackingType::ReservedMem => None,
         }
     }

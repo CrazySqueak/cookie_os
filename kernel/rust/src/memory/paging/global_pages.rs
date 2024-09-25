@@ -41,12 +41,12 @@ pub const N_GLOBAL_TABLES: usize = 2;
 lazy_static! {
     
     pub static ref KERNEL_PTABLE: GlobalPageTable = {
-        let kt = GlobalPageTable::new(KERNEL_PTABLE_VADDR, PageFlags::new(TransitivePageFlags::EXECUTABLE, MappingSpecificPageFlags::empty()));
+        let kt = GlobalPageTable::new(KERNEL_PTABLE_VADDR, pageFlags!(t:WRITEABLE,t:EXECUTABLE));
         _map_kernel(&kt);
         kt
     };
     pub static ref MMIO_PTABLE: GlobalPageTable = {
-        let mt = GlobalPageTable::new(MMIO_PTABLE_VADDR, PageFlags::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty()));
+        let mt = GlobalPageTable::new(MMIO_PTABLE_VADDR, pageFlags!(t:WRITEABLE));
         mt
     };
     
@@ -71,7 +71,7 @@ fn _map_kernel(kernel_ptable: &GlobalPageTable){
     // Map kernel
     klog!(Debug, MEMORY_PAGING_GLOBALPAGES, "Mapping kernel into KERNEL_PTABLE. (kstart={:x} kend={:x} ksize={:x} kvstart={:x})", kstart, kend, ksize, kvstart);
     let allocation = kernel_ptable.allocate_at(kvstart, ksize).expect("Error initialising kernel page: Unable to map kernel.");
-    allocation.set_base_addr(kstart, PageFlags::new(TransitivePageFlags::EXECUTABLE, MappingSpecificPageFlags::PINNED));
+    allocation.set_base_addr(kstart, pageFlags!(t:WRITEABLE,t:EXECUTABLE,m:PINNED));
     
     // Map guard page
     let guard_vaddr = unsafe { core::ptr::addr_of!(kstack_guard_page) as usize };

@@ -24,7 +24,7 @@ impl<const LEVEL: usize> X64PageTable<LEVEL> {
             let add = add.tflags;
             use TransitivePageFlags as TF;
             if add.contains(TF::USER_READABLE ) { previous |=  PageTableFlags::USER_ACCESSIBLE };
-            if add.contains(TF::USER_WRITEABLE) { previous |=  PageTableFlags::WRITABLE        };
+            if add.contains(TF::WRITEABLE     ) { previous |=  PageTableFlags::WRITABLE        };
             if cfg!(feature="per_page_NXE_bit") && add.contains(TF::EXECUTABLE) { previous &=! PageTableFlags::NO_EXECUTE      };
         }
         if INCLUDE_NON_TRANSITIVE {
@@ -42,7 +42,7 @@ impl<const LEVEL: usize> X64PageTable<LEVEL> {
             {
                 use TransitivePageFlags as TF; let mut tf = TF::empty();
                 if  flags.contains(PageTableFlags::USER_ACCESSIBLE) { tf |= TF::USER_READABLE }
-                if  flags.contains(PageTableFlags::WRITABLE       ) { tf |= TF::USER_WRITEABLE}
+                if  flags.contains(PageTableFlags::WRITABLE       ) { tf |= TF::WRITEABLE     }
                 if !flags.contains(PageTableFlags::NO_EXECUTE     ) { tf |= TF::EXECUTABLE    }
                 tf
             },

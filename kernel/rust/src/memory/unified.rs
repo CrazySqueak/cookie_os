@@ -166,6 +166,9 @@ struct UnifiedAllocationInner {
     backing: AllocationBacking,
 }
 impl UnifiedAllocationInner {
+}
+
+impl UnifiedAllocationInner {
     fn _remap_page(backing: &AllocationBacking, section: &BackingSection,
                    slot: &VirtualSlot, virt: &VirtualAllocation, mapping_addr_offset: usize) {
         let addr: Option<usize> = section.get_phys_addr();
@@ -183,6 +186,53 @@ impl UnifiedAllocationInner {
                 virt.allocation.set_absent(abt_id);
             },
         }
+    }
+    
+    /// Remap all pages (faster, but requires all section borders to be aligned with virtual allocation borders)
+    fn _remap_pages_fast(&self) {
+        let mut backing_start_offset = self.backing.offset;
+        let mut backing_end_offset = backing_start_offset;
+        
+        struct FastVirtRemapState<'a,Iter:Iterator<Item=&'a VirtualAllocation>+'a> {
+            prev_alloc_end: PageAlignedOffsetT,
+            to_process: Iter,
+            slot: &'a VirtualSlot,
+        }
+        let mut virt_states: Vec<Option<_>> = self.virt_slots.iter().flatten().map(|slot|Some(FastVirtRemapState{
+            prev_alloc_end: slot.offset,
+            to_process: slot.allocations.iter(),
+            slot: slot,
+        })).collect();
+        
+        for backing_item in self.backing.sections.iter() {
+            backing_start_offset = backing_end_offset;
+            backing_end_offset = add_offset_and_size!((backing_start_offset) + (backing_item.size));
+            
+            // Handle each slot of virtual allocations
+            for virt_o in virt_states.iter_mut() {
+                let Some(virt) = virt_o.as_mut() else {continue};
+                loop { // for each allocation
+                    let Some(virt_alloc) = virt.to_process.next() else {
+                        let _ = virt;
+                        *virt_o = None;
+                        break;
+                    };
+                    let virt_start_offset = virt.prev_alloc_end;
+                    let virt_end_offset = add_offset_and_size!((virt_start_offset) + (virt_alloc.size)); virt.prev_alloc_end = virt_end_offset;
+                    
+                    // Check we're not past it
+                    if virt_start_offset >= backing_end_offset { break; }  // Not for this section (but for the next). We're done
+                    // Preconditions for using _fast instead of _remap_pages (checked in debug mode only)
+                    debug_assert!(virt_start_offset >= backing_start_offset);
+                    debug_assert!(virt_end_offset <= backing_end_offset);
+                    // Remap it
+                    let addr_offset: isize = (virt_start_offset-backing_start_offset).into();
+                    let addr_offset: usize = addr_offset.try_into().unwrap();
+                    Self::_remap_page(&self.backing, backing_item, virt.slot, virt_alloc, addr_offset);
+                    // Done
+                }  // NEXT virt_alloc
+            }  // NEXT virt_o
+        } // NEXT backing_item
     }
     
     /// Remap all pages to point to the newly modified backing

@@ -119,11 +119,11 @@ impl BackingSection {
     
     /// Get whether this is read-only or read-write
     /// (for unreadable types (such as reserved) -> an undefined but valid boolean)
-    pub fn can_write(&self) -> bool {
-        const UD: bool = true;
+    pub fn is_read_only(&self) -> bool {
+        const UD: bool = false;
         match self.mode {
-            BackingType::PhysMemExclusive(_) | BackingType::PhysMemShared { .. } => true,
-            BackingType::CopyOnWrite(_) => false,
+            BackingType::PhysMemExclusive(_) | BackingType::PhysMemShared { .. } => false,
+            BackingType::CopyOnWrite(_) => true,
             BackingType::ReservedMem => UD,
         }
     }
@@ -159,7 +159,10 @@ impl UnifiedAllocationInner {
         match addr {
             Some(addr) => {
                 let addr = addr + mapping_addr_offset;
-                let flags: PageFlags = slot.default_flags;  // TODO: adjust flags if needed based on conditions
+                // Determine flags to use
+                let mut flags: PageFlags = slot.default_flags;
+                if section.is_read_only() { flags -= pageFlags!(t:WRITEABLE); }
+                
                 virt.allocation.set_base_addr(addr, flags);
             },
             None => {

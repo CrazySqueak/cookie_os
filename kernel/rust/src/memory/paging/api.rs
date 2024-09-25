@@ -267,42 +267,100 @@ impl PageFlags {
         Self::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty())
     }
 }
-impl core::ops::BitAnd<TransitivePageFlags> for PageFlags {
-    type Output = Self;
-    fn bitand(self, rhs: TransitivePageFlags) -> Self::Output {
-        Self::new(self.tflags & rhs, self.mflags)
+macro_rules! impl_pf_part_ops {
+    ($rhstype:ty, $pname:ident, $tn:ident, $mn:ident) => {
+        #[automatically_derived]
+        impl core::ops::BitAnd<$rhstype> for PageFlags {
+            type Output = $rhstype;
+            fn bitand(self, rhs: $rhstype) -> Self::Output {
+                let Self { tflags: $tn, mflags: $mn } = self;
+                let mut $pname = $pname; $pname &= rhs;
+                $pname
+            }
+        }
+        
+        #[automatically_derived]
+        impl core::ops::BitOr<$rhstype> for PageFlags {
+            type Output = Self;
+            fn bitor(self, rhs: $rhstype) -> Self::Output {
+                let Self { tflags: $tn, mflags: $mn } = self;
+                let mut $pname = $pname; $pname |= rhs;
+                Self { tflags: $tn, mflags: $mn }
+            }
+        }
+        #[automatically_derived]
+        impl core::ops::BitOrAssign<$rhstype> for PageFlags {
+            fn bitor_assign(&mut self, rhs: $rhstype) {
+                self.$pname |= rhs;
+            }
+        }
+        
+        #[automatically_derived]
+        impl core::ops::BitXor<$rhstype> for PageFlags {
+            type Output = Self;
+            fn bitxor(self, rhs: $rhstype) -> Self::Output {
+                let Self { tflags: $tn, mflags: $mn } = self;
+                let mut $pname = $pname; $pname ^= rhs;
+                Self { tflags: $tn, mflags: $mn }
+            }
+        }
+        #[automatically_derived]
+        impl core::ops::BitXorAssign<$rhstype> for PageFlags {
+            fn bitxor_assign(&mut self, rhs: $rhstype) {
+                self.$pname ^= rhs;
+            }
+        }
+        
+        #[automatically_derived]
+        impl core::ops::Sub<$rhstype> for PageFlags {
+            type Output = Self;
+            fn sub(self, rhs: $rhstype) -> Self::Output {
+                let Self { tflags: $tn, mflags: $mn } = self;
+                let mut $pname = $pname; $pname -= rhs;
+                Self { tflags: $tn, mflags: $mn }
+            }
+        }
+        #[automatically_derived]
+        impl core::ops::SubAssign<$rhstype> for PageFlags {
+            fn sub_assign(&mut self, rhs: $rhstype) {
+                self.$pname -= rhs;
+            }
+        }
     }
 }
-impl core::ops::BitOr<TransitivePageFlags> for PageFlags {
-    type Output = Self;
-    fn bitor(self, rhs: TransitivePageFlags) -> Self::Output {
-        Self::new(self.tflags | rhs, self.mflags)
-    }
+impl_pf_part_ops!(TransitivePageFlags, tflags, tflags, mflags);
+impl_pf_part_ops!(MappingSpecificPageFlags, mflags, tflags, mflags);
+macro_rules! impl_pf_compound_ops {
+    (binop $traitname:path, $mname:ident) => {
+        impl $traitname for PageFlags {
+            type Output = Self;
+            fn $mname(self, rhs: Self) -> Self::Output {
+                use $traitname;
+                let Self { tflags, mflags } = self;
+                let tflags = tflags.$mname(rhs.tflags);
+                let mflags = mflags.$mname(rhs.mflags);
+                Self { tflags, mflags }
+            }
+        }
+    };
+    (assign $traitname:path, $mname:ident) => {
+        impl $traitname for PageFlags {
+            fn $mname(&mut self, rhs: Self) {
+                use $traitname;
+                self.tflags.$mname(rhs.tflags);
+                self.mflags.$mname(rhs.mflags);
+            }
+        }
+    };
 }
-impl core::ops::BitAnd<MappingSpecificPageFlags> for PageFlags {
-    type Output = Self;
-    fn bitand(self, rhs: MappingSpecificPageFlags) -> Self::Output {
-        Self::new(self.tflags, self.mflags & rhs)
-    }
-}
-impl core::ops::BitOr<MappingSpecificPageFlags> for PageFlags {
-    type Output = Self;
-    fn bitor(self, rhs: MappingSpecificPageFlags) -> Self::Output {
-        Self::new(self.tflags, self.mflags | rhs)
-    }
-}
-impl core::ops::BitAnd<Self> for PageFlags {
-    type Output = Self;
-    fn bitand(self, rhs: Self) -> Self::Output {
-        Self::new(self.tflags & rhs.tflags, self.mflags & rhs.mflags)
-    }
-}
-impl core::ops::BitOr<Self> for PageFlags {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self::Output {
-        Self::new(self.tflags | rhs.tflags, self.mflags | rhs.mflags)
-    }
-}
+impl_pf_compound_ops!(binop core::ops::BitAnd, bitand);
+impl_pf_compound_ops!(assign core::ops::BitAndAssign, bitand_assign);
+impl_pf_compound_ops!(binop core::ops::BitOr, bitor);
+impl_pf_compound_ops!(assign core::ops::BitOrAssign, bitor_assign);
+impl_pf_compound_ops!(binop core::ops::BitXor, bitxor);
+impl_pf_compound_ops!(assign core::ops::BitXorAssign, bitxor_assign);
+impl_pf_compound_ops!(binop core::ops::Sub, sub);
+impl_pf_compound_ops!(assign core::ops::SubAssign, sub_assign);
 bitflags::bitflags! {
     // These flags follow a "union" pattern - flags applied to upper levels will also override lower levels (the most restrictive version winning)
     // Therefore: the combination of all flags should be the most permissive/compatible option

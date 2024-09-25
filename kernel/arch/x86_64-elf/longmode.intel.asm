@@ -55,7 +55,14 @@ long_mode_ap_start:
     ; _kapstart should never return
 
 section .bss
+; multiboot info ptr
+global multiboot_info_ptr
+align 8
+multiboot_info_ptr:
+    resb 8
 
+section .kheap
+; we put the kernel stack + kernel heap in the "lower-higher-half" 0xFFFF8000...
 ; kernel stack
 global kstack_top
 global kstack_bottom
@@ -75,12 +82,6 @@ align 4
 kheap_initial_start:
 resb 0x80_0000 ; 8MiB - we can expand it as needed
 kheap_initial_end:
-
-; multiboot info ptr
-global multiboot_info_ptr
-align 8
-multiboot_info_ptr:
-    resb 8
 
 section .data
 ; number of processors initialised (u16)

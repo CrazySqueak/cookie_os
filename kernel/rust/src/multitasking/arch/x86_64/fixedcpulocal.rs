@@ -52,7 +52,7 @@ pub fn _set_fixed_cpu_locals(cpulocals: FixedCpuLocals){
 pub fn _load_fixed_cpu_locals() -> &'static FixedCpuLocals {
     // GS:0 = cpu_local_ptr
     // GSbase is only 32-bits, so we need to offset the returned value by HIGHER_HALF_OFFSET
-    // Since FixedCpuLocals are allocated on the kernel heap, we can use KERNEL_PTABLE_VADDR as the offset
+    // Since FixedCpuLocals are allocated on the kernel heap (or the kernel stack), we can use KERNEL_PTABLE_VADDR as the offset
     const HIGHER_HALF_OFFSET: usize = crate::memory::paging::global_pages::KERNEL_PTABLE_VADDR;
     const FCL_PTR_PTR_ADDR: usize = 0 + HIGHER_HALF_OFFSET;  // we load GS:FCL_PTR_PTR_ADDR
     

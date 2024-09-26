@@ -173,6 +173,9 @@ pub mod contexts {
         def_context!(MEMORY_PHYSICAL_RAMMAP, MEMORY_PHYSICAL);
         def_context!(MEMORY_PHYSICAL_ALLOCATOR, MEMORY_PHYSICAL, Warning);
       def_context!(MEMORY_ALLOCUTIL, MEMORY);
+      def_context!(MEMORY_UNIFIED, MEMORY, Debug);
+        def_context!(MEMORY_UNIFIED_EXPANSION, MEMORY_UNIFIED);
+        def_context!(MEMORY_UNIFIED_PAGEMAPPING, MEMORY_UNIFIED);
     def_context!(FEATURE_FLAGS, ROOT, Debug);
     def_context!(SCHEDULER, ROOT);
     def_context!(CPU_MANAGEMENT, ROOT);

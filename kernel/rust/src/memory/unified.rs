@@ -8,6 +8,7 @@ use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,Pag
 use super::physical::{PhysicalMemoryAllocation,palloc};
 use bitflags::bitflags;
 use crate::sync::{YMutex,YMutexGuard,ArcYMutexGuard};
+use crate::logging::klog;
 
 use super::paging::{global_pages::KERNEL_PTABLE,strategy::KALLOCATION_KERNEL_GENERALDYN,strategy::PageAllocationStrategies};
 
@@ -26,7 +27,17 @@ macro_rules! add_offset_and_size {
             let r3: PageAlignedOffsetT = r2.try_into().unwrap();
             l0 + r3
         }
-    }
+    };
+    (($offset:expr) - ($size:expr)) => {
+        {
+            let l0: PageAlignedOffsetT = $offset;
+            let r0: PageAllocationSizeT = $size;
+            let r1: usize = r0.into();
+            let r2: isize = r1.try_into().unwrap();
+            let r3: PageAlignedOffsetT = r2.try_into().unwrap();
+            l0 - r3
+        }
+    };
 }
 
 #[derive(Clone,Copy,Debug)]
@@ -172,16 +183,76 @@ struct UnifiedAllocationInner {
 impl UnifiedAllocationInner {
 }
 
-impl UnifiedAllocationInner {
+impl UnifiedAllocationInner {  // EXPANSION/SHRINKING
+    fn _allocate_new_backing(btype: AllocationType, size: PageAllocationSizeT) -> BackingType {
+        todo!()
+    }
+    
+    /// Expand this allocation downwards (into lower logical addresses) by the given amount
+    fn expand_downwards(&mut self, size: PageAllocationSizeT) {
+        // Allocate the new backing
+        let alloc_type = self.backing.requested_type;
+        let allocation = Self::_allocate_new_backing(alloc_type, size);
+        
+        // Update our backing sections
+        self.backing.sections.push_front(BackingSection {
+            mode: allocation,
+            size: size,
+        });
+        self.backing.offset = add_offset_and_size!((self.backing.offset) - (size));
+        
+    }
+    
+    /// Attempt to expand all virtual memory allocations tied to this, such that they can hold this allocation in full
+    fn expand_vmem(&mut self) {
+        let bottom_offset: PageAlignedOffsetT = self.backing.offset;
+        let top_offset: PageAlignedOffsetT = self.backing.sections.iter().fold(self.backing.offset, |a,sec|add_offset_and_size!((a) + (sec.get_size())));
+        
+        // Expand vmem downwards
+        for virt_slot in self.virt_slots.iter_mut().flatten() {
+            let old_allocation = &mut virt_slot.allocations.front_mut().expect("VirtualAllocations should always have at least one section.").allocation;
+            let old_offset = virt_slot.offset;
+            
+            let amount_missing = old_offset - bottom_offset;  // Figure out how much to expand by. If a previous downwards allocation failed, this will retry it. If there is excess, then the excess can be re-used.
+            if amount_missing.get() <= 0 { continue };  // skip if we already have enough
+            let amount_missing = PageAllocationSizeT::new(amount_missing.get() as usize);
+            
+            let Some(new_allocation) = old_allocation.alloc_downwards_dyn(amount_missing) else{continue};  // attempt to allocate downwards
+            // Success :)
+            let new_allocation = VirtualAllocation::new(new_allocation, bottom_offset);
+            virt_slot.allocations.push_front(new_allocation);
+        }
+        // Expand vmem upwards
+        for virt_slot in self.virt_slots.iter_mut().flatten() {
+            let old_allocation = &mut virt_slot.allocations.back_mut().expect("VirtualAllocations should always have at least one section.").allocation;
+            let old_offset = virt_slot.allocations.iter().fold(virt_slot.offset, |a,alloc|add_offset_and_size!((a) + (alloc.size)));
+            
+            let amount_missing = top_offset - old_offset ;
+            if amount_missing.get() <= 0 { continue };
+            let amount_missing = PageAllocationSizeT::new(amount_missing.get() as usize);
+            
+            let Some(new_allocation) = None else{continue};  // TODO
+            // Success :)
+            let new_allocation = VirtualAllocation::new(new_allocation, old_offset);
+            virt_slot.allocations.push_back(new_allocation);
+        }
+        
+        // Remap vmem to match our backing sections
+        self._remap_pages(None,false);
+    }
+}
+
+impl UnifiedAllocationInner {  // PAGE REMAPPING
     fn _remap_page(backing: &AllocationBacking, section: &BackingSection,
-                   slot: &VirtualSlot, virt: &VirtualAllocation, mapping_addr_offset: usize) {
+                   slot: &VirtualSlot, virt: &VirtualAllocation, mapping_addr_offset: usize,
+                   force_readonly: bool) {
         let addr: Option<usize> = section.get_phys_addr();
         match addr {
             Some(addr) => {
                 let addr = addr + mapping_addr_offset;
                 // Determine flags to use
                 let mut flags: PageFlags = slot.default_flags;
-                if section.is_read_only() { flags -= pageFlags!(t:WRITEABLE); }
+                if force_readonly || section.is_read_only() { flags -= pageFlags!(t:WRITEABLE); }
                 
                 virt.allocation.set_base_addr(addr, flags);
             },
@@ -193,7 +264,9 @@ impl UnifiedAllocationInner {
     }
     
     /// Remap all pages (faster, but requires all section borders to be aligned with virtual allocation borders)
-    fn _remap_pages_fast(&self) {
+    /// If virt_slot is not None, only remaps that specific slot. Otherwise, remaps all occupied slots.
+    /// If force_readonly is true, maps the pages as read only (even if normally they wouldn't be). Useful for avoiding race conditions when switching backings.
+    fn _remap_pages_fast(&self, virt_slot: Option<usize>, force_readonly: bool) {
         let mut backing_start_offset = self.backing.offset;
         let mut backing_end_offset = backing_start_offset;
         
@@ -201,20 +274,27 @@ impl UnifiedAllocationInner {
             prev_alloc_end: PageAlignedOffsetT,
             to_process: Iter,
             slot: &'a VirtualSlot,
+            
+            log_idx: usize,
         }
-        let mut virt_states: Vec<Option<_>> = self.virt_slots.iter().flatten().map(|slot|Some(FastVirtRemapState{
-            prev_alloc_end: slot.offset,
-            to_process: slot.allocations.iter(),
-            slot: slot,
-        })).collect();
+        let mut virt_states: Vec<Option<_>> = self.virt_slots.iter()
+            .enumerate().filter(|(i,x)| virt_slot.is_none() || *i==virt_slot.unwrap())  // filter by virt_slot
+            .filter_map(|(i,o)|o.as_ref().map(|x|(i,x))).map(|(i,slot)|Some(FastVirtRemapState{
+                prev_alloc_end: slot.offset,
+                to_process: slot.allocations.iter(),
+                slot: slot,
+                log_idx: i,
+            })).collect();
         
-        for backing_item in self.backing.sections.iter() {
+        for (log_sec_idx, backing_item) in self.backing.sections.iter().enumerate() {
             backing_start_offset = backing_end_offset;
             backing_end_offset = add_offset_and_size!((backing_start_offset) + (backing_item.size));
+            klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "Remapping(fast) section#{} - off_start={:x} off_end={:x} size={:x}", log_sec_idx, backing_start_offset, backing_end_offset, backing_item.size);
             
             // Handle each slot of virtual allocations
             for virt_o in virt_states.iter_mut() {
                 let Some(virt) = virt_o.as_mut() else {continue};
+                klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t virt_state#{}", virt.log_idx);
                 loop { // for each allocation
                     let Some(virt_alloc) = virt.to_process.next() else {
                         let _ = virt;
@@ -223,6 +303,7 @@ impl UnifiedAllocationInner {
                     };
                     let virt_start_offset = virt.prev_alloc_end;
                     let virt_end_offset = add_offset_and_size!((virt_start_offset) + (virt_alloc.size)); virt.prev_alloc_end = virt_end_offset;
+                    klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t\t off_start={:x} off_end={:x} size={:x}", virt_start_offset, virt_end_offset, virt_alloc.size);
                     
                     // Check we're not past it
                     if virt_start_offset >= backing_end_offset { break; }  // Not for this section (but for the next). We're done
@@ -232,7 +313,8 @@ impl UnifiedAllocationInner {
                     // Remap it
                     let addr_offset: isize = (virt_start_offset-backing_start_offset).into();
                     let addr_offset: usize = addr_offset.try_into().unwrap();
-                    Self::_remap_page(&self.backing, backing_item, virt.slot, virt_alloc, addr_offset);
+                    klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t\t\t Mapping with addr_offset={:x} force_readonly={}", addr_offset, force_readonly);
+                    Self::_remap_page(&self.backing, backing_item, virt.slot, virt_alloc, addr_offset, force_readonly);
                     // Done
                 }  // NEXT virt_alloc
             }  // NEXT virt_o
@@ -240,7 +322,8 @@ impl UnifiedAllocationInner {
     }
     
     /// Remap all pages to point to the newly modified backing
-    fn _remap_pages(&mut self) {
+    /// If virt_slot is not None, only remaps that specific slot. Otherwise, remaps all occupied slots.
+    fn _remap_pages(&mut self, virt_slot: Option<usize>, force_readonly: bool) {
         let mut backing_processed = 0usize; let mut backing_remaining = self.backing.sections.len();
         let mut backing_start_offset = self.backing.offset;
         let mut backing_end_offset = backing_start_offset;
@@ -249,23 +332,29 @@ impl UnifiedAllocationInner {
             prev_alloc_end: PageAlignedOffsetT,
             to_process: VecDeque<VirtualAllocation>,
             slot: &'a mut VirtualSlot,
+            log_idx: usize,
         }
-        let mut virt_states: Vec<Option<_>> = self.virt_slots.iter_mut().flatten().map(|slot|Some(VirtRemapState{
-            prev_alloc_end: slot.offset,
-            to_process: slot.allocations.drain(0..).collect(),
-            slot: slot,
-        })).collect();
+        let mut virt_states: Vec<Option<_>> = self.virt_slots.iter_mut()
+            .enumerate().filter(|(i,x)| virt_slot.is_none() || *i==virt_slot.unwrap())  // filter by virt_slot
+            .filter_map(|(i,o)|o.as_mut().map(|x|(i,x))).map(|(i,slot)|Some(VirtRemapState{
+                prev_alloc_end: slot.offset,
+                to_process: slot.allocations.drain(0..).collect(),
+                slot: slot,
+                log_idx: i,
+            })).collect();
         
-        for backing_item in self.backing.sections.iter() {
+        for (log_sec_idx, backing_item) in self.backing.sections.iter().enumerate() {
             // Re-calculate backing offsets
             backing_start_offset = backing_end_offset;
             backing_end_offset = add_offset_and_size!((backing_start_offset) + (backing_item.size));
             let is_first_section = backing_processed==0; backing_processed += 1;
             backing_remaining -= 1; let is_last_section = backing_remaining==0;
+            klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "Remapping section#{} - off_start={:x} off_end={:x} size={:x} [first={}/last={}/prc={}/rem={}]", log_sec_idx, backing_start_offset, backing_end_offset, backing_item.size, is_first_section, is_last_section, backing_processed, backing_remaining);
             
             // Now, handle each set of virtual allocations
             for virt_o in virt_states.iter_mut() {  // for each slot
                 let Some(virt) = virt_o.as_mut() else {continue};
+                klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t virt_state#{}", virt.log_idx);
                 loop {  // for each allocation - we break once we're ready to process the next slot
                     // Take next allocation from queue
                     let Some(virt_alloc) = virt.to_process.pop_front() else {
@@ -276,10 +365,12 @@ impl UnifiedAllocationInner {
                     };
                     let virt_start_offset = virt.prev_alloc_end;
                     let virt_end_offset = add_offset_and_size!((virt_start_offset) + (virt_alloc.size)); virt.prev_alloc_end = virt_end_offset;
+                    klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t\t off_start={:x} off_end={:x} size={:x}", virt_start_offset, virt_end_offset, virt_alloc.size);
                     
                     // And process it
                     if virt_end_offset <= backing_start_offset {
                         // We're already past this allocation's backing
+                        klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t\t\t Before current section. Dropping.");
                         if is_first_section {
                             // If we're past it and is_first_section, then it's no longer part of this allocation and should be dropped
                             drop(virt_alloc);
@@ -298,7 +389,8 @@ impl UnifiedAllocationInner {
                         // It's entirely within us, so we simply have to map it
                         let addr_offset: isize = (virt_start_offset-backing_start_offset).into();  // offset in memory against the backing
                         let addr_offset: usize = addr_offset.try_into().unwrap();
-                        Self::_remap_page(&self.backing, backing_item, &*virt.slot, &virt_alloc, addr_offset);
+                    klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t\t\t Mapping with addr_offset={:x} force_readonly={}", addr_offset, force_readonly);
+                        Self::_remap_page(&self.backing, backing_item, &*virt.slot, &virt_alloc, addr_offset, force_readonly);
                         // And then push it
                         virt.slot.allocations.push_back(virt_alloc);
                         continue;
@@ -307,6 +399,7 @@ impl UnifiedAllocationInner {
                         let part_of_us_size: isize = (backing_end_offset - virt_start_offset).into();  // find the size of the part that's inside us
                         let part_of_us_size: usize = part_of_us_size.try_into().unwrap();
                         let part_of_us_size: PageAllocationSizeT = part_of_us_size.try_into().unwrap();
+                        klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t\t\t Overlaps end. Splitting with lhs_size={:x}", part_of_us_size);
                         // Split it
                         let VirtualAllocation { allocation: old_alloc, .. } = virt_alloc;
                         let (lhs, rhs) = old_alloc.split_dyn(part_of_us_size);
@@ -322,6 +415,7 @@ impl UnifiedAllocationInner {
                         let start_overran_by: isize = (virt_start_offset - backing_start_offset).into();
                         let start_overran_by: usize = start_overran_by.try_into().unwrap();
                         let start_overran_by: PageAllocationSizeT = start_overran_by.try_into().unwrap();
+                        klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t\t\t Overlaps start. Splitting with lhs_size={:x}", start_overran_by);
                         // Split it
                         let VirtualAllocation { allocation: old_alloc, .. } = virt_alloc;
                         let (lhs, rhs) = old_alloc.split_dyn(start_overran_by);
@@ -350,6 +444,42 @@ impl UnifiedAllocationInner {
     }
 }
 
+impl UnifiedAllocationInner {  // VIRT SLOT ADDING/CLEARING
+    /// Returns the index of the slot used
+    fn _new_virt_mapping(&mut self, allocation: Box<dyn AnyPageAllocation>, flags: PageFlags) -> usize {
+        let (slot_idx, slot_mut) = match self.virt_slots.iter().position(Option::is_none) {
+            Some(slot_idx) => {
+                let slot_mut = &mut self.virt_slots[slot_idx];
+                (slot_idx, slot_mut)
+            },
+            None => {
+                let slot_idx = self.virt_slots.len();
+                self.virt_slots.push(None);
+                let slot_mut = &mut self.virt_slots[slot_idx];
+                (slot_idx, slot_mut)
+            },
+        };
+        
+        // Initialise the slot
+        let offset = self.backing.offset;  // if allocation.size == self.backing.size (which it should be, then taking offset == backing.offset should line things up correctly
+        *slot_mut = Some(VirtualSlot {
+            allocations: vec![VirtualAllocation::new(allocation,offset)].into(),
+            default_flags: flags,
+            offset: offset,
+        });
+        // And remap it (this will break the allocation into the necessary pieces as well)
+        self._remap_pages(Some(slot_idx), false);
+        
+        // And return
+        slot_idx
+    }
+    /// Clear the given slot
+    fn _clear_virt_mapping(&mut self, slot: usize) {
+        let prev_value = self.virt_slots[slot].take();
+        debug_assert!(prev_value.is_some(), "Cleared virt stot that was already empty!");
+        drop(prev_value);  // dropping the prev value will now clear the page mappings it previously held
+    }
+}
 // TODO
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};

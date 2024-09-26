@@ -146,10 +146,14 @@ impl VirtualAllocation {
                 meta_offset: PageAlignedOffsetT,
                 ) -> Self {
         let size = allocation.size();
+        
         let apt_initialiser = ABSENT_PAGES_TABLE.create_new_descriptor();
+        apt_initialiser.slot_t().pt_phys_addr.store(allocation.pt_phys_addr(), core::sync::atomic::Ordering::Relaxed);
+        apt_initialiser.slot_t().virt_addr.store(allocation.start().get(), core::sync::atomic::Ordering::Relaxed);
         let apth = apt_initialiser.commit(AbsentPagesItemA {
             offset: meta_offset,
         }, AbsentPagesItemB{});
+        
         let apth_a = apth.downgrade();
         Self { allocation: allocation, size: size, absent_pages_table_handle: apth_a }
     }
@@ -349,6 +353,14 @@ impl UnifiedAllocationInner {
 // TODO
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};
+#[derive(Default)]
+struct AbsentPagesItemT {
+    // These two values can be used to aid in locating allocations if a direct Descriptor ID is not provided
+    /// Physical address of the page table the allocation was created in
+    pt_phys_addr: core::sync::atomic::AtomicUsize,
+    /// Virtual address of the allocation (in vmem)
+    virt_addr: core::sync::atomic::AtomicUsize,
+}
 struct AbsentPagesItemA {
     // TODO
     /// Offset within the unified allocation
@@ -356,9 +368,9 @@ struct AbsentPagesItemA {
 }
 struct AbsentPagesItemB {
 }
-type AbsentPagesTab = DescriptorTable<(),AbsentPagesItemA,AbsentPagesItemB,16,8>;
-type AbsentPagesHandleA = DescriptorHandleA<'static,(),AbsentPagesItemA,AbsentPagesItemB>;
-type AbsentPagesHandleB = DescriptorHandleB<'static,(),AbsentPagesItemA,AbsentPagesItemB>;
+type AbsentPagesTab = DescriptorTable<AbsentPagesItemT,AbsentPagesItemA,AbsentPagesItemB,16,8>;
+type AbsentPagesHandleA = DescriptorHandleA<'static,AbsentPagesItemT,AbsentPagesItemA,AbsentPagesItemB>;
+type AbsentPagesHandleB = DescriptorHandleB<'static,AbsentPagesItemT,AbsentPagesItemA,AbsentPagesItemB>;
 lazy_static::lazy_static! {
     static ref ABSENT_PAGES_TABLE: AbsentPagesTab = DescriptorTable::new();
 }

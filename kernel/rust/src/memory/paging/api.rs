@@ -561,6 +561,12 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     pub fn allocate_alignedoffset(&self, size: usize, alloc_strat: PageAllocationStrategies, phys_addr: usize) -> Option<PageAllocation<PFA>> {
         self.write_when_active().allocate_alignedoffset(size, alloc_strat, phys_addr)
     }
+    
+    /// Get the physical address of the page table
+    /// Intended for use as a heuristic only
+    pub fn get_phys_addr(&self) -> usize {
+        ptaddr_virt_to_phys(self.read().get_page_table_ptr() as usize)
+    }
 }
 
 pub struct PagingContext(LockedPageAllocator<BaseTLPageAllocator>);
@@ -1016,6 +1022,11 @@ pub trait AnyPageAllocation: core::fmt::Debug + Send {
     fn start(&self) -> PageAlignedAddressT;
     fn end(&self) -> PageAlignedAddressT;
     fn size(&self) -> PageAllocationSizeT;
+    
+    /// Get the physical address of the page table
+    /// Intended for use as a heuristic only
+    fn pt_phys_addr(&self) -> usize;
+    
     fn set_base_addr(&self, base_addr: usize, flags: PageFlags);
     fn set_absent(&self, data: usize);
     fn flush_tlb(&self);
@@ -1032,6 +1043,8 @@ impl<PFA:PageFrameAllocator + Send + Sync + 'static> AnyPageAllocation for PageA
     fn start(&self) -> PageAlignedAddressT { self.start() }
     fn end(&self) -> PageAlignedAddressT { self.end() }
     fn size(&self) -> PageAllocationSizeT { self.size() }
+    fn pt_phys_addr(&self) -> usize { self.allocator.get_phys_addr() }
+    
     fn set_base_addr(&self, base_addr: usize, flags: PageFlags) { self.set_base_addr(base_addr, flags) }
     fn set_absent(&self, data: usize) { self.set_absent(data) }
     fn flush_tlb(&self) { self.flush_tlb() }

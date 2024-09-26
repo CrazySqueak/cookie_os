@@ -152,6 +152,8 @@ pub fn crop_addr(addr: usize) -> usize {
 }
 /* Convert a virtual address to a physical address, for use with pointing the CPU to page tables. */
 pub fn ptaddr_virt_to_phys(vaddr: usize) -> usize {
+    debug_assert!(vaddr >= paging_root::global_pages::KERNEL_PTABLE_VADDR, "Page Table contents stored below KERNEL_PTABLE in vmem");
+    debug_assert!(vaddr < paging_root::global_pages::KERNEL_PTABLE_VADDR + TopLevelPageAllocator::PAGE_SIZE, "Page Table contents stored after KERNEL_PTABLE in vmem");
     vaddr-paging_root::global_pages::KERNEL_PTABLE_VADDR // note: this will break if the area where the page table lives is not offset-mapped (or if the address has been cropped to hold all 0s for non-canonical bits)
 }
 

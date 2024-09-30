@@ -144,6 +144,7 @@ struct AllocationBacking {
     requested_type: AllocationType,
     
     offset: PageAlignedOffsetT,
+    total_size: PageAllocationSizeT,
 }
 
 struct VirtualAllocation {
@@ -189,6 +190,7 @@ impl UnifiedAllocationInner {
                 size: size,
             }].into(),
             requested_type: btype,
+            total_size: size,
             offset: PageAlignedOffsetT::new(0),
         };
         Self {
@@ -237,6 +239,7 @@ impl UnifiedAllocationInner {  // EXPANSION/SHRINKING
             mode: allocation,
             size: size,
         });
+        self.backing.total_size = PageAllocationSizeT::new(self.backing.total_size.get() + size.get());
         self.backing.offset = add_offset_and_size!((self.backing.offset) - (size));
     }
     /// Expand this allocation upwards (into higher logical addresses) by the given amount
@@ -249,12 +252,13 @@ impl UnifiedAllocationInner {  // EXPANSION/SHRINKING
             mode: allocation,
             size: size,
         });
+        self.backing.total_size = PageAllocationSizeT::new(self.backing.total_size.get() + size.get());
         // (we don't have to update offset)
     }
     
     /// Attempt to expand all virtual memory allocations tied to this, such that they can hold this allocation in full
     /// Returns a Vec containing the index of each slot that is now large enough to fit the whole allocation.
-    fn expand_vmem(&mut self) -> Vec<usize> {
+    fn expand_vmem(&mut self) -> Vec<VirtAllocSlotIndex> {
         let bottom_offset: PageAlignedOffsetT = self.backing.offset;
         let top_offset: PageAlignedOffsetT = self.backing.sections.iter().fold(self.backing.offset, |a,sec|add_offset_and_size!((a) + (sec.get_size())));
         
@@ -503,7 +507,8 @@ impl UnifiedAllocationInner {  // PAGE REMAPPING
 
 impl UnifiedAllocationInner {  // VIRT SLOT ADDING/CLEARING
     /// Returns the index of the slot used
-    fn _new_virt_mapping(&mut self, allocation: Box<dyn AnyPageAllocation>, flags: PageFlags) -> usize {
+    /// If allocation.size is < self.size, this might only map part of the allocation. Changing offset to a value above zero allows you to offset the mapped area deeper into the unified allocation. (start of virt allocation = start of backing + offset)
+    fn _new_virt_mapping(&mut self, allocation: Box<dyn AnyPageAllocation>, flags: PageFlags, offset: PageAlignedOffsetT) -> VirtAllocSlotIndex {
         let (slot_idx, slot_mut) = match self.virt_slots.iter().position(Option::is_none) {
             Some(slot_idx) => {
                 let slot_mut = &mut self.virt_slots[slot_idx];
@@ -518,7 +523,7 @@ impl UnifiedAllocationInner {  // VIRT SLOT ADDING/CLEARING
         };
         
         // Initialise the slot
-        let offset = self.backing.offset;  // if allocation.size == self.backing.size (which it should be, then taking offset == backing.offset should line things up correctly
+        let offset = self.backing.offset + offset;
         *slot_mut = Some(VirtualSlot {
             allocations: vec![VirtualAllocation::new(allocation,offset)].into(),
             default_flags: flags,
@@ -531,13 +536,85 @@ impl UnifiedAllocationInner {  // VIRT SLOT ADDING/CLEARING
         slot_idx
     }
     /// Clear the given slot
-    fn _clear_virt_mapping(&mut self, slot: usize) {
+    fn _clear_virt_mapping(&mut self, slot: VirtAllocSlotIndex) {
         let prev_value = self.virt_slots[slot].take();
         debug_assert!(prev_value.is_some(), "Cleared virt stot that was already empty!");
         drop(prev_value);  // dropping the prev value will now clear the page mappings it previously held
     }
 }
-// TODO
+
+pub struct UnifiedAllocation(Arc<YMutex<UnifiedAllocationInner>>);
+impl UnifiedAllocation {
+    pub fn alloc_new(btype: AllocationType, size: PageAllocationSizeT) -> Self {
+        Self(Arc::new(YMutex::new(UnifiedAllocationInner::_alloc_new(btype, size))))
+    }
+    pub fn clone_ref(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+    
+    /// Get the current total size of this allocation
+    pub fn size(&self) -> PageAllocationSizeT {
+        self.0.lock().backing.total_size
+    }
+    
+    /// Expand downwards, returning the index of every virtual allocation that was successfully resized
+    pub fn expand_downwards(&self, size: PageAllocationSizeT) -> Vec<VirtAllocSlotIndex> {
+        let mut inner = self.0.lock();
+        inner.expand_downwards(size);
+        let successful_virts = inner.expand_vmem();
+        // (pages are remapped by expand_vmem)
+        return successful_virts;
+    }
+    /// Expand upwards, returning the index of every virtual allocation that was successfully resized
+    pub fn expand_upwards(&self, size: PageAllocationSizeT) -> Vec<VirtAllocSlotIndex> {
+        let mut inner = self.0.lock();
+        inner.expand_upwards(size);
+        let successful_virts = inner.expand_vmem();
+        // (pages are remapped by expand_vmem)
+        return successful_virts;
+    }
+    
+    /// Map a vmem allocation to point to this allocation.
+    /// If virt_allocation.size >= self.size, then offset should be zero. If virt_allocation.size < self.size, then offset may be set to a number to decide which part of this allocation gets mapped.
+    /// This returns an allocation guard. When the guard is dropped, the pages are unmapped from virtual memory.
+    ///
+    /// NOTE: You MUST NOT hold a lock on the PageAllocator you got the allocation from when calling this method, as that will cause a deadlock.
+    ///         All paging-related methods in this class assume that no PageAllocator locks are held in the current thread (and the lock internal to this allocation is always taken before it locks any pageallocators)
+    pub fn map_vmem<PFA:PageFrameAllocator+Send+Sync+'static>(&self, virt_allocation: Box<dyn AnyPageAllocation>, flags: PageFlags, offset: PageAlignedOffsetT) -> UnifiedVirtGuard {
+        let slot = self.0.lock()._new_virt_mapping(virt_allocation, flags, offset);
+        // page is mapped by _new_virt_mapping
+        return UnifiedVirtGuard { alloc: self.clone_ref(), slot_index: slot };
+    }
+}
+pub type VirtAllocSlotIndex = usize;
+
+pub struct UnifiedVirtGuard {
+    alloc: UnifiedAllocation,
+    slot_index: VirtAllocSlotIndex,
+}
+impl UnifiedVirtGuard {
+    pub fn get_alloc(&self) -> &UnifiedAllocation {
+        &self.alloc
+    }
+    pub fn get_slot_index(&self) -> VirtAllocSlotIndex {
+        self.slot_index
+    }
+    
+    /// Get the start and total size of this allocation in vmem.
+    pub fn get_bounds(&self) -> (PageAlignedAddressT,PageAllocationSizeT) {
+        let inner = self.alloc.0.lock();
+        let slot = inner.virt_slots[self.slot_index].as_ref().unwrap();
+        
+        let start = slot.allocations.front().unwrap().allocation.start();
+        let size = PageAllocationSizeT::new(slot.allocations.iter().fold(0,|a,x|a+x.size.get()));
+        (start, size)
+    }
+}
+impl core::ops::Drop for UnifiedVirtGuard {
+    fn drop(&mut self) {
+        self.alloc.0.lock()._clear_virt_mapping(self.slot_index)
+    }
+}
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};
 #[derive(Default)]

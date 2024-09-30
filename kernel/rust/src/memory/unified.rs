@@ -129,7 +129,7 @@ impl BackingSection {
     }
     
     /// Get whether this is read-only or read-write
-    /// (for unreadable types (such as reserved) -> an undefined but valid boolean)
+    /// (for unreadable types (such as reserved) -> an unspecified but valid boolean)
     pub fn is_read_only(&self) -> bool {
         const UD: bool = false;
         match self.mode {
@@ -185,7 +185,30 @@ impl UnifiedAllocationInner {
 
 impl UnifiedAllocationInner {  // EXPANSION/SHRINKING
     fn _allocate_new_backing(btype: AllocationType, size: PageAllocationSizeT) -> BackingType {
-        todo!()
+        match btype {
+            AllocationType::UninitMem | AllocationType::ZeroedMem => {
+                // RAM
+                let Some(phys_allocation) = palloc(size) else {
+                    // (reserved mem - must be reallocated later when more RAM is free)
+                    return BackingType::ReservedMem;
+                };
+                
+                // Initialise RAM
+                // SAFETY: The allocation is specified to have the given address and size, so we're good.
+                unsafe {
+                    let addr = phys_allocation.get_addr();
+                    debug_assert!(phys_allocation.get_size() >= size);
+                    btype.initialise(addr, size);
+                }
+                
+                // Return backing
+                BackingType::PhysMemExclusive(phys_allocation)
+            },
+            AllocationType::GuardPage(gptype) => {
+                // Guard Page (doesn't occupy RAM)
+                BackingType::ReservedMem
+            },
+        }
     }
     
     /// Expand this allocation downwards (into lower logical addresses) by the given amount
@@ -200,45 +223,64 @@ impl UnifiedAllocationInner {  // EXPANSION/SHRINKING
             size: size,
         });
         self.backing.offset = add_offset_and_size!((self.backing.offset) - (size));
+    }
+    /// Expand this allocation upwards (into higher logical addresses) by the given amount
+    fn expand_upwards(&mut self, size: PageAllocationSizeT) {
+        let alloc_type = self.backing.requested_type;
+        let allocation = Self::_allocate_new_backing(alloc_type, size);
         
+        // Update our backing sections
+        self.backing.sections.push_back(BackingSection {
+            mode: allocation,
+            size: size,
+        });
+        // (we don't have to update offset)
     }
     
     /// Attempt to expand all virtual memory allocations tied to this, such that they can hold this allocation in full
-    fn expand_vmem(&mut self) {
+    /// Returns a Vec containing the index of each slot that is now large enough to fit the whole allocation.
+    fn expand_vmem(&mut self) -> Vec<usize> {
         let bottom_offset: PageAlignedOffsetT = self.backing.offset;
         let top_offset: PageAlignedOffsetT = self.backing.sections.iter().fold(self.backing.offset, |a,sec|add_offset_and_size!((a) + (sec.get_size())));
         
         // Expand vmem downwards
-        for virt_slot in self.virt_slots.iter_mut().flatten() {
+        let mut successful_down = Vec::with_capacity(self.virt_slots.len());
+        for (virt_idx,virt_slot) in self.virt_slots.iter_mut().enumerate().filter_map(|(i,o)|Some((i,o.as_mut()?))) {
             let old_allocation = &mut virt_slot.allocations.front_mut().expect("VirtualAllocations should always have at least one section.").allocation;
             let old_offset = virt_slot.offset;
             
             let amount_missing = old_offset - bottom_offset;  // Figure out how much to expand by. If a previous downwards allocation failed, this will retry it. If there is excess, then the excess can be re-used.
-            if amount_missing.get() <= 0 { continue };  // skip if we already have enough
+            if amount_missing.get() <= 0 { successful_down.push(virt_idx); continue };  // skip if we already have enough
             let amount_missing = PageAllocationSizeT::new(amount_missing.get() as usize);
             
             let Some(new_allocation) = old_allocation.alloc_downwards_dyn(amount_missing) else{continue};  // attempt to allocate downwards
             // Success :)
             let new_allocation = VirtualAllocation::new(new_allocation, bottom_offset);
             virt_slot.allocations.push_front(new_allocation);
+            successful_down.push(virt_idx);
         }
         // Expand vmem upwards
-        for virt_slot in self.virt_slots.iter_mut().flatten() {
+        let mut successful_up = Vec::with_capacity(self.virt_slots.len());
+        for (virt_idx,virt_slot) in self.virt_slots.iter_mut().enumerate().filter_map(|(i,o)|Some((i,o.as_mut()?))) {
             let old_allocation = &mut virt_slot.allocations.back_mut().expect("VirtualAllocations should always have at least one section.").allocation;
             let old_offset = virt_slot.allocations.iter().fold(virt_slot.offset, |a,alloc|add_offset_and_size!((a) + (alloc.size)));
             
             let amount_missing = top_offset - old_offset ;
-            if amount_missing.get() <= 0 { continue };
+            if amount_missing.get() <= 0 { successful_up.push(virt_idx); continue };
             let amount_missing = PageAllocationSizeT::new(amount_missing.get() as usize);
             
             let Some(new_allocation) = None else{continue};  // TODO
             // Success :)
             let new_allocation = VirtualAllocation::new(new_allocation, old_offset);
             virt_slot.allocations.push_back(new_allocation);
+            successful_up.push(virt_idx);
         }
         
         // Remap vmem to match our backing sections
         self._remap_pages(None,false);
+        // Return successful slots
+        successful_down.retain(|x|successful_up.contains(x));
+        return successful_down;
     }
 }
 

@@ -181,6 +181,21 @@ struct UnifiedAllocationInner {
     backing: AllocationBacking,
 }
 impl UnifiedAllocationInner {
+    fn _alloc_new(btype: AllocationType, size: PageAllocationSizeT) -> Self {
+        let backing_item = Self::_allocate_new_backing(btype, size);
+        let backing = AllocationBacking {
+            sections: vec![BackingSection {
+                mode: backing_item,
+                size: size,
+            }].into(),
+            requested_type: btype,
+            offset: PageAlignedOffsetT::new(0),
+        };
+        Self {
+            virt_slots: vec![None],
+            backing: backing,
+        }
+    }
 }
 
 impl UnifiedAllocationInner {  // EXPANSION/SHRINKING
@@ -545,4 +560,34 @@ type AbsentPagesHandleA = DescriptorHandleA<'static,AbsentPagesItemT,AbsentPages
 type AbsentPagesHandleB = DescriptorHandleB<'static,AbsentPagesItemT,AbsentPagesItemA,AbsentPagesItemB>;
 lazy_static::lazy_static! {
     static ref ABSENT_PAGES_TABLE: AbsentPagesTab = DescriptorTable::new();
+}
+
+/// A special allocation, that is offset-mapped into the kernel data page table.
+/// Unlike UnifiedAllocations, this cannot be resized or swapped out, nor can it contain guard pages or similar utilities.
+/// It also cannot be shared, it is always mapped into the global kernel data page table.
+struct OffsetMappedAllocation {
+    virt: super::paging::global_pages::GlobalPageAllocation,  // virt before phys to ensure page table gets cleared first
+    phys: PhysicalMemoryAllocation,
+}
+impl OffsetMappedAllocation {
+    pub fn alloc_new(size: PageAllocationSizeT, flags: PageFlags) -> Option<Self> {
+        let phys = palloc(size)?;
+        let virt_addr = PageAlignedAddressT::new(phys.get_addr() + super::paging::global_pages::KERNEL_PTABLE_VADDR);
+        let virt = KERNEL_PTABLE.allocate_at(virt_addr, size);
+        debug_assert!(virt.is_some(), "VMem offset-mapped allocation failed? This should never be possible.");
+        let virt = virt?;
+        virt.set_base_addr(phys.get_addr(), flags);
+        Some(Self { phys, virt })
+    }
+    
+    pub fn get_phys_addr(&self) -> PageAlignedAddressT {
+        PageAlignedAddressT::new(self.phys.get_addr())
+    }
+    pub fn get_virt_addr(&self) -> PageAlignedAddressT {
+        self.virt.start()
+    }
+    pub fn get_size(&self) -> PageAllocationSizeT {
+        debug_assert!(self.phys.get_size() == self.virt.size());
+        self.phys.get_size()
+    }
 }

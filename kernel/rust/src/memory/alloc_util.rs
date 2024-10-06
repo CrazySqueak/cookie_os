@@ -53,7 +53,7 @@ impl DynOffsetMappedStack {
     /// (ideal for bootstrapping ATs)
     pub fn alloc_new_kernel(stack_size: PageAllocationSizeT, guard_size: PageAllocationSizeT) -> Option<Self> {
         let stack_allocation = OffsetMappedAllocation::alloc_new(stack_size, pageFlags!(t:WRITEABLE))?;
-        let guard_allocation = UnifiedAllocation::alloc_new(AllocationType::GuardPage(GuardPageType::StackLimit), guard_size);
+        let guard_allocation = UnifiedAllocation::alloc_new(AllocationType::GuardPage(GuardPageType::StackLimit), guard_size)?;
         let guard_allocation_virt = KERNEL_PTABLE.allocate_at(PageAlignedAddressT::new(stack_allocation.get_virt_addr().get()-guard_size.get()), guard_size);
         let guard_allocation = match guard_allocation_virt {
             Some(gav) => Some(guard_allocation.map_vmem(Box::new(gav), pageFlags!(), PageAlignedOffsetT::new(0))),

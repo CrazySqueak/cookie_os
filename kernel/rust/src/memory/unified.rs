@@ -178,8 +178,8 @@ struct UnifiedAllocationInner {
     backing: AllocationBacking,
 }
 impl UnifiedAllocationInner {
-    fn _alloc_new(btype: AllocationType, size: PageAllocationSizeT) -> Self {
-        let backing_item = Self::_allocate_new_backing(btype, size);
+    fn _alloc_new(btype: AllocationType, size: PageAllocationSizeT) -> Option<Self> {
+        let backing_item = Self::_allocate_new_backing(btype, size)?;
         let backing = AllocationBacking {
             sections: vec![BackingSection {
                 mode: backing_item,
@@ -189,22 +189,19 @@ impl UnifiedAllocationInner {
             total_size: size,
             offset: PageAlignedOffsetT::new(0),
         };
-        Self {
+        Some(Self {
             virt_slots: vec![None],
             backing: backing,
-        }
+        })
     }
 }
 
 impl UnifiedAllocationInner {  // EXPANSION/SHRINKING
-    fn _allocate_new_backing(btype: AllocationType, size: PageAllocationSizeT) -> BackingType {
+    fn _allocate_new_backing(btype: AllocationType, size: PageAllocationSizeT) -> Option<BackingType> {
         match btype {
             AllocationType::UninitMem | AllocationType::ZeroedMem => {
                 // RAM
-                let Some(phys_allocation) = palloc(size) else {
-                    // (reserved mem - must be reallocated later when more RAM is free)
-                    return BackingType::ReservedMem;
-                };
+                let phys_allocation = palloc(size)?;
                 
                 // Initialise RAM
                 // SAFETY: The allocation is specified to have the given address and size, so we're good.
@@ -215,20 +212,20 @@ impl UnifiedAllocationInner {  // EXPANSION/SHRINKING
                 }
                 
                 // Return backing
-                BackingType::PhysMemExclusive(phys_allocation)
+                Some(BackingType::PhysMemExclusive(phys_allocation))
             },
             AllocationType::GuardPage(gptype) => {
                 // Guard Page (doesn't occupy RAM)
-                BackingType::ReservedMem
+                Some(BackingType::ReservedMem)
             },
         }
     }
     
     /// Expand this allocation downwards (into lower logical addresses) by the given amount
-    fn expand_downwards(&mut self, size: PageAllocationSizeT) {
+    fn expand_downwards(&mut self, size: PageAllocationSizeT) -> bool {
         // Allocate the new backing
         let alloc_type = self.backing.requested_type;
-        let allocation = Self::_allocate_new_backing(alloc_type, size);
+        let Some(allocation) = Self::_allocate_new_backing(alloc_type, size) else {return false};
         
         // Update our backing sections
         self.backing.sections.push_front(BackingSection {
@@ -237,11 +234,12 @@ impl UnifiedAllocationInner {  // EXPANSION/SHRINKING
         });
         self.backing.total_size = PageAllocationSizeT::new(self.backing.total_size.get() + size.get());
         self.backing.offset = add_offset_and_size!((self.backing.offset) - (size));
+        true
     }
     /// Expand this allocation upwards (into higher logical addresses) by the given amount
-    fn expand_upwards(&mut self, size: PageAllocationSizeT) {
+    fn expand_upwards(&mut self, size: PageAllocationSizeT) -> bool {
         let alloc_type = self.backing.requested_type;
-        let allocation = Self::_allocate_new_backing(alloc_type, size);
+        let Some(allocation) = Self::_allocate_new_backing(alloc_type, size) else {return false};
         
         // Update our backing sections
         self.backing.sections.push_back(BackingSection {
@@ -250,6 +248,7 @@ impl UnifiedAllocationInner {  // EXPANSION/SHRINKING
         });
         self.backing.total_size = PageAllocationSizeT::new(self.backing.total_size.get() + size.get());
         // (we don't have to update offset)
+        true
     }
     
     /// Attempt to expand all virtual memory allocations tied to this, such that they can hold this allocation in full
@@ -542,8 +541,8 @@ impl UnifiedAllocationInner {  // VIRT SLOT ADDING/CLEARING
 
 pub struct UnifiedAllocation(Arc<YMutex<UnifiedAllocationInner>>);
 impl UnifiedAllocation {
-    pub fn alloc_new(btype: AllocationType, size: PageAllocationSizeT) -> Self {
-        Self(Arc::new(YMutex::new(UnifiedAllocationInner::_alloc_new(btype, size))))
+    pub fn alloc_new(btype: AllocationType, size: PageAllocationSizeT) -> Option<Self> {
+        Some(Self(Arc::new(YMutex::new(UnifiedAllocationInner::_alloc_new(btype, size)?))))
     }
     pub fn clone_ref(&self) -> Self {
         Self(Arc::clone(&self.0))
@@ -660,8 +659,8 @@ impl AllocatedStack {
         stack_size: PageAllocationSizeT, guard_size: PageAllocationSizeT,
         allocator: &LockedPageAllocator<PFA>, strategy: PageAllocationStrategies, page_flags: PageFlags,
     ) -> Option<Self> {
-        let main_alloc = UnifiedAllocation::alloc_new(AllocationType::UninitMem,stack_size);
-        let guard_alloc = UnifiedAllocation::alloc_new(AllocationType::GuardPage(GuardPageType::StackLimit),guard_size);
+        let main_alloc = UnifiedAllocation::alloc_new(AllocationType::UninitMem,stack_size)?;
+        let guard_alloc = UnifiedAllocation::alloc_new(AllocationType::GuardPage(GuardPageType::StackLimit),guard_size)?;
 
         let size_total = PageAllocationSizeT::new(stack_size.get() + guard_size.get());
         let virt_total = allocator.allocate(size_total, strategy)?;

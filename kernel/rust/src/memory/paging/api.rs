@@ -581,6 +581,12 @@ impl PagingContext {
             // SAFETY: See documentation for put_global_table and GLOBAL_TABLE_PHYSADDRS
             unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i, phys_addr, flags); }
         }
+        // Add kernel static global page
+        {
+            let phys_addr = *global_pages::KERNEL_STATIC_PHYSADDR;
+            let flags = *global_pages::KERNEL_STATIC_FLAGS;
+            unsafe{ allocator.put_global_table(global_pages::KERNEL_STATIC_PT_IDX, phys_addr, flags); }
+        }
         // Return
         let dopts = LPAWGOptions::new_default();
         Self(LockedPageAllocator::new(allocator, LPAMetadata { offset: 0, default_options: dopts }))
@@ -768,9 +774,10 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
                         PAllocItem::SubTable { index, offset, alloc: suballoc } => {
                             // It's a table, so we can split this if recurse
                             let suballocator = pfa.get_suballocator_mut(index).expect("Allocation expected sub-allocator but none was found!");
-                            let (left, right) = Self::_split_alloc_inner(suballocator, suballoc, mid.checked_sub(offset).unwrap());
+                            let lhs_size = mid.checked_sub(offset).unwrap();
+                            let (left, right) = Self::_split_alloc_inner(suballocator, suballoc, lhs_size);
                             lhs.push(PAllocItem::SubTable { index, offset, alloc: left });
-                            rhs.push(PAllocItem::SubTable { index, offset, alloc: right });
+                            rhs.push(PAllocItem::SubTable { index, offset:offset+lhs_size, alloc: right });
                         }
                         
                         PAllocItem::Page { index, offset } => {
@@ -779,13 +786,13 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
                             if let Ok(suballocation) = result {
                                 // Success - split the newly created table
                                 let suballocator = pfa.get_suballocator_mut(index).unwrap();
-                                let (left, right) = Self::_split_alloc_inner(suballocator, suballocation, mid.checked_sub(offset).unwrap());
+                                let lhs_size = mid.checked_sub(offset).unwrap();
+                                let (left, right) = Self::_split_alloc_inner(suballocator, suballocation, lhs_size);
                                 lhs.push(PAllocItem::SubTable { index, offset, alloc: left });
-                                rhs.push(PAllocItem::SubTable { index, offset, alloc: right });
+                                rhs.push(PAllocItem::SubTable { index, offset:offset+lhs_size, alloc: right });
                             } else {
                                 // \_(o.o)_/
-                                // round up so lhs.size is always >= mid
-                                lhs.push(PAllocItem::Page { index, offset });
+                                panic!("FUCK");
                             }
                         }
                     }

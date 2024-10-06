@@ -14,6 +14,9 @@ use crate::logging::klog;
 extern "C" {
     static kernel_phys_start: u8;
     static kernel_phys_end: u8;
+    
+    static kdata_phys_start: u8;
+    static kdata_phys_end: u8;
 }
 /* Get the kernel's start and end in physical memory. (start inclusive, end exclusive)
 This covers the executable, bss, etc. sections, but does not cover any memory that was dynamically allocated afterwards.
@@ -21,6 +24,12 @@ This covers the executable, bss, etc. sections, but does not cover any memory th
 pub fn get_kernel_bounds() -> (usize, usize) {
     unsafe {
         (addr_of!(kernel_phys_start) as usize, addr_of!(kernel_phys_end) as usize)
+    }
+}
+/* Get the physical memory bounds of the "kernel data" section, containing the initial heap and stack. */
+pub fn get_kernel_data_bounds() -> (usize, usize) {
+    unsafe {
+        (addr_of!(kdata_phys_start) as usize, addr_of!(kdata_phys_end) as usize)
     }
 }
 

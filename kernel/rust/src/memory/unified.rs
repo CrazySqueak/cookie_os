@@ -4,7 +4,8 @@ use alloc::boxed::Box;
 use alloc::vec::Vec; use alloc::vec;
 use alloc::collections::VecDeque;
 use alloc::sync::{Arc,Weak};
-use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,PageAlignedValue,PageAllocationSizeT,PageAlignedOffsetT,PageAlignedAddressT,PageFlags,pageFlags};
+use core::fmt::{Debug, Formatter};
+use super::paging::{LockedPageAllocator, PageFrameAllocator, AnyPageAllocation, PageAllocation, PageAlignedValue, PageAllocationSizeT, PageAlignedOffsetT, PageAlignedAddressT, PageFlags, pageFlags};
 use super::physical::{PhysicalMemoryAllocation,palloc};
 use bitflags::bitflags;
 use crate::sync::{YMutex, YMutexGuard, ArcYMutexGuard, MappedYMutexGuard};
@@ -12,11 +13,6 @@ use crate::logging::klog;
 
 use super::paging::{global_pages::KERNEL_PTABLE,strategy::KALLOCATION_KERNEL_GENERALDYN,strategy::PageAllocationStrategies};
 
-macro_rules! vec_of_non_clone {
-    [$item:expr ; $count:expr] => {
-        Vec::from_iter((0..$count).map(|_|$item))
-    }
-}
 macro_rules! add_offset_and_size {
     (($offset:expr) + ($size:expr)) => {
         {
@@ -60,7 +56,7 @@ impl AllocationType {
     fn _map_into_vmem(phys_addr: usize, size: PageAllocationSizeT) -> (impl AnyPageAllocation,*mut u8) {
         // Map requested physmem into kernel space
         let vmap = KERNEL_PTABLE.allocate(size, KALLOCATION_KERNEL_GENERALDYN).unwrap();
-        vmap.set_base_addr(phys_addr, pageFlags!(m:PINNED));
+        vmap.set_base_addr(phys_addr, pageFlags!(t:WRITEABLE,m:PINNED));
         let ptr = vmap.start().get() as *mut u8;
         // Done :)
         (vmap, ptr)
@@ -314,11 +310,12 @@ impl UnifiedAllocationInner {  // PAGE REMAPPING
                 // Determine flags to use
                 let mut flags: PageFlags = slot.default_flags;
                 if force_readonly || section.is_read_only() { flags -= pageFlags!(t:WRITEABLE); }
-                
+                klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t\t\t\t Mapping -> phys={:x} flags={:?}", addr, flags);
                 virt.allocation.set_base_addr(addr, flags);
             },
             None => {
                 let abt_id: usize = virt.absent_pages_table_handle.get_id().try_into().unwrap();
+                klog!(Debug, MEMORY_UNIFIED_PAGEMAPPING, "\t\t\t\t Mapping -> absent (ID#{})", abt_id);
                 virt.allocation.set_absent(abt_id);
             },
         }
@@ -623,6 +620,8 @@ impl core::ops::Drop for UnifiedVirtGuard {
 }
 
 use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};
+use crate::memory::alloc_util::AnyAllocatedStack;
+
 #[derive(Default)]
 struct AbsentPagesItemT {
     // These two values can be used to aid in locating allocations if a direct Descriptor ID is not provided
@@ -729,6 +728,20 @@ impl AllocatedStack {
 
         // Done :)
         true
+    }
+}
+impl Debug for AllocatedStack {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "AllocatedStack[bottom={:x},size={:x}]", self.bottom_vaddr(), self.stack_main.get_bounds().1.get())
+    }
+}
+impl AnyAllocatedStack for AllocatedStack {
+    fn bottom_vaddr(&self) -> usize {
+        self.bottom_vaddr().get()
+    }
+
+    fn expand(&mut self, bytes: usize) -> bool {
+        self.expand(PageAllocationSizeT::new_rounded(bytes))
     }
 }
 

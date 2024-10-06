@@ -22,12 +22,14 @@ extern "C" {
 This covers the executable, bss, etc. sections, but does not cover any memory that was dynamically allocated afterwards.
 (N.B. since the initial kernel heap is defined in the .bss section, that IS included, but if the heap is expanded afterwards then the expanded parts won't be included.) */
 pub fn get_kernel_bounds() -> (usize, usize) {
+    #[allow(unused_unsafe)]  // cargo and intellij don't agree on this
     unsafe {
         (addr_of!(kernel_phys_start) as usize, addr_of!(kernel_phys_end) as usize)
     }
 }
 /* Get the physical memory bounds of the "kernel data" section, containing the initial heap and stack. */
 pub fn get_kernel_data_bounds() -> (usize, usize) {
+    #[allow(unused_unsafe)]  // cargo and intellij don't agree on this
     unsafe {
         (addr_of!(kdata_phys_start) as usize, addr_of!(kdata_phys_end) as usize)
     }

@@ -402,7 +402,7 @@ bitflags::bitflags! {
 macro_rules! pageFlags {
     ($($k:ident:$i:ident),*) => {{
         use $crate::memory::paging::{PageFlags,TransitivePageFlags as t,MappingSpecificPageFlags as m};
-        PageFlags::empty() $(| $k::$i)+
+        PageFlags::empty() $(| $k::$i)*
     }}
 }
 pub(crate) use pageFlags;

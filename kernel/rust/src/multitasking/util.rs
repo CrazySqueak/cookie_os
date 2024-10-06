@@ -2,10 +2,17 @@
 pub type TaskEntryPoint = extern "sysv64" fn() -> !;
 pub type TaskEntryPointV<T> = extern "sysv64" fn(*mut T) -> !;
 
+pub fn allocate_kernel_task_stack() -> Option<impl AnyAllocatedStack> {
+    unified::AllocatedStack::alloc_new(
+        PageAllocationSizeT::new(256*1024), PageAllocationSizeT::new_rounded(1),
+        &KERNEL_PTABLE, KALLOCATION_KERNEL_STACK, pageFlags!(t:WRITEABLE)
+    )
+}
+
 /// Create and start a new kernel task on the current CPU, with the default stack size and settings
 /// Returns the task ID.
 pub fn spawn_kernel_task(entry: TaskEntryPoint) -> usize {
-    let kstack = crate::memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
+    let kstack = allocate_kernel_task_stack().unwrap();
     let task = super::Task::new_kernel_task(entry, alloc::boxed::Box::new(kstack));
     let task_id = task.task_id();
     super::scheduler::push_task(task);
@@ -13,7 +20,7 @@ pub fn spawn_kernel_task(entry: TaskEntryPoint) -> usize {
 }
 
 pub fn spawn_kernel_task_v<T:Sized>(entry: TaskEntryPointV<T>, arg: *mut T) -> usize {
-    let kstack = crate::memory::alloc_util::AllocatedStack::allocate_ktask().unwrap();
+    let kstack = allocate_kernel_task_stack().unwrap();
     let task = super::Task::new_kernel_task_v(entry, alloc::boxed::Box::new(kstack), arg);
     let task_id = task.task_id();
     super::scheduler::push_task(task);
@@ -54,6 +61,10 @@ macro_rules! def_task_fn {
     };
 }
 pub(crate) use def_task_fn;
+use crate::memory::alloc_util::AnyAllocatedStack;
+use crate::memory::paging::{pageFlags, PageAlignedValue, PageAllocationSizeT, KALLOCATION_KERNEL_STACK};
+use crate::memory::paging::global_pages::KERNEL_PTABLE;
+use crate::memory::unified;
 
 def_task_fn! {
     pub task fn call_task_dyn(closure:Box<dyn FnOnce()>){

@@ -7,7 +7,7 @@ use alloc::sync::{Arc,Weak};
 use super::paging::{LockedPageAllocator,PageFrameAllocator,AnyPageAllocation,PageAllocation,PageAlignedValue,PageAllocationSizeT,PageAlignedOffsetT,PageAlignedAddressT,PageFlags,pageFlags};
 use super::physical::{PhysicalMemoryAllocation,palloc};
 use bitflags::bitflags;
-use crate::sync::{YMutex,YMutexGuard,ArcYMutexGuard};
+use crate::sync::{YMutex, YMutexGuard, ArcYMutexGuard, MappedYMutexGuard};
 use crate::logging::klog;
 
 use super::paging::{global_pages::KERNEL_PTABLE,strategy::KALLOCATION_KERNEL_GENERALDYN,strategy::PageAllocationStrategies};
@@ -580,7 +580,7 @@ impl UnifiedAllocation {
     ///
     /// NOTE: You MUST NOT hold a lock on the PageAllocator you got the allocation from when calling this method, as that will cause a deadlock.
     ///         All paging-related methods in this class assume that no PageAllocator locks are held in the current thread (and the lock internal to this allocation is always taken before it locks any pageallocators)
-    pub fn map_vmem<PFA:PageFrameAllocator+Send+Sync+'static>(&self, virt_allocation: Box<dyn AnyPageAllocation>, flags: PageFlags, offset: PageAlignedOffsetT) -> UnifiedVirtGuard {
+    pub fn map_vmem(&self, virt_allocation: Box<dyn AnyPageAllocation>, flags: PageFlags, offset: PageAlignedOffsetT) -> UnifiedVirtGuard {
         let slot = self.0.lock()._new_virt_mapping(virt_allocation, flags, offset);
         // page is mapped by _new_virt_mapping
         return UnifiedVirtGuard { alloc: self.clone_ref(), slot_index: slot };
@@ -598,6 +598,12 @@ impl UnifiedVirtGuard {
     }
     pub fn get_slot_index(&self) -> VirtAllocSlotIndex {
         self.slot_index
+    }
+
+    pub(self) fn slot_mut(&self) -> MappedYMutexGuard<VirtualSlot> {
+        YMutexGuard::map(self.alloc.0.lock(), |inner|
+            inner.virt_slots[self.slot_index].as_mut().unwrap()
+        )
     }
     
     /// Get the start and total size of this allocation in vmem.
@@ -639,10 +645,97 @@ lazy_static::lazy_static! {
     static ref ABSENT_PAGES_TABLE: AbsentPagesTab = DescriptorTable::new();
 }
 
+// == SPECIALISED ALLOCATIONS ==
+/// A special allocation - represents a stack which can be expanded.
+/// Stacks are privately owned by their respective vmem allocations.
+/// (assumes stack grows downwards)
+pub struct AllocatedStack {
+    stack_main: UnifiedVirtGuard,
+    guard_page: UnifiedVirtGuard,
+
+    page_flags: PageFlags,
+    guard_size: PageAllocationSizeT,
+}
+impl AllocatedStack {
+    pub fn alloc_new<PFA:PageFrameAllocator+Send+Sync+'static>(
+        stack_size: PageAllocationSizeT, guard_size: PageAllocationSizeT,
+        allocator: &LockedPageAllocator<PFA>, strategy: PageAllocationStrategies, page_flags: PageFlags,
+    ) -> Option<Self> {
+        let main_alloc = UnifiedAllocation::alloc_new(AllocationType::UninitMem,stack_size);
+        let guard_alloc = UnifiedAllocation::alloc_new(AllocationType::GuardPage(GuardPageType::StackLimit),guard_size);
+
+        let size_total = PageAllocationSizeT::new(stack_size.get() + guard_size.get());
+        let virt_total = allocator.allocate(size_total, strategy)?;
+        let (virt_guard, virt_main) = virt_total.split(guard_size);
+        let virt_guard = Box::new(virt_guard); let virt_main = Box::new(virt_main);
+
+        let vu_guard = guard_alloc.map_vmem(virt_guard, page_flags, PageAlignedOffsetT::new(0));
+        let vu_main = main_alloc.map_vmem(virt_main, page_flags, PageAlignedOffsetT::new(0));
+
+        Some(Self {
+            stack_main: vu_main,
+            guard_page: vu_guard,
+            guard_size, page_flags,
+        })
+    }
+
+    /// Get the bottom of the stack
+    pub fn bottom_vaddr(&self) -> PageAlignedAddressT {
+        let (max_top, size) = self.stack_main.get_bounds();
+        PageAlignedAddressT::new(max_top.get() + size.get())
+    }
+
+    pub fn expand(&mut self, amount: PageAllocationSizeT) -> bool {
+        let extra_amount = PageAllocationSizeT::new_checked(amount.get()-self.guard_size.get());
+        let total_to_allocate = PageAllocationSizeT::new(extra_amount.unwrap_or(PageAllocationSizeT::new(0)).get() + self.guard_size.get());
+
+        // Check we can allocate what we need
+        let Some(new_alloc) = self.guard_page.slot_mut().allocations[0].allocation.alloc_downwards_dyn(total_to_allocate) else {
+            return false;  // we failed - we can return without having to put anything back
+        };
+        // And split into "new guard page" and "extra main beyond the previous guard page"
+        // (we re-use the previous guard page's virt allocation for efficiency's sake)
+        let (new_guard_alloc, extra_main_alloc) = if let Some(extra_amount) = extra_amount {
+            let (lhs, rhs) = new_alloc.split_dyn(self.guard_size);
+            (lhs, Some(rhs))
+        } else {
+            (new_alloc, None)
+        };
+
+        // Move old guard page allocation (+ extra main) over to start of main allocation
+        // (this method isn't exposed publically because only we can guarantee that these two allocations
+        //  are back-to-back in virtual memory)
+        {
+            let guard_virt_allocs: Vec<_> = self.guard_page.slot_mut().allocations.drain(..).collect();
+            let mut main_slot_mut = self.stack_main.slot_mut();
+            for gva in guard_virt_allocs.into_iter().rev() {
+                let new_offset = add_offset_and_size!((main_slot_mut.offset) - (gva.size));
+                main_slot_mut.offset = new_offset;  // update start offset
+                let gva = VirtualAllocation::new(gva.allocation, new_offset);  // update the absent pages table
+                main_slot_mut.allocations.push_front(gva);  // add allocation to the start
+            }
+            if let Some(extra_main_virt) = extra_main_alloc {
+                let new_offset = add_offset_and_size!((main_slot_mut.offset) - (extra_main_virt.size()));
+                main_slot_mut.offset = new_offset;
+                let eva = VirtualAllocation::new(extra_main_virt, new_offset);
+                main_slot_mut.allocations.push_front(eva);
+            }
+        }
+        let expansion_results = self.stack_main.alloc.expand_downwards(amount);
+        debug_assert!(expansion_results.contains(&self.stack_main.slot_index));  // this should always succeed as we literally just pushed the extra allocations necessary
+
+        // Map new guard page
+        self.guard_page = self.guard_page.alloc.map_vmem(new_guard_alloc, self.page_flags, PageAlignedOffsetT::new(0));
+
+        // Done :)
+        true
+    }
+}
+
 /// A special allocation, that is offset-mapped into the kernel data page table.
 /// Unlike UnifiedAllocations, this cannot be resized or swapped out, nor can it contain guard pages or similar utilities.
 /// It also cannot be shared, it is always mapped into the global kernel data page table.
-struct OffsetMappedAllocation {
+pub struct OffsetMappedAllocation {
     virt: super::paging::global_pages::GlobalPageAllocation,  // virt before phys to ensure page table gets cleared first
     phys: PhysicalMemoryAllocation,
 }

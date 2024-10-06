@@ -3,6 +3,8 @@ use core::alloc::Layout;
 use buddy_system_allocator::LockedHeap;
 
 use crate::logging::klog;
+use crate::memory::paging::{pageFlags, PageAlignedValue, PageAllocationSizeT};
+use crate::memory::unified::OffsetMappedAllocation;
 use crate::multitasking::interruptions::_without_interruptions_noalloc;
 
 extern "C" {
@@ -52,7 +54,7 @@ static KHEAP_ALLOCATOR: KernelHeap = KernelHeap::new();
 pub unsafe fn init_kheap(){
     // Init heap
     KHEAP_ALLOCATOR.init(kheap_initial_addr as usize,kheap_initial_size as usize);
-    
+
     // Success
     // Note: Logging would be unsafe here as the CPU locals have not been initialised yet (including the CPU number, which is referenced by the logger)
     //klog!(Info, MEMORY_KHEAP, "Initialised kernel heap with {} bytes.", kheap_initial_size);
@@ -66,111 +68,94 @@ pub(super) unsafe fn reclaim_for_heap(start: *mut u8, end: *mut u8) {
 
 pub unsafe fn init_kheap_2(){
     // Init rescue
-    // _reinit_rescue::spawn();
+    _reinit_rescue::spawn();
 }
 
 unsafe fn on_oom(heap: &LockedHeap<32>, layout: &Layout) {
     // N.B. Calling disable_interruptions in this function is unsafe unless it can be proven that the previous no_interruptions state will be restored exactly as it was by the end of this function.
     // This means that using KMutexes is probably safe provided you DROP THE GUARD before the end of the function, but not much else can be guaranteed.
-    todo!()
+
+   unsafe {
+       if _use_rescue(heap).is_ok() {
+           // Reinit rescue if we successfully used the previous one
+           // (we can't re-init if rescue failed because there might not be enough heap space to allocate more memory)
+           // (which is the reason why we have a pre-allocated rescue in the first place)
+           _reinit_rescue::spawn();
+
+           // Also, allocate more memory if possible, so we don't have to rescue so often
+           _expand_further_post_rescue::spawn();
+       }
+   }
 }
 
-/*
 /* Allocate some extra physical memory to the kernel heap.
     (note: the kernel heap's PhysicalMemoryAllocations are currently not kept anywhere, so they cannot be freed again. Use this function with care.)
     Size is in bytes.
     Return value is the actual number of bytes added, or Err if it was unable to allocate the requested space.
     */
-pub fn grow_kheap(amount: usize) -> Result<usize,()>{
+pub fn grow_kheap(amount: PageAllocationSizeT) -> Result<usize,()>{
     use super::physical::palloc;
     use core::mem::forget;
     use core::alloc::Layout;
-    
-    // Step 1: allocate physical memory
-    let l = Layout::from_size_align(amount, 4096).unwrap();
+
+    // Allocate memory
     klog!(Debug, MEMORY_KHEAP, "Expanding kernel heap by {} bytes...", amount);
-    let allocation = palloc(l).ok_or_else(||{
+    let allocation = OffsetMappedAllocation::alloc_new(amount, pageFlags!(t:WRITEABLE)).ok_or_else(||{
         klog!(Severe, MEMORY_KHEAP, "Unable to expand kernel heap! Requested {} bytes but allocation failed.", amount);
     })?;
-    let bytes_added = allocation.get_size();
-    
-    // Step 2: allocate virtual memory
-    use super::paging::global_pages::KERNEL_PTABLE;
-    use super::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
-    let valloc = KERNEL_PTABLE.allocate_at(KERNEL_PTABLE.get_vmem_offset()+allocation.get_addr(), bytes_added).ok_or_else(||{
-        klog!(Severe, MEMORY_KHEAP, "Unable to expand kernel heap! Received memory that is unable to be mapped?");  // This should only occur if somehow the page mappings have been fucked up (or i've added swapping support but didn't update this)
-    })?;
-    valloc.set_base_addr(allocation.get_addr(), PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::empty()));
-    
-    klog!(Info, MEMORY_KHEAP, "Expanded kernel heap by {} bytes.", bytes_added);
+    let bytes_added = allocation.get_size().get();
     
     unsafe {
         // Add allocation to heap
-        KHEAP_ALLOCATOR.init(valloc.start(), bytes_added);
+        KHEAP_ALLOCATOR.init(allocation.get_virt_addr().get(), bytes_added);
         // forget the allocation
         // (so that the destructor isn't called)
         // (as the destructor frees it)
-        forget(allocation); forget(valloc);
+        forget(allocation);
     }
     
     Ok(bytes_added)
 }
 
 // RESCUE
-use super::paging::global_pages::KERNEL_PTABLE;
-use super::paging::PageAllocation;
-use super::physical::{palloc,PhysicalMemoryAllocation};
-use buddy_system_allocator::Heap;
-use core::alloc::Layout;
-use crate::sync::kspin::KMutex;  // use a spinlock for the heap rather than scheduler yield - the scheduler could easily end up using the heap
 // As allocating new memory may require heap memory, we keep a 1MiB rescue section pre-allocated.
-const RESCUE_SIZE: usize = 1*1024*1024;  // 1MiB
-type RescueT = (PhysicalMemoryAllocation,PageAllocation<super::paging::global_pages::GlobalPTType>);
+const RESCUE_SIZE: PageAllocationSizeT = PageAllocationSizeT::new_const(1*1024*1024);  // 1MiB
+const POST_RESCUE_EXPAND_SIZE: PageAllocationSizeT = PageAllocationSizeT::new_const(7*1024*1024);  // 7MiB
+type RescueT = OffsetMappedAllocation;
 static GLOBAL_RESCUE: KMutex<Option<RescueT>> = KMutex::new(None);
-
-fn on_oom(heap: &LockedHeap<32>, layout: &Layout){
-    unsafe {
-        if _use_rescue(heap).is_ok() {
-            // Reinit rescue if we successfully used the previous one
-            // (we can't re-init if rescue failed because there might not be enough heap space to allocate more memory)
-            // (which is the reason why we have a pre-allocated rescue in the first place)
-            //_reinit_rescue(&mut rescue);
-            _reinit_rescue::spawn();
-        }
-    }
-}
 
 // note: interrupts are already disabled when _use_rescue is called
 unsafe fn _use_rescue(heap: &LockedHeap<32>) -> Result<(),()> {
     // Expand heap
-    let (pallocation, vallocation) = match GLOBAL_RESCUE.try_lock().and_then(|mut r|r.take()){ Some(x)=>x, None=>return Err(()), };
-    heap.lock().init(vallocation.start(), vallocation.size());  // (note: this assumes that the allocation is contiguous (which it should be))
+    let allocation = match GLOBAL_RESCUE.try_lock().and_then(|mut r|r.take()){ Some(x)=>x, None=>return Err(()), };
+    heap.lock().init(allocation.get_virt_addr().get(), allocation.get_size().get());
     // Forget allocation so that it doesn't get Drop'd and deallocated
-    core::mem::forget(pallocation); vallocation.leak();
-    // klog!(Info, MEMORY_KHEAP, "Rescued kernel heap.");
+    core::mem::forget(allocation);  // this is in a global page so it'll be fine (hopefully) - oh god i forgot how many Arc<>s stay around if you leak an allocation like this
+    _notify_rescue_used::spawn();  // we can't log here anymore so we launch a task instead
     Ok(())
 }
 
 use crate::multitasking::util::def_task_fn;
+use crate::sync::kspin::KMutex;
+
+def_task_fn!(task fn _notify_rescue_used() {
+    klog!(Info, MEMORY_KHEAP, "Rescued kernel heap.");
+});
 def_task_fn!(task fn _reinit_rescue(){
     klog!(Debug, MEMORY_KHEAP, "Allocating new rescue...");
-    let kernel_table = &KERNEL_PTABLE;
-    let newrescue = (||{
-        use crate::memory::paging::{PageFlags,TransitivePageFlags,MappingSpecificPageFlags};
-        let pallocation = palloc(Layout::from_size_align(RESCUE_SIZE,1).unwrap())?;
-        let vallocation = kernel_table.allocate_at(KERNEL_PTABLE.get_vmem_offset()+pallocation.get_addr(), pallocation.get_size())?;
-        vallocation.set_base_addr(pallocation.get_addr(), PageFlags::new(TransitivePageFlags::empty(),MappingSpecificPageFlags::empty()));
-        Some((pallocation, vallocation))
-    })();
+    let newrescue = OffsetMappedAllocation::alloc_new(RESCUE_SIZE, pageFlags!(t:WRITEABLE));
     match newrescue {
         Some(nr) => {
-            let paddr = nr.0.get_addr(); let vaddr = nr.1.start(); let vsize = nr.1.size();
-            crate::multitasking::without_interruptions(||{let _=GLOBAL_RESCUE.lock().insert(nr);});
-            klog!(Info, MEMORY_KHEAP, "Allocated new rescue @ V={:x} size {} | P={:x}", vaddr, vsize, paddr);
-        },
+            klog!(Info, MEMORY_KHEAP, "Allocated new rescue @ V={:x} size {} | P={:x}", nr.get_virt_addr(), nr.get_size(), nr.get_phys_addr());
+            *GLOBAL_RESCUE.lock() = Some(nr);
+        }
         None => {
-            klog!(Severe, MEMORY_KHEAP, "Unable to allocate new rescue! Next kernel OOM will crash!");
-        },
+            klog!(Severe,MEMORY_KHEAP, "Unable to allocate new rescue! Next kernel OOM will crash!");
+            // TODO: Reschedule again later
+        }
     }
 });
-*/
+def_task_fn!(task fn _expand_further_post_rescue(){
+    // Expand the heap further post-rescue
+    let _ = grow_kheap(POST_RESCUE_EXPAND_SIZE);
+});

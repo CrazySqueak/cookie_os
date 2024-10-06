@@ -756,7 +756,7 @@ impl OffsetMappedAllocation {
     pub fn alloc_new(size: PageAllocationSizeT, flags: PageFlags) -> Option<Self> {
         let phys = palloc(size)?;
         let virt_addr = PageAlignedAddressT::new(phys.get_addr() + super::paging::global_pages::KERNEL_PTABLE_VADDR);
-        let virt = KERNEL_PTABLE.allocate_at(virt_addr, size);
+        let virt = KERNEL_PTABLE.allocate_at(virt_addr, phys.get_size());  // (allocated amount may be larger than requested due to allocator limitations)
         debug_assert!(virt.is_some(), "VMem offset-mapped allocation failed? This should never be possible.");
         let virt = virt?;
         virt.set_base_addr(phys.get_addr(), flags);

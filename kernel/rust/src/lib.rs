@@ -21,7 +21,10 @@ pub mod sync;
 pub mod coredrivers;
 
 pub mod logging;
-use logging::{klog,emergency_kernel_log};
+
+use alloc::boxed::Box;
+use core::ops::Deref;
+use logging::{klog, emergency_kernel_log};
 pub mod panic;
 
 pub mod descriptors;
@@ -40,6 +43,7 @@ macro_rules! arch_specific_module {
     }
 }
 pub(crate) use arch_specific_module;
+use crate::multitasking::spin_yield;
 
 #[no_mangle]
 pub extern "sysv64" fn _kstart() -> ! {
@@ -56,7 +60,7 @@ pub extern "sysv64" fn _kstart() -> ! {
     cpu::init_bsp();
     // Initialise scheduler
     multitasking::scheduler::init_scheduler(None);
-    
+
     // Configure physical memory
     //klog!(Info, BOOT, "Initialising physical memory allocator...");
     let memmap = coredrivers::parse_multiboot::MULTIBOOT_MEMORY_MAP.expect("No memory map found!");
@@ -65,13 +69,24 @@ pub extern "sysv64" fn _kstart() -> ! {
     //klog!(Info, BOOT, "Initialising virtual memory mappings...");
     let pagetable = memory::alloc_util::new_user_paging_context();
     unsafe{pagetable.activate()};
+    // Initialise kernel heap rescue
+    unsafe { memory::kernel_heap::init_kheap_2(); }
     
     klog!(Info, ROOT, "Spawning test tasks...");
     let test = equals_fourty_two::spawn(42);
     let test2 = equals_fourty_two::spawn(69);
     assert!(test.1.get().unwrap());
     assert!(!test2.1.get().unwrap());
-    
+
+    let mut test_total: usize = 0;
+    loop {
+        let test1234 = Box::new([0u8; 16*1024]);
+        test_total += size_of_val(test1234.deref());
+        klog!(Info, ROOT, "heap test: {}KiB", test_total/1024);
+        Box::leak(test1234);
+        spin_yield()  // we have to actually yield to allow the rescue to be re-allocated
+    }
+
     // TODO
     //let x = multitasking::interruptions::disable_interruptions();
     klog!(Info, BOOT, "Further boot process not yet implemented.");

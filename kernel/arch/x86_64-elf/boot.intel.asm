@@ -141,14 +141,18 @@ configure_identity_paging:
     mov [p4_table], eax
     
     ; map second P4 entry for higher half kernel
-    mov eax, p3_table  ; point to the same physical addresses
-    or eax, PAGEFLAG_PRESENT_WRITEABLE
+    ; eax is still p3_table + PAGEFLAG_PRESENT_WRITEABLE
+    mov [p4_table + 511 * 8 ], eax
+    ; map third P4 entry for hhdata (mostly just the kernel heap)
     mov [p4_table + 256 * 8 ], eax
     
     ; map first P3 entry (0x...0000_0000 - 0x...4000_0000)
     mov eax, p2_table
     or eax, PAGEFLAG_PRESENT_WRITEABLE
     mov [p3_table], eax
+    ; map P3[510] as well, so mcmodel=kernel works correctly (as the kernel should be at -2G)
+    ; eax is still p2_table + PAGEFLAG_PRESENT_WRITEABLE
+    mov [p3_table + 510 * 8 ], eax
     
     ; map each P2 entry to a huge page (a huge page covers the entire address space for that entry, instead of pointing to another table containing subdivisions)
     mov ecx, 0

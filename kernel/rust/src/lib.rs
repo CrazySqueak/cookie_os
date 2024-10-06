@@ -4,8 +4,8 @@
 #![feature(sync_unsafe_cell)]
 #![feature(box_into_inner)]
 #![feature(vec_pop_if)]
-#![feature(new_uninit)]
-#![feature(asm_const)]
+#![feature(box_uninit_write)]
+#![feature(try_blocks)]
 
 // i'm  exhausted by these warnings jeez
 #![allow(unused_imports)]
@@ -23,6 +23,8 @@ pub mod coredrivers;
 pub mod logging;
 use logging::{klog,emergency_kernel_log};
 pub mod panic;
+
+pub mod descriptors;
 
 // arch-specific code lives in "x::arch" for some modules
 macro_rules! arch_specific_module {

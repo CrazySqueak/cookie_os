@@ -38,6 +38,7 @@ unsafe impl<S:MutexStrategy> RawMutex for BaseMutexRaw<S> {
 pub type BaseMutex<T,S> = lock_api::Mutex<BaseMutexRaw<S>,T>;
 pub type BaseMutexGuard<'a,T,S> = lock_api::MutexGuard<'a,BaseMutexRaw<S>,T>;
 pub type MappedBaseMutexGuard<'a,T,S> = lock_api::MappedMutexGuard<'a,BaseMutexRaw<S>,T>;
+pub type ArcBaseMutexGuard<T,S> = lock_api::ArcMutexGuard<BaseMutexRaw<S>,T>;
 
 
 pub trait RwLockStrategy {
@@ -182,3 +183,6 @@ pub type BaseRwLockWriteGuard<'a,T,S> = lock_api::RwLockWriteGuard<'a,BaseRwLock
 pub type BaseRwLockUpgradableGuard<'a,T,S> = lock_api::RwLockUpgradableReadGuard<'a,BaseRwLockRaw<S>,T>;
 pub type MappedBaseRwLockReadGuard<'a,T,S> = lock_api::MappedRwLockReadGuard<'a,BaseRwLockRaw<S>,T>;
 pub type MappedBaseRwLockWriteGuard<'a,T,S> = lock_api::MappedRwLockWriteGuard<'a,BaseRwLockRaw<S>,T>;
+pub type ArcBaseRwLockReadGuard<T,S> = lock_api::ArcRwLockReadGuard<BaseRwLockRaw<S>,T>;
+pub type ArcBaseRwLockWriteGuard<T,S> = lock_api::ArcRwLockWriteGuard<BaseRwLockRaw<S>,T>;
+pub type ArcBaseRwLockUpgradableGuard<T,S> = lock_api::ArcRwLockUpgradableReadGuard<BaseRwLockRaw<S>,T>;

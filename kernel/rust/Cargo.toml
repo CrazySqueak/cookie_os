@@ -8,7 +8,7 @@ buddy_system_allocator = "0.10.0"
 volatile = "0.2.6"
 uart_16550 = "0.3.0"
 cfg-if = "1.0.0"
-lock_api = "0.4.12"
+lock_api = { version = "0.4.12", features = ["arc_lock"] }
 spin = { version = "0.9.8", features = ["lock_api"] }
 lazy_static = { version = "1.0", features = ["spin_no_std"] }
 bitflags = "2.6.0"

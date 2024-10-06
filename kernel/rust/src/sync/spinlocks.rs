@@ -40,6 +40,7 @@ impl<R:RelaxStrategy> RwLockStrategy for SpinLockStrategy<R> {
 pub type BaseSpinMutex<T,R> = super::baselocks::BaseMutex<T,SpinLockStrategy<R>>;
 pub type BaseSpinMutexGuard<'a,T,R> = super::baselocks::BaseMutexGuard<'a,T,SpinLockStrategy<R>>;
 pub type MappedBaseSpinMutexGuard<'a,T,R> = super::baselocks::MappedBaseMutexGuard<'a,T,SpinLockStrategy<R>>;
+pub type ArcBaseSpinMutexGuard<T,R> = super::baselocks::ArcBaseMutexGuard<T,SpinLockStrategy<R>>;
 
 pub type BaseSpinRwLock<T,R> = super::baselocks::BaseRwLock<T,SpinLockStrategy<R>>;
 pub type BaseSpinRwLockReadGuard<'a,T,R> = super::baselocks::BaseRwLockReadGuard<'a,T,SpinLockStrategy<R>>;
@@ -47,3 +48,6 @@ pub type BaseSpinRwLockWriteGuard<'a,T,R> = super::baselocks::BaseRwLockWriteGua
 pub type BaseSpinRwLockUpgradableGuard<'a,T,R> = super::baselocks::BaseRwLockUpgradableGuard<'a,T,SpinLockStrategy<R>>;
 pub type MappedBaseSpinRwLockReadGuard<'a,T,R> = super::baselocks::MappedBaseRwLockReadGuard<'a,T,SpinLockStrategy<R>>;
 pub type MappedBaseSpinRwLockWriteGuard<'a,T,R> = super::baselocks::MappedBaseRwLockWriteGuard<'a,T,SpinLockStrategy<R>>;
+pub type ArcBaseSpinRwLockReadGuard<T,R> = super::baselocks::ArcBaseRwLockReadGuard<T,SpinLockStrategy<R>>;
+pub type ArcBaseSpinRwLockWriteGuard<T,R> = super::baselocks::ArcBaseRwLockWriteGuard<T,SpinLockStrategy<R>>;
+pub type ArcBaseSpinRwLockUpgradableGuard<T,R> = super::baselocks::ArcBaseRwLockUpgradableGuard<T,SpinLockStrategy<R>>;

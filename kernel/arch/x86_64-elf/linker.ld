@@ -2,11 +2,13 @@
    designated as the entry point. */
 ENTRY(start)
 
-higher_half_offset = 0xFFFF800000000000;
+hh_data_offset = 0xFFFF800000000000;
+higher_half_offset = 0xFFFFFFFF80000000;
 /* Physical addresses so the protected mode boot program can access labels that will be used in the higher half. */
 multiboot_info_ptr_P = multiboot_info_ptr - higher_half_offset;
-kstack_guard_page_P = kstack_guard_page - higher_half_offset;
 processors_started_P = processors_started - higher_half_offset;
+/* The kernel stack is located in hhdata) */
+kstack_guard_page_P = kstack_guard_page - hh_data_offset;
 
 /* Tell where the various sections of the object files will be put in the final
    kernel image. */
@@ -64,8 +66,23 @@ SECTIONS
 		*/boot.o(.bss)
 	}
     
+    /* LOWER HIGHER HALF (KERNEL STACK/HEAP) */
+    . = ALIGN(4K);
+    kdata_phys_start = .;
+    . += hh_data_offset;
+    
+    .kheap ALIGN(4K) : AT(ADDR (.kheap) - hh_data_offset)
+    {
+        *(.kheap)
+    }
+    
+    . = ALIGN(4K);
+    . -= hh_data_offset;
+    kdata_phys_end = .;
+    
     /* HIGHER HALF (KERNEL) */
     . += higher_half_offset;
+    
 	.text ALIGN(4K) : AT(ADDR (.text) - higher_half_offset)
 	{
 		*(.text*)

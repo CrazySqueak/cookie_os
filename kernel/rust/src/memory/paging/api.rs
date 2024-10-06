@@ -2,13 +2,256 @@
 use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use crate::sync::{YRwLock as RwLock,YRwLockReadGuard as RwLockReadGuard,YRwLockWriteGuard as RwLockWriteGuard,YRwLockUpgradableGuard as RwLockUpgradableGuard};  // changed to using YLocks for now as Wlocks aren't re-implemented yet
+use crate::sync::hspin::{HRwLock as RwLock,HRwLockReadGuard as RwLockReadGuard,HRwLockWriteGuard as RwLockWriteGuard,HRwLockUpgradableGuard as RwLockUpgradableGuard};  // we're now using HLocks because that's what we always should've been using
 use crate::multitasking::cpulocal::CpuLocal;
 
 use super::*;
 
 type BaseTLPageAllocator = arch::TopLevelPageAllocator;
 use arch::{set_active_page_table,inval_tlb_pg};
+
+// Page-Alignable Numbers
+/// The alignment (in bytes) for pages. In other words, the minimum possible amount of memory worth caring about for system-wide memory management.
+pub const PAGE_ALIGN: usize = super::MIN_PAGE_SIZE;
+use core::num::NonZeroUsize;
+
+#[deprecated]
+pub type PageAlignedUsize = PageAllocationSizeT;
+pub trait PageAlignedValue<Wraps>: Sized + Copy {
+    /// Panics if an invalid value is provided.
+    #[track_caller]
+    fn new(x: Wraps) -> Self;
+    /// May cause undefined behaviour if an invalid value is provided
+    unsafe fn new_unchecked(x: Wraps) -> Self;
+    /// Returns Some() if valid, None if invalid.
+    fn new_checked(x: Wraps) -> Option<Self>;
+    /// Rounds to the next valid value, returning both the new value and the amount rounded by. (round up for sizes, down for offsets)
+    fn new_rounded_with_excess(x: Wraps) -> (Self,usize);
+    /// Rounds to the next valid value (round up for sizes, down for offsets)
+    fn new_rounded(x: Wraps) -> Self {
+        Self::new_rounded_with_excess(x).0
+    }
+
+    /// Get the contained value
+    fn get(self) -> Wraps;
+}
+
+macro_rules! ftorawiiwctc {  // I'm sure you can guess what this stands for.
+    ($T:ident, $Wraps:ident) => {
+        impl core::convert::From<$T> for $Wraps {
+            fn from(value: $T) -> $Wraps {
+                <$T as PageAlignedValue<$Wraps>>::get(value)
+            }
+        }
+        impl core::convert::TryFrom<$Wraps> for $T {
+            type Error = ();
+            fn try_from(value: $Wraps) -> Result<$T,()> {
+                <$T as PageAlignedValue<$Wraps>>::new_checked(value).ok_or(())
+            }
+        }
+
+        impl core::fmt::LowerHex for $T {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::LowerHex::fmt(&<$T as PageAlignedValue<$Wraps>>::get(*self),f)
+            }
+        }
+        impl core::fmt::UpperHex for $T {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::UpperHex::fmt(&<$T as PageAlignedValue<$Wraps>>::get(*self),f)
+            }
+        }
+        impl core::fmt::Octal for $T {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::Octal::fmt(&<$T as PageAlignedValue<$Wraps>>::get(*self),f)
+            }
+        }
+        impl core::fmt::Binary for $T {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::Binary::fmt(&<$T as PageAlignedValue<$Wraps>>::get(*self),f)
+            }
+        }
+        impl core::fmt::Display for $T {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::Display::fmt(&<$T as PageAlignedValue<$Wraps>>::get(*self),f)
+            }
+        }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]
+/// A non-zero, page-aligned value, suitable for specifying the size of page allocations. Rounds up.
+pub struct PageAllocationSizeT(NonZeroUsize);
+impl PageAlignedValue<usize> for PageAllocationSizeT {
+    /// Returns self if page-aligned and non-zero. Otherwise, panics (in debug builds). If debug assertions are disabled and these conditions are not met, behaviour is undefined.
+    fn new(x: usize) -> Self {
+        Self::new_const(x)  // const_trait_impl doesn't seem to be going anywhere yet...
+    }
+    unsafe fn new_unchecked(x: usize) -> Self {
+        Self::new_unchecked_const(x)
+    }
+    /// Returns Some() if page-aligned and non-zero. Otherwise, returns None.
+    fn new_checked(x: usize) -> Option<Self> {
+        if x == 0 { None }
+        else if x%PAGE_ALIGN == 0 { Some(Self::new(x)) }
+        else { None }
+    }
+    /// Round up to the next non-zero, page-aligned value, and return both the rounded value and the amount added to do this.
+    /// In other words, where the input is x and the output is (y,rem): y = x+rem
+    fn new_rounded_with_excess(x: usize) -> (Self,usize) {
+        if x == 0 { (Self(unsafe{NonZeroUsize::new_unchecked(PAGE_ALIGN)}), PAGE_ALIGN) }  // safety: PAGE_ALIGN is never zero
+        else if x%PAGE_ALIGN == 0 { (Self::new(x), 0) }
+        else {
+            // Round up since this is a size
+            let excess = PAGE_ALIGN-(x%PAGE_ALIGN);
+            (Self::new(x+excess), excess)
+        }
+    }
+
+    /// Get the stored integer
+    fn get(self) -> usize {
+        self.get_const()
+    }
+}
+impl PageAllocationSizeT {
+    pub const fn new_const(x: usize) -> Self {
+        assert!(x != 0, "PageAllocationSizeT must be non-zero");  // Ensure we don't cause UB
+        debug_assert!(x%PAGE_ALIGN == 0, "PageAllocationSizeT must be page-aligned.");
+        unsafe{Self::new_unchecked_const(x)}
+    }
+    pub const unsafe fn new_unchecked_const(x: usize) -> Self {
+        Self(NonZeroUsize::new_unchecked(x))
+    }
+
+    pub const fn get_const(self) -> usize {
+        let x = self.0.get();
+        debug_assert!(x%PAGE_ALIGN==0);  // this is already checked for when setting it, but for safety's sake let's check it before returning it as well
+        debug_assert!(x != 0);
+        x
+    }
+    /// Get the stored integer as a NonZeroUsize
+    pub const fn get_nz(self) -> NonZeroUsize {
+        let x = self.0;
+        debug_assert!(x.get()%PAGE_ALIGN==0);  // this is already checked for when setting it, but for safety's sake let's check it before returning it as well
+        x
+    }
+}
+ftorawiiwctc!(PageAllocationSizeT, usize);
+impl core::convert::From<PageAllocationSizeT> for NonZeroUsize {
+    fn from(value: PageAllocationSizeT) -> NonZeroUsize {
+        value.get_nz()
+    }
+}
+impl core::convert::TryFrom<NonZeroUsize> for PageAllocationSizeT {
+    type Error = ();
+    fn try_from(value: NonZeroUsize) -> Result<PageAllocationSizeT,()> {
+        PageAllocationSizeT::new_checked(value.get()).ok_or(())
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]
+/// A page-aligned, signed value, suitable for specifying offsets in page-aligned increments. Rounds down.
+pub struct PageAlignedOffsetT(isize);
+impl PageAlignedValue<isize> for PageAlignedOffsetT {
+    fn new(x: isize) -> Self {
+        Self::new_const(x)
+    }
+    unsafe fn new_unchecked(x: isize) -> Self {
+        Self::new_unchecked_const(x)
+    }
+    fn new_checked(x: isize) -> Option<Self> {
+        if x.rem_euclid(PAGE_ALIGN as isize) == 0 { Some(Self::new(x)) }
+        else { None }
+    }
+
+    fn new_rounded_with_excess(x: isize) -> (Self,usize) {
+        if x.rem_euclid(PAGE_ALIGN as isize) == 0 { (Self::new(x), 0) }
+        else {
+            // Round down since this is an offset
+            let excess = x.rem_euclid(PAGE_ALIGN as isize);
+            (Self::new(x-excess), excess as usize)
+        }
+    }
+
+    fn get(self) -> isize {
+        self.get_const()
+    }
+}
+impl PageAlignedOffsetT {
+    pub const fn new_const(x: isize) -> Self {
+        debug_assert!(x.rem_euclid(PAGE_ALIGN as isize) == 0, "PageAlignedOffsetT must be page-aligned.");
+        unsafe{Self::new_unchecked_const(x)}
+    }
+    pub const unsafe fn new_unchecked_const(x: isize) -> Self {
+        Self(x)
+    }
+
+    pub const fn get_const(self) -> isize {
+        let x = self.0;
+        debug_assert!(x.rem_euclid(PAGE_ALIGN as isize)==0);  // this is already checked for when setting it, but for safety's sake let's check it before returning it as well
+        x
+    }
+}
+ftorawiiwctc!(PageAlignedOffsetT, isize);
+impl core::ops::Add for PageAlignedOffsetT {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        Self::new(self.0 + rhs.0)
+    }
+}
+impl core::ops::Sub for PageAlignedOffsetT {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        Self::new(self.0 - rhs.0)
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]
+/// A page-aligned, unsigned value, suitable for specifying virtual addresses at page boundraries. Rounds down.
+pub struct PageAlignedAddressT(usize);
+impl PageAlignedValue<usize> for PageAlignedAddressT {
+    fn new(x: usize) -> Self {
+        Self::new_const(x)
+    }
+    unsafe fn new_unchecked(x: usize) -> Self {
+        Self::new_unchecked_const(x)
+    }
+    fn new_checked(x: usize) -> Option<Self> {
+        if x%PAGE_ALIGN == 0 { Some(Self::new(x)) }
+        else { None }
+    }
+
+    fn new_rounded_with_excess(x: usize) -> (Self,usize) {
+        if x%PAGE_ALIGN == 0 { (Self::new(x), 0) }
+        else {
+            // Round down since this is an offset
+            let excess = x%PAGE_ALIGN;
+            (Self::new(x-excess), excess as usize)
+        }
+    }
+
+    fn get(self) -> usize {
+        self.get_const()
+    }
+}
+impl PageAlignedAddressT {
+    pub const fn new_const(x: usize) -> Self {
+        debug_assert!(x%PAGE_ALIGN == 0, "PageAlignedAddressT must be page-aligned.");
+        unsafe{Self::new_unchecked_const(x)}
+    }
+    pub const unsafe fn new_unchecked_const(x: usize) -> Self {
+        Self(x)
+    }
+
+    pub const fn get_const(self) -> usize {
+        let x = self.0;
+        debug_assert!(x%PAGE_ALIGN==0);  // this is already checked for when setting it, but for safety's sake let's check it before returning it as well
+        x
+    }
+}
+ftorawiiwctc!(PageAlignedAddressT, usize);
 
 // FLAGS & STUFF
 #[derive(Debug,Clone,Copy)]
@@ -24,42 +267,100 @@ impl PageFlags {
         Self::new(TransitivePageFlags::empty(), MappingSpecificPageFlags::empty())
     }
 }
-impl core::ops::BitAnd<TransitivePageFlags> for PageFlags {
-    type Output = Self;
-    fn bitand(self, rhs: TransitivePageFlags) -> Self::Output {
-        Self::new(self.tflags & rhs, self.mflags)
+macro_rules! impl_pf_part_ops {
+    ($rhstype:ty, $pname:ident, $tn:ident, $mn:ident) => {
+        #[automatically_derived]
+        impl core::ops::BitAnd<$rhstype> for PageFlags {
+            type Output = $rhstype;
+            fn bitand(self, rhs: $rhstype) -> Self::Output {
+                let Self { tflags: $tn, mflags: $mn } = self;
+                let mut $pname = $pname; $pname &= rhs;
+                $pname
+            }
+        }
+
+        #[automatically_derived]
+        impl core::ops::BitOr<$rhstype> for PageFlags {
+            type Output = Self;
+            fn bitor(self, rhs: $rhstype) -> Self::Output {
+                let Self { tflags: $tn, mflags: $mn } = self;
+                let mut $pname = $pname; $pname |= rhs;
+                Self { tflags: $tn, mflags: $mn }
+            }
+        }
+        #[automatically_derived]
+        impl core::ops::BitOrAssign<$rhstype> for PageFlags {
+            fn bitor_assign(&mut self, rhs: $rhstype) {
+                self.$pname |= rhs;
+            }
+        }
+
+        #[automatically_derived]
+        impl core::ops::BitXor<$rhstype> for PageFlags {
+            type Output = Self;
+            fn bitxor(self, rhs: $rhstype) -> Self::Output {
+                let Self { tflags: $tn, mflags: $mn } = self;
+                let mut $pname = $pname; $pname ^= rhs;
+                Self { tflags: $tn, mflags: $mn }
+            }
+        }
+        #[automatically_derived]
+        impl core::ops::BitXorAssign<$rhstype> for PageFlags {
+            fn bitxor_assign(&mut self, rhs: $rhstype) {
+                self.$pname ^= rhs;
+            }
+        }
+
+        #[automatically_derived]
+        impl core::ops::Sub<$rhstype> for PageFlags {
+            type Output = Self;
+            fn sub(self, rhs: $rhstype) -> Self::Output {
+                let Self { tflags: $tn, mflags: $mn } = self;
+                let mut $pname = $pname; $pname -= rhs;
+                Self { tflags: $tn, mflags: $mn }
+            }
+        }
+        #[automatically_derived]
+        impl core::ops::SubAssign<$rhstype> for PageFlags {
+            fn sub_assign(&mut self, rhs: $rhstype) {
+                self.$pname -= rhs;
+            }
+        }
     }
 }
-impl core::ops::BitOr<TransitivePageFlags> for PageFlags {
-    type Output = Self;
-    fn bitor(self, rhs: TransitivePageFlags) -> Self::Output {
-        Self::new(self.tflags | rhs, self.mflags)
-    }
+impl_pf_part_ops!(TransitivePageFlags, tflags, tflags, mflags);
+impl_pf_part_ops!(MappingSpecificPageFlags, mflags, tflags, mflags);
+macro_rules! impl_pf_compound_ops {
+    (binop $traitname:path, $mname:ident) => {
+        impl $traitname for PageFlags {
+            type Output = Self;
+            fn $mname(self, rhs: Self) -> Self::Output {
+                use $traitname;
+                let Self { tflags, mflags } = self;
+                let tflags = tflags.$mname(rhs.tflags);
+                let mflags = mflags.$mname(rhs.mflags);
+                Self { tflags, mflags }
+            }
+        }
+    };
+    (assign $traitname:path, $mname:ident) => {
+        impl $traitname for PageFlags {
+            fn $mname(&mut self, rhs: Self) {
+                use $traitname;
+                self.tflags.$mname(rhs.tflags);
+                self.mflags.$mname(rhs.mflags);
+            }
+        }
+    };
 }
-impl core::ops::BitAnd<MappingSpecificPageFlags> for PageFlags {
-    type Output = Self;
-    fn bitand(self, rhs: MappingSpecificPageFlags) -> Self::Output {
-        Self::new(self.tflags, self.mflags & rhs)
-    }
-}
-impl core::ops::BitOr<MappingSpecificPageFlags> for PageFlags {
-    type Output = Self;
-    fn bitor(self, rhs: MappingSpecificPageFlags) -> Self::Output {
-        Self::new(self.tflags, self.mflags | rhs)
-    }
-}
-impl core::ops::BitAnd<Self> for PageFlags {
-    type Output = Self;
-    fn bitand(self, rhs: Self) -> Self::Output {
-        Self::new(self.tflags & rhs.tflags, self.mflags & rhs.mflags)
-    }
-}
-impl core::ops::BitOr<Self> for PageFlags {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self::Output {
-        Self::new(self.tflags | rhs.tflags, self.mflags | rhs.mflags)
-    }
-}
+impl_pf_compound_ops!(binop core::ops::BitAnd, bitand);
+impl_pf_compound_ops!(assign core::ops::BitAndAssign, bitand_assign);
+impl_pf_compound_ops!(binop core::ops::BitOr, bitor);
+impl_pf_compound_ops!(assign core::ops::BitOrAssign, bitor_assign);
+impl_pf_compound_ops!(binop core::ops::BitXor, bitxor);
+impl_pf_compound_ops!(assign core::ops::BitXorAssign, bitxor_assign);
+impl_pf_compound_ops!(binop core::ops::Sub, sub);
+impl_pf_compound_ops!(assign core::ops::SubAssign, sub_assign);
 bitflags::bitflags! {
     // These flags follow a "union" pattern - flags applied to upper levels will also override lower levels (the most restrictive version winning)
     // Therefore: the combination of all flags should be the most permissive/compatible option
@@ -67,8 +368,10 @@ bitflags::bitflags! {
     pub struct TransitivePageFlags: u16 {
         // User can access this page.
         const USER_READABLE = 1<<0;
-        // User can write to this page (provided they have access to it).
-        const USER_WRITEABLE = 1<<1;
+        // This page can be written to. (both by the kernel, and by the user if they have access to it)
+        const WRITEABLE = 1<<1;
+        #[deprecated]
+        const USER_WRITEABLE = 1<<1;  // old alias for WRITEABLE
         // Execution is allowed. (if feature per_page_NXE_bit is not enabled then this is ignored)
         const EXECUTABLE = 1<<2;
     }
@@ -83,6 +386,7 @@ bitflags::bitflags! {
         // This is a custom flag which is interpreted by the OS' page handler
         // On pages: Page must always point to the same frame. Frame's contents must not be moved.
         // On sub-tables: No effect.
+        // #[deprecated]
         const PINNED = 1<<1;
         // Affects the "memory type" of the selected area - idk what this does because what I've read is very vague
         // On pages: influences the memory type of the memory mapped via the page
@@ -98,7 +402,7 @@ bitflags::bitflags! {
 macro_rules! pageFlags {
     ($($k:ident:$i:ident),*) => {{
         use $crate::memory::paging::{PageFlags,TransitivePageFlags as t,MappingSpecificPageFlags as m};
-        PageFlags::empty() $(| $k::$i)+
+        PageFlags::empty() $(| $k::$i)*
     }}
 }
 pub(crate) use pageFlags;
@@ -160,8 +464,11 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     This is intended to be used when the page table is possibly being read/cached by the CPU, as when locked by _begin_active, writes via write_when_active are still possible (as they flush the TLB). */
     pub(super) fn _begin_active(&self) -> &PFA {
         // Lock (by obtaining then forgetting a read guard, and using the underlying ptr instead)
-        core::mem::forget(self.0.read());
+        let read_guard = self.0.read();
+        let (lock_guard, nointerrupt_guard) = unsafe { RwLockReadGuard::into_separate_guards(read_guard) };  // Discard the NoInterruptionsGuard once we leave this function
+        core::mem::forget(lock_guard);  // Leak the lock guard
         let alloc = unsafe{ &*self.0.data_ptr() };  // SAFETY: We hold a read lock which we obtained (and then leaked) in the statement above
+
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
         // Increment active count
         self.0.active_count.fetch_add(1, Ordering::Acquire);
@@ -222,8 +529,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
            Note: Reader count no longer includes the upgradeable guard (however since we have an upgradeable guard, this returns Err(x))
         */
         loop {
-            // Safety: .raw() shouldn't be unsafe due to allowing you to unlock it as the unlock...() functions are already unsafe! (as is poking at implementation details)
-            let reader_count = unsafe{self.0.raw()}.reader_count().err().unwrap();
+            let reader_count = self.0.raw().reader_count().err().unwrap();
             core::sync::atomic::compiler_fence(Ordering::SeqCst);
             let active_count = self.0.active_count.load(Ordering::Acquire);
             if reader_count <= (active_count+1).into() {
@@ -245,15 +551,21 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         }
     }
     
-    pub fn allocate(&self, size: usize, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
+    pub fn allocate(&self, size: PageAllocationSizeT, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
         self.write_when_active().allocate(size, alloc_strat)
     }
-    pub fn allocate_at(&self, addr: usize, size: usize) -> Option<PageAllocation<PFA>> {
+    pub fn allocate_at(&self, addr: PageAlignedAddressT, size: PageAllocationSizeT) -> Option<PageAllocation<PFA>> {
         self.write_when_active().allocate_at(addr, size)
     }
     /// Allocate page(s) dynamically such that the given physical address would be able to be mapped using a simple .set_addr (i.e. such that phys minus base would be page-aligned)
     pub fn allocate_alignedoffset(&self, size: usize, alloc_strat: PageAllocationStrategies, phys_addr: usize) -> Option<PageAllocation<PFA>> {
         self.write_when_active().allocate_alignedoffset(size, alloc_strat, phys_addr)
+    }
+
+    /// Get the physical address of the page table
+    /// Intended for use as a heuristic only
+    pub fn get_phys_addr(&self) -> usize {
+        ptaddr_virt_to_phys(self.read().get_page_table_ptr() as usize)
     }
 }
 
@@ -268,6 +580,12 @@ impl PagingContext {
             let flags = global_pages::GLOBAL_TABLE_FLAGS[i];
             // SAFETY: See documentation for put_global_table and GLOBAL_TABLE_PHYSADDRS
             unsafe{ allocator.put_global_table(global_pages::GLOBAL_PAGES_START_IDX+i, phys_addr, flags); }
+        }
+        // Add kernel static global page
+        {
+            let phys_addr = *global_pages::KERNEL_STATIC_PHYSADDR;
+            let flags = *global_pages::KERNEL_STATIC_FLAGS;
+            unsafe{ allocator.put_global_table(global_pages::KERNEL_STATIC_PT_IDX, phys_addr, flags); }
         }
         // Return
         let dopts = LPAWGOptions::new_default();
@@ -293,7 +611,7 @@ impl PagingContext {
         // activate table
         let table_addr = ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize);
         klog!(Info, MEMORY_PAGING_CONTEXT, "Switching active context to 0x{:x}", table_addr);
-        
+
         let ni = disable_interruptions();
         // Set active
         set_active_page_table(table_addr);
@@ -394,45 +712,46 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     
     // Allocating
     // (we don't need to flush the TLB for allocation as the page has gone from NOT PRESENT -> NOT PRESENT - instead we flush it when it's mapped to an address)
-    pub(super) fn allocate(&mut self, size: usize, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
+    pub(super) fn allocate(&mut self, size: PageAllocationSizeT, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
         let allocator = self.get_page_table();
-        let allocation = allocator.allocate(size, alloc_strat)?;
+        let allocation = allocator.allocate(size.get(), alloc_strat)?;
         Some(PageAllocation::new(LockedPageAllocator::clone_ref(&self.allocator), allocation))
     }
-    pub(super) fn allocate_at(&mut self, addr: usize, size: usize) -> Option<PageAllocation<PFA>> {
+    pub(super) fn allocate_at(&mut self, addr: PageAlignedAddressT, size: PageAllocationSizeT) -> Option<PageAllocation<PFA>> {
         // Convert the address
+        let addr: usize = addr.get();  // (page-alignment is really only an API restriction)
         // Subtract the offset from the vmem address (as we need it to be relative to the start of our table)
         let rel_addr = addr.checked_sub(self.meta().offset).unwrap_or_else(||panic!("Cannot allocate memory before the start of the page! addr=0x{:x} page_start=0x{:x}",addr,self.meta().offset));
         
         // Allocate
         let allocator = self.get_page_table();
-        let allocation = allocator.allocate_at(rel_addr, size)?;
+        let allocation = allocator.allocate_at(rel_addr, size.get())?;
         let mut palloc = PageAllocation::new(LockedPageAllocator::clone_ref(&self.allocator), allocation);
-        palloc.baseaddr_offset = addr - palloc.start();  // Figure out the offset between the requested address and the actual start of the allocation, if required
+        palloc.baseaddr_offset = 0; debug_assert!(addr == palloc.start().get());  // Rounding is no longer done implicitly, so the start() will be equal to the addr.
         Some(palloc)
     }
     /// Allocate page(s) dynamically such that the given physical address would be able to be mapped using a simple .set_addr (i.e. such that phys minus base would be page-aligned)
     pub(super) fn allocate_alignedoffset(&mut self, size: usize, alloc_strat: PageAllocationStrategies, phys_addr: usize) -> Option<PageAllocation<PFA>> {
         // Step 1: round down the physical address to page alignment
         use super::MIN_PAGE_SIZE;
-        let (_, allocation_offset) = (phys_addr / MIN_PAGE_SIZE, phys_addr % MIN_PAGE_SIZE);
+        let (phys_addr_aligned, allocation_offset) = PageAlignedAddressT::new_rounded_with_excess(phys_addr);
         // Step 2: increase size by the remainder to compensate
         let allocated_size = size + allocation_offset;
         // Step 3: Allocate
-        let mut allocation = self.allocate(allocated_size, KALLOCATION_DYN_MMIO)?;
+        let mut allocation = self.allocate(PageAllocationSizeT::new_rounded(allocated_size), KALLOCATION_DYN_MMIO)?;
         allocation.baseaddr_offset += allocation_offset;
         Some(allocation)
     }
     
-    /* Split the allocation into two separate allocations. The first one will contain bytes [0,n) (rounding up if not page aligned), and the second one will contain the rest.
+    /* Split the allocation into two separate allocations. The first one will contain bytes [0,n), and the second one will contain the rest.
        If necessary, huge pages will be split to meet the midpoint as accurately as possible.
        Note: It is not guaranteed that the second allocation will not be empty. */
-    pub(super) fn split_allocation(&mut self, allocation: PageAllocation<PFA>, mid: usize) -> (PageAllocation<PFA>, PageAllocation<PFA>) {
+    pub(super) fn split_allocation(&mut self, allocation: PageAllocation<PFA>, mid: PageAllocationSizeT) -> (PageAllocation<PFA>, PageAllocation<PFA>) {
         allocation.assert_pt_tag(self);
         let baseaddr_offset = allocation.baseaddr_offset;
         let (allocation, allocator, metadata) = allocation.leak();
         
-        let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid);
+        let (lhs, rhs) = Self::_split_alloc_inner(self.get_page_table(), allocation, mid.get());
         (
             PageAllocation { allocator: LockedPageAllocator::clone_ref(&allocator), allocation: lhs, metadata, baseaddr_offset },
             PageAllocation { allocator:                                 allocator , allocation: rhs, metadata, baseaddr_offset },
@@ -455,9 +774,10 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
                         PAllocItem::SubTable { index, offset, alloc: suballoc } => {
                             // It's a table, so we can split this if recurse
                             let suballocator = pfa.get_suballocator_mut(index).expect("Allocation expected sub-allocator but none was found!");
-                            let (left, right) = Self::_split_alloc_inner(suballocator, suballoc, mid.checked_sub(offset).unwrap());
+                            let lhs_size = mid.checked_sub(offset).unwrap();
+                            let (left, right) = Self::_split_alloc_inner(suballocator, suballoc, lhs_size);
                             lhs.push(PAllocItem::SubTable { index, offset, alloc: left });
-                            rhs.push(PAllocItem::SubTable { index, offset, alloc: right });
+                            rhs.push(PAllocItem::SubTable { index, offset:offset+lhs_size, alloc: right });
                         }
                         
                         PAllocItem::Page { index, offset } => {
@@ -466,13 +786,13 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
                             if let Ok(suballocation) = result {
                                 // Success - split the newly created table
                                 let suballocator = pfa.get_suballocator_mut(index).unwrap();
-                                let (left, right) = Self::_split_alloc_inner(suballocator, suballocation, mid.checked_sub(offset).unwrap());
+                                let lhs_size = mid.checked_sub(offset).unwrap();
+                                let (left, right) = Self::_split_alloc_inner(suballocator, suballocation, lhs_size);
                                 lhs.push(PAllocItem::SubTable { index, offset, alloc: left });
-                                rhs.push(PAllocItem::SubTable { index, offset, alloc: right });
+                                rhs.push(PAllocItem::SubTable { index, offset:offset+lhs_size, alloc: right });
                             } else {
                                 // \_(o.o)_/
-                                // round up so lhs.size is always >= mid
-                                lhs.push(PAllocItem::Page { index, offset });
+                                panic!("FUCK");
                             }
                         }
                     }
@@ -617,6 +937,13 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
         // TODO
     }
     
+    /// Normalize this allocation, setting base to be equal to start
+    /// This is necessary for managing allocations as part of a complex allocator,
+    /// but may get in the way of attempts to offset-map addresses that aren't page-aligned
+    pub fn normalize(&mut self) {
+        self.baseaddr_offset = 0;
+    }
+
     /* Deliberately leak the allocation, without freeing it.
        Use this instead of core::mem::forget, as this makes sure to drop the Arc<> which means the page table will be dropped when appropriate. */
     pub fn leak(self) -> (PartialPageAllocation, LockedPageAllocator<PFA>, LPAMetadata) {
@@ -634,27 +961,27 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
     }
     
     /* Find the start address of this allocation in VMem */
-    pub fn start(&self) -> usize {
-        canonical_addr(self.allocation.start_addr() + self.metadata.offset)
+    pub fn start(&self) -> PageAlignedAddressT {
+        PageAlignedAddressT::new(canonical_addr(self.allocation.start_addr() + self.metadata.offset))
     }
     /* Find the "base" address of this allocation in VMem.
         This will be different from start() if e.g. the address passed to allocate_at was not page aligned.
         start() -> the very start of the allocation (including any padding added to ensure it is page-aligned).
         base() -> the VMem address that was requested. */
     pub fn base(&self) -> usize {
-        self.start()+self.baseaddr_offset
+        self.start().get()+self.baseaddr_offset
     }
     /* Find the end address of this allocation in VMem. (exclusive) */
-    pub fn end(&self) -> usize {
-        canonical_addr(self.allocation.end_addr() + self.metadata.offset)
+    pub fn end(&self) -> PageAlignedAddressT {
+        PageAlignedAddressT::new(canonical_addr(self.allocation.end_addr() + self.metadata.offset))
     }
     /* The total size of this allocation from start to end (not adjusted by the "base" address) */
-    pub fn size(&self) -> usize {
-        self.allocation.size()
+    pub fn size(&self) -> PageAllocationSizeT {
+        PageAllocationSizeT::new_checked(self.allocation.size()).unwrap()
     }
     /* The length of this allocation following the base (i.e. from base to end)  */
     pub fn length_after_base(&self) -> usize {
-        self.size() - self.baseaddr_offset
+        self.size().get() - self.baseaddr_offset
     }
     
     pub fn set_base_addr(&self, base_addr: usize, flags: PageFlags){
@@ -667,10 +994,14 @@ impl<PFA:PageFrameAllocator> PageAllocation<PFA> {
         self.allocator.write_when_active().invalidate_tlb(self)
     }
     
-    pub fn split(self, mid: usize) -> (Self, Self) {
+    pub fn split(self, mid: PageAllocationSizeT) -> (Self, Self) {
         let allocator = LockedPageAllocator::clone_ref(&self.allocator);
         let result = allocator.write_when_active().split_allocation(self, mid);
         result
+    }
+    pub fn alloc_downwards(&self, size: PageAllocationSizeT) -> Option<Self> {
+        let start = PageAlignedAddressT::new(self.start().get()-size.get());
+        self.allocator.allocate_at(start, size)
     }
 }
 impl<PFA:PageFrameAllocator> core::ops::Drop for PageAllocation<PFA> {
@@ -690,22 +1021,50 @@ impl<PFA:PageFrameAllocator> core::fmt::Debug for PageAllocation<PFA> {
     }
 }
 
+use alloc::boxed::Box;
 /* Any page allocation, regardless of PFA. */
 pub trait AnyPageAllocation: core::fmt::Debug + Send {
-    fn start(&self) -> usize;
-    fn end(&self) -> usize;
-    fn size(&self) -> usize;
+    fn normalize(&mut self);
+
+    fn start(&self) -> PageAlignedAddressT;
+    fn end(&self) -> PageAlignedAddressT;
+    fn size(&self) -> PageAllocationSizeT;
+
+    /// Get the physical address of the page table
+    /// Intended for use as a heuristic only
+    fn pt_phys_addr(&self) -> usize;
+
     fn set_base_addr(&self, base_addr: usize, flags: PageFlags);
     fn set_absent(&self, data: usize);
     fn flush_tlb(&self);
+
+    /// Split this page allocation in half
+    fn split_dyn(self: Box<Self>, mid: PageAllocationSizeT) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>);
+    /// Allocate more virtual memory directly below this allocation
+    /// This is made available as a new allocation
+    fn alloc_downwards_dyn(&self, size: PageAllocationSizeT) -> Option<Box<dyn AnyPageAllocation>>;
 }
-impl<PFA:PageFrameAllocator + Send + Sync> AnyPageAllocation for PageAllocation<PFA> {
-    fn start(&self) -> usize { self.start() }
-    fn end(&self) -> usize { self.end() }
-    fn size(&self) -> usize { self.size() }
+impl<PFA:PageFrameAllocator + Send + Sync + 'static> AnyPageAllocation for PageAllocation<PFA> {
+    fn normalize(&mut self){ self.normalize() }
+
+    fn start(&self) -> PageAlignedAddressT { self.start() }
+    fn end(&self) -> PageAlignedAddressT { self.end() }
+    fn size(&self) -> PageAllocationSizeT { self.size() }
+    fn pt_phys_addr(&self) -> usize { self.allocator.get_phys_addr() }
+
     fn set_base_addr(&self, base_addr: usize, flags: PageFlags) { self.set_base_addr(base_addr, flags) }
     fn set_absent(&self, data: usize) { self.set_absent(data) }
     fn flush_tlb(&self) { self.flush_tlb() }
+
+    // Note: Self is not always Sized
+    fn split_dyn(self: Box<Self>, mid: PageAllocationSizeT) -> (Box<dyn AnyPageAllocation>,Box<dyn AnyPageAllocation>) {
+        let (left, right) = self.split(mid);
+        (Box::new(left) as Box<dyn AnyPageAllocation>,
+         Box::new(right) as Box<dyn AnyPageAllocation>)
+    }
+    fn alloc_downwards_dyn(&self, size: PageAllocationSizeT) -> Option<Box<dyn AnyPageAllocation>> {
+        self.alloc_downwards(size).map(|pa|Box::new(pa) as Box<dyn AnyPageAllocation>)
+    }
 }
 
 pub type TopLevelPageAllocation = PageAllocation<BaseTLPageAllocator>;

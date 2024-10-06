@@ -58,6 +58,12 @@ pub unsafe fn init_kheap(){
     //klog!(Info, MEMORY_KHEAP, "Initialised kernel heap with {} bytes.", kheap_initial_size);
 }
 
+pub(super) unsafe fn reclaim_for_heap(start: *mut u8, end: *mut u8) {
+    _without_interruptions_noalloc(||
+        KHEAP_ALLOCATOR.heap.lock().add_to_heap(start as usize, end as usize)
+    );
+}
+
 pub unsafe fn init_kheap_2(){
     // Init rescue
     // _reinit_rescue::spawn();

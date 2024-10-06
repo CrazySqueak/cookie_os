@@ -24,7 +24,7 @@ impl<const LEVEL: usize> X64PageTable<LEVEL> {
             let add = add.tflags;
             use TransitivePageFlags as TF;
             if add.contains(TF::USER_READABLE ) { previous |=  PageTableFlags::USER_ACCESSIBLE };
-            if add.contains(TF::USER_WRITEABLE) { previous |=  PageTableFlags::WRITABLE        };
+            if add.contains(TF::WRITEABLE     ) { previous |=  PageTableFlags::WRITABLE        };
             if cfg!(feature="per_page_NXE_bit") && add.contains(TF::EXECUTABLE) { previous &=! PageTableFlags::NO_EXECUTE      };
         }
         if INCLUDE_NON_TRANSITIVE {
@@ -42,7 +42,7 @@ impl<const LEVEL: usize> X64PageTable<LEVEL> {
             {
                 use TransitivePageFlags as TF; let mut tf = TF::empty();
                 if  flags.contains(PageTableFlags::USER_ACCESSIBLE) { tf |= TF::USER_READABLE }
-                if  flags.contains(PageTableFlags::WRITABLE       ) { tf |= TF::USER_WRITEABLE}
+                if  flags.contains(PageTableFlags::WRITABLE       ) { tf |= TF::WRITEABLE     }
                 if !flags.contains(PageTableFlags::NO_EXECUTE     ) { tf |= TF::EXECUTABLE    }
                 tf
             },
@@ -109,7 +109,7 @@ impl<const LEVEL: usize> IPageTableImpl for X64PageTable<LEVEL> {
         self.0[idx].set_addr(PhysAddr::new(physaddr as u64), flags);  // set addr
     }
     fn set_absent(&mut self, idx: usize, data: usize){
-        let data = data.checked_shl(1).expect("Data value is out-of-bounds!") &!1;  // clear the "present" flag
+        let data = data.checked_shl(1).expect("Data value is out-of-bounds!") &!1;  // clear the "present" flag (TODO: reserve bit 2 for "is swapped out" / "is guard")
         klog!(Debug, MEMORY_PAGING_MAPPINGS, "Mapping entry {:x}[{}] to N/A (data={:x})", ptaddr_virt_to_phys(core::ptr::addr_of!(self.0) as usize), idx, data);
         unsafe { *((&mut self.0[idx] as *mut PageTableEntry) as *mut u64) = data as u64; }  // Update entry manually
     }
@@ -135,6 +135,8 @@ pub const MIN_PAGE_SIZE: usize = X64Level1::PAGE_SIZE;
 
 // Kernel Stack: In the kernel page
 pub const KALLOCATION_KERNEL_STACK: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true), PageAllocationStrategy::new_default().reverse_order(true).spread_mode(true), PageAllocationStrategy::new_default().reverse_order(true)];
+// Kernel Dynamic Allocations (general usage)
+pub const KALLOCATION_KERNEL_GENERALDYN: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true)];
 // Kernel Dynamic Allocations in the MMIO Page: In the mmio page, in reverse order to avoid clashing with offset mapped stuff
 pub const KALLOCATION_DYN_MMIO: PageAllocationStrategies = &[PageAllocationStrategy::new_default().reverse_order(true), PageAllocationStrategy::new_default()];
 
@@ -150,6 +152,8 @@ pub fn crop_addr(addr: usize) -> usize {
 }
 /* Convert a virtual address to a physical address, for use with pointing the CPU to page tables. */
 pub fn ptaddr_virt_to_phys(vaddr: usize) -> usize {
+    debug_assert!(vaddr >= paging_root::global_pages::KERNEL_PTABLE_VADDR, "Page Table contents stored below KERNEL_PTABLE in vmem");
+    debug_assert!(vaddr < paging_root::global_pages::KERNEL_PTABLE_VADDR + TopLevelPageAllocator::PAGE_SIZE, "Page Table contents stored after KERNEL_PTABLE in vmem");
     vaddr-paging_root::global_pages::KERNEL_PTABLE_VADDR // note: this will break if the area where the page table lives is not offset-mapped (or if the address has been cropped to hold all 0s for non-canonical bits)
 }
 

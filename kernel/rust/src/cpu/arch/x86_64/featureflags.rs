@@ -2,6 +2,7 @@
 use raw_cpuid::CpuId;
 use x86_64::registers::model_specific::{Efer,EferFlags};
 use x86_64::registers::control::{Cr4,Cr4Flags};
+use x86_64::registers::control::{Cr0,Cr0Flags};
 
 use crate::sync::promise::POnceLock;
 type StoredFlags = (EferFlags,Cr4Flags);
@@ -92,8 +93,9 @@ pub fn init_msr(){
         let _cpuid_pcfi = cpu_id.get_processor_capacity_feature_info()           ; let cpuid_pcfi = _cpuid_pcfi.as_ref();
         
         let mut eferflags = Efer::read();
+        let mut cr0flags = Cr0::read();
         let mut cr4flags = Cr4::read();
-        klog!(Debug, FEATURE_FLAGS, "Reading control registers: EFER={:?} CR4={:?}", eferflags, cr4flags);
+        klog!(Debug, FEATURE_FLAGS, "Reading control registers: EFER={:?} CR0={:?} CR4={:?}", eferflags, cr0flags, cr4flags);
         
         // Apply/check features
         // == EFER
@@ -111,6 +113,10 @@ pub fn init_msr(){
         // Seems useful to have. I can always remove this if needed.
         feature_check!(required name="SMEP", check_cpu_feature!(cpuid_ef, has_smep); set cr4flags |= Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION; else warn);
         
+        // == CR0
+        // Write-Protect
+        feature_check!(required name="Ring 0 Write-Protect", true ; set cr0flags |= Cr0Flags::WRITE_PROTECT; else incompatible(failed,fail_reasons));
+        
         // == NO FLAG TO SET (just checks)
         // 1GiB Huge Pages
         feature_check!(feature="1G_huge_pages" name="1GiB Huge Page", check_cpu_feature!(cpuid_epfi, has_1gib_pages); set (); else incompatible(failed,fail_reasons));  // No flag to set here
@@ -127,8 +133,9 @@ pub fn init_msr(){
         }
         
         // Save flags
-        klog!(Debug, FEATURE_FLAGS, "Writing changes to control registers: EFER={:?} CR4={:?}", eferflags, cr4flags);
+        klog!(Debug, FEATURE_FLAGS, "Writing changes to control registers: EFER={:?} CR0={:?} CR4={:?}", eferflags, cr0flags, cr4flags);
         Efer::write(eferflags);
+        Cr0::write(cr0flags);
         Cr4::write(cr4flags);
         
         // Store flags for use by APs

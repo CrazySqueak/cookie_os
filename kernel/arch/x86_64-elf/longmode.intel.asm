@@ -1,4 +1,5 @@
 global long_mode_start
+extern higher_half_offset
 
 section .text
 bits 64
@@ -19,7 +20,7 @@ long_mode_start:
     ; (we couldn't do this in 32-bit code for obvious reasons)
     mov rdx, multiboot_info_ptr
     mov rax, [rdx]
-    mov rcx, 0xFFFF800000000000
+    mov rcx, higher_half_offset
     add rax, rcx
     mov [rdx], rax
     
@@ -54,7 +55,14 @@ long_mode_ap_start:
     ; _kapstart should never return
 
 section .bss
+; multiboot info ptr
+global multiboot_info_ptr
+align 8
+multiboot_info_ptr:
+    resb 8
 
+section .kheap
+; we put the kernel stack + kernel heap in the "lower-higher-half" 0xFFFF8000...
 ; kernel stack
 global kstack_top
 global kstack_bottom
@@ -74,12 +82,6 @@ align 4
 kheap_initial_start:
 resb 0x80_0000 ; 8MiB - we can expand it as needed
 kheap_initial_end:
-
-; multiboot info ptr
-global multiboot_info_ptr
-align 8
-multiboot_info_ptr:
-    resb 8
 
 section .data
 ; number of processors initialised (u16)

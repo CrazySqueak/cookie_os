@@ -14,13 +14,24 @@ use crate::logging::klog;
 extern "C" {
     static kernel_phys_start: u8;
     static kernel_phys_end: u8;
+    
+    static kdata_phys_start: u8;
+    static kdata_phys_end: u8;
 }
 /* Get the kernel's start and end in physical memory. (start inclusive, end exclusive)
 This covers the executable, bss, etc. sections, but does not cover any memory that was dynamically allocated afterwards.
 (N.B. since the initial kernel heap is defined in the .bss section, that IS included, but if the heap is expanded afterwards then the expanded parts won't be included.) */
 pub fn get_kernel_bounds() -> (usize, usize) {
+    #[allow(unused_unsafe)]  // cargo and intellij don't agree on this
     unsafe {
         (addr_of!(kernel_phys_start) as usize, addr_of!(kernel_phys_end) as usize)
+    }
+}
+/* Get the physical memory bounds of the "kernel data" section, containing the initial heap and stack. */
+pub fn get_kernel_data_bounds() -> (usize, usize) {
+    #[allow(unused_unsafe)]  // cargo and intellij don't agree on this
+    unsafe {
+        (addr_of!(kdata_phys_start) as usize, addr_of!(kdata_phys_end) as usize)
     }
 }
 
@@ -134,7 +145,7 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
         }
     }
 }
-pub type PFrameAllocator = BuddyAllocator<27,4096>;
+pub type PFrameAllocator = BuddyAllocator<27,{super::paging::PAGE_ALIGN}>;
 lazy_static! {
     static ref PHYSMEM_ALLOCATOR: YMutex<PFrameAllocator> = YMutex::new(BuddyAllocator {
         free_blocks: core::array::from_fn(|_| Vec::new()),
@@ -202,14 +213,13 @@ pub fn init_pmem(mmap: &Vec<crate::coredrivers::parse_multiboot::MemoryMapEntry>
 #[derive(Debug)]
 pub struct PhysicalMemoryAllocation {
     addr: usize,
-    layout: Layout,
-    size: usize,
+    size: PageAllocationSizeT,
     
     block: (usize, usize),  // (order, addr)
 }
 impl PhysicalMemoryAllocation {
     pub fn get_addr(&self) -> usize { self.addr }
-    pub fn get_size(&self) -> usize { self.size }
+    pub fn get_size(&self) -> PageAllocationSizeT { self.size }
 }
 // Memory allocations cannot be copied nor cloned,
 // as that would allow for use-after-free or double-free errors
@@ -218,16 +228,15 @@ impl PhysicalMemoryAllocation {
 //      cannot access physical memory that has been freed or re-used)
 impl !Copy for PhysicalMemoryAllocation{}
 impl !Clone for PhysicalMemoryAllocation{}
-impl !Sync for PhysicalMemoryAllocation{}
+// Physical memory allocations *can* be Sync, because they contain no support for mutation that isn't handled by Rust's borrowing rules
 
-// Return the size block to allocate for the given layout, assuming that the given block is aligned by itself (which is the case for allocations).
-fn calc_alloc_size(layout: &Layout) -> usize {
-    layout.pad_to_align().size()
-}
-
-pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
-    klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Requested to allocate physical memory for {:?}", layout);
-    let alloc_size = calc_alloc_size(&layout);
+use super::paging::{PageAlignedValue,PageAllocationSizeT};
+/// Note: Allocated amount may be larger than size, even if page-aligned.
+/// This is because this can only allocate sizes of powers of two.
+/// So yes, you should still use .get_size() instead of reusing the size value
+pub fn palloc(size: PageAllocationSizeT) -> Option<PhysicalMemoryAllocation> {
+    klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Requested to allocate physical memory for {:?}", size);
+    let alloc_size = size.get();
     klog!(Debug, MEMORY_PHYSICAL_ALLOCATOR, "Allocating {} bytes.", alloc_size);
     let (addr, order, size) = {
         let mut allocator = PHYSMEM_ALLOCATOR.lock();
@@ -248,8 +257,7 @@ pub fn palloc(layout: Layout) -> Option<PhysicalMemoryAllocation> {
     }?;
     Some(PhysicalMemoryAllocation { 
         addr: addr as usize,
-        layout: layout,
-        size: size,
+        size: PageAllocationSizeT::new_checked(PFrameAllocator::block_size(order)).unwrap(),
         block: (order, addr),
     })
 }

@@ -2,7 +2,7 @@
 use core::sync::atomic::{AtomicU16,Ordering};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use crate::sync::hspin::{HRwLock as RwLock,HRwLockReadGuard as RwLockReadGuard,HRwLockWriteGuard as RwLockWriteGuard,HRwLockUpgradableGuard as RwLockUpgradableGuard};  // we're now using HLocks because that's what we always should've been using
+use crate::sync::hspin::{HRwLock as RwLock, HRwLockReadGuard as RwLockReadGuard, HRwLockWriteGuard as RwLockWriteGuard, HRwLockUpgradableGuard as RwLockUpgradableGuard, HMutex, HMutexGuard};  // we're now using HLocks because that's what we always should've been using
 use crate::multitasking::cpulocal::CpuLocal;
 
 use super::*;
@@ -417,32 +417,22 @@ pub struct LPAMetadata {
 }
 struct LPAInternal<PFA: PageFrameAllocator> {
     // The locked allocator
-    lock: RwLock<PFA>,
+    lock: HMutex<PFA>,
     // Other metadata
     meta: LPAMetadata,
     // The number of times this is "active" - usually 1 for global tables, or <number of CPUs table is active for> for top-level contexts.
     active_count: AtomicU16,
-    // The IDs of the CPUs this is active on, used for flushing the TLB for the correct CPUs (if non-global. For global pages this is usually just the ID of the bootstrap processor and nothing else :-/)
-    // Note that if you just need to know the number of CPUs, active_count is likely to be more accurate (as it's intended for that rather than this which is just for the TLB invalidation process)
-    active_on: RwLock<Vec<usize>>,
 }
 impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
     fn new(alloc: PFA, meta: LPAMetadata) -> Self {
         Self {
-            lock: RwLock::new(alloc),
+            lock: HMutex::new(alloc),
             meta: meta,
             active_count: AtomicU16::new(0),
-            active_on: RwLock::new(Vec::new()),
         }
     }
     pub fn metadata(&self) -> LPAMetadata {
         self.meta
-    }
-}
-impl<PFA: PageFrameAllocator> core::ops::Deref for LPAInternal<PFA>{
-    type Target = RwLock<PFA>;
-    fn deref(&self) -> &Self::Target {
-        &self.lock
     }
 }
 
@@ -461,94 +451,42 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     }
     
     /* Lock the allocator for reading until _end_active is called.
-    This is intended to be used when the page table is possibly being read/cached by the CPU, as when locked by _begin_active, writes via write_when_active are still possible (as they flush the TLB). */
-    pub(super) fn _begin_active(&self) -> &PFA {
-        // Lock (by obtaining then forgetting a read guard, and using the underlying ptr instead)
-        let read_guard = self.0.read();
-        let (lock_guard, nointerrupt_guard) = unsafe { RwLockReadGuard::into_separate_guards(read_guard) };  // Discard the NoInterruptionsGuard once we leave this function
-        core::mem::forget(lock_guard);  // Leak the lock guard
-        let alloc = unsafe{ &*self.0.data_ptr() };  // SAFETY: We hold a read lock which we obtained (and then leaked) in the statement above
-
-        core::sync::atomic::compiler_fence(Ordering::SeqCst);
+    This is intended to be used when the page table is possibly being read/cached by the CPU, as when locked by _begin_active, writes via write_when_active are still possible (as they flush the TLB).
+    This returns the lock guard to allow temporary access to the allocator, however: 1. the allocator must only be read from, and 2. the lock should be released (not leaked)s once activation is finished. */
+    pub(super) fn _begin_active(&self) -> impl Deref<Target=PFA> + '_ {
         // Increment active count
         self.0.active_count.fetch_add(1, Ordering::Acquire);
-        // Add self to active_on
-        self.0.active_on.write().push(crate::multitasking::get_cpu_num());
+
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
+        // Lock temporarily
+        // This ensures that we are not being written to by a writer that is unaware of our existence
+        // (we immediately release the lock afterwards as anyone who locks for writing after us will check active_count,
+        //      see that we're active, and issue the correct TLB flush commands as applicable)
+        let lock = self.0.lock.lock();
         // Return
-        alloc
+        lock
     }
     pub(super) unsafe fn _end_active(&self){
-        // Remove from active_on
-        let mut wg = self.0.active_on.write();
-        let cpu_num = crate::multitasking::get_cpu_num();
-        if let Some(pos) = wg.iter().position(|x|*x==cpu_num) {
-            wg.swap_remove(pos);
-        }
-        drop(wg);
+        // TODO
         // Decrement active count
         self.0.active_count.fetch_sub(1, Ordering::Release);
+
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
-        // Unlock
-        self.0.force_unlock_read();  // this should really be called force_read_decrement tbh. would be much less ambiguous
-    }
-    
-    pub(super) fn read(&self) -> RwLockReadGuard<PFA> {
-        self.0.read()
-    }
-    
-    pub(super) fn write(&self) -> LPageAllocatorRWLWriteGuard<PFA> {
-        let options = self.metadata().default_options;
-        
-        LockedPageAllocatorWriteGuard{guard: self.0.write(), allocator: Self::clone_ref(self), options}
-    }
-    pub(super) fn try_write(&self) -> Option<LPageAllocatorRWLWriteGuard<PFA>> {
-        match self.0.try_write() {
-            Some(guard) => {
-                let options = self.metadata().default_options;
-                
-                Some(LockedPageAllocatorWriteGuard{guard, allocator: Self::clone_ref(self), options})
-            },
-            None => None,
-        }
     }
     
     /* Write to a page table that is currently active, provided there are no other read/write locks.
         Writes using this guard will automatically invalidate the TLB entries as needed.*/
-    pub(super) fn write_when_active(&self) -> LPageAllocatorUnsafeWriteGuard<PFA> {
-        // Acquire an upgradable read guard, to ensure that A. there are no writers, and B. there are no new readers while we're determining what to do
-        let upgradable = self.0.upgradable_read();
-        core::sync::atomic::compiler_fence(Ordering::SeqCst);
-        
-        // Ensure reader count matches our active_count
-        /* SAFETY / SYNC:
-           Since no new readers can be allocated, reader_count will not have increased during this time
-           Since reader_count is incremented before active_count, if a race occurs during _begin_active, then reader_count > active_count, which means a lock is not acquired and we must wait and try again.
-           Similarly, active_count must be decremented before reader_count in _end_active. If a race occurs during _end_active, then reader_count > active_count, which means a lock is not acquired blah blah blah
-           We also read reader_count before active_count, to ensure that in a race with _end_active, we will end up with reader_count > active_count (since active_count is decremented first).
-           
-           Note: Reader count no longer includes the upgradeable guard (however since we have an upgradeable guard, this returns Err(x))
-        */
-        loop {
-            let reader_count = self.0.raw().reader_count().err().unwrap();
-            core::sync::atomic::compiler_fence(Ordering::SeqCst);
-            let active_count = self.0.active_count.load(Ordering::Acquire);
-            if reader_count <= (active_count+1).into() {
-                // Force-upgrade and return the write lock
-                // We cannot upgrade normally because that would require there to be no readers
-                // Whereas here we've ensured that the readers are all CPU/TLB readers or something
-                // So we want to forcibly create an upgraded version
-                let write_guard = unsafe { ForcedUpgradeGuard::new(&self.0, upgradable) };
-                
-                let mut options = self.metadata().default_options;
-                options.auto_flush_tlb = active_count > 0;  // if we are active in any contexts, we should remember to flush TLB
-                
-                return LockedPageAllocatorWriteGuard{guard: write_guard, allocator: Self::clone_ref(self), options};
-            } else {
-                // Relax
-                // 🛏☺☕ ahhh
-                crate::multitasking::scheduler::spin_yield();
-            }
-        }
+    pub(super) fn write_when_active(&self) -> LPAWriteGuard<PFA> {
+        // Obtain a lock guard
+        // Once we hold a guard, we guarantee that no more readers will activate the page without us knowing
+        let guard = self.0.lock.lock();
+
+        let mut options = self.metadata().default_options.clone();
+        options.auto_flush_tlb = self.0.active_count.load(Ordering::Acquire) > 0;  // if we're active, flush the TLB
+        // Note: this is safe because a page cannot become active before first incrementing active_count and then acquiring the lock
+        // Thus, while we're writing, active_count cannot be incremented (there may be some chicanery implemented later on if necessary but active_count will never go from 0 -> 1 while we hold the lock)
+
+        return LockedPageAllocatorWriteGuard { guard, allocator: Self::clone_ref(self), options };
     }
     
     pub fn allocate(&self, size: PageAllocationSizeT, alloc_strat: PageAllocationStrategies) -> Option<PageAllocation<PFA>> {
@@ -565,7 +503,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     /// Get the physical address of the page table
     /// Intended for use as a heuristic only
     pub fn get_phys_addr(&self) -> usize {
-        ptaddr_virt_to_phys(self.read().get_page_table_ptr() as usize)
+        ptaddr_virt_to_phys(self.0.lock.lock().get_page_table_ptr() as usize)
     }
 }
 
@@ -660,8 +598,7 @@ pub struct LockedPageAllocatorWriteGuard<PFA: PageFrameAllocator, GuardT>
     pub(super) options: LPAWGOptions,
 }
 //pub type TLPageAllocatorWriteGuard<'a> = LockedPageAllocatorWriteGuard<'a, BaseTLPageAllocator>;
-pub type LPageAllocatorRWLWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, RwLockWriteGuard<'a, PFA>>;
-pub type LPageAllocatorUnsafeWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, ForcedUpgradeGuard<'a, PFA>>;
+pub type LPAWriteGuard<'a, PFA> = LockedPageAllocatorWriteGuard<PFA, HMutexGuard<'a, PFA>>;
 
 macro_rules! ppa_define_foreach {
     // Note: body takes four variables from the outside: allocator, ptable, index, and offset (as well as any other args they specify).
@@ -870,8 +807,8 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     pub(super) fn invalidate_tlb(&mut self, allocation: &PageAllocation<PFA>){
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
         let vmem_offset = allocation.start();  // (vmem offset is now added by PageAllocation itself)
-        let active_on = self.allocator.0.active_on.read(); // It's faster to hold the lock here than to clone as read/write contention on the same page allocator is negligble compared to contention on the heap allocator
-        inval_tlb_pg(allocation.into(), allocation.metadata.offset, self.options.is_global_page, Some(&*active_on));
+        // TODO let active_on = self.allocator.0.active_on.read(); // It's faster to hold the lock here than to clone as read/write contention on the same page allocator is negligble compared to contention on the heap allocator
+        inval_tlb_pg(allocation.into(), allocation.metadata.offset, self.options.is_global_page, None);
     }
 }
 
@@ -1022,6 +959,7 @@ impl<PFA:PageFrameAllocator> core::fmt::Debug for PageAllocation<PFA> {
 }
 
 use alloc::boxed::Box;
+use core::ops::Deref;
 /* Any page allocation, regardless of PFA. */
 pub trait AnyPageAllocation: core::fmt::Debug + Send {
     fn normalize(&mut self);

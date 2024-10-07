@@ -1,3 +1,4 @@
+use core::ops::Deref;
 use lazy_static::lazy_static;
 
 use super::*;
@@ -17,7 +18,7 @@ impl GlobalPageTable {
     }
     
     /* Called to leak the pointer that will be put into every page table to reference this global page mapping */
-    fn _begin_active(&self) -> &GlobalPTType {
+    fn _begin_active(&self) -> impl Deref<Target=GlobalPTType> + '_ {
         self.0._begin_active()
     }
 }

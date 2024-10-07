@@ -3,12 +3,13 @@ use crate::logging::klog;
 use core::alloc::Layout;
 use alloc::vec::Vec; use alloc::vec;
 use alloc::boxed::Box;
+use core::convert::TryInto;
 use core::fmt::{Debug, Formatter};
 use crate::memory::physical::{PhysicalMemoryAllocation, palloc};
 use crate::memory::paging::{KALLOCATION_KERNEL_STACK, PageFlags, TransitivePageFlags, MappingSpecificPageFlags, PageFrameAllocator, PageAllocation, TLPageFrameAllocator, LockedPageAllocator, PageAllocationStrategies, ALLOCATION_USER_STACK, PagingContext, AnyPageAllocation, PageAlignedValue, PageAllocationSizeT as PageAlignedUsize, PageAlignedAddressT, PageAllocationSizeT, pageFlags, PageAlignedOffsetT};
 use crate::memory::paging::global_pages::{GPageFrameAllocator,KERNEL_PTABLE};
 use crate::memory::unified;
-use crate::memory::unified::{AllocationType, GuardPageType, OffsetMappedAllocation, UnifiedAllocation, UnifiedVirtGuard};
+use crate::memory::unified::{AllocationType, GuardPageType, OffsetMappedAllocation, UnifiedAllocation, UnifiedVirtGuard, ABSENT_PAGES_ID_NULL_GUARD};
 
 /* Any allocated stack, regardless of how it was allocated */
 pub trait AnyAllocatedStack: Debug + Send {
@@ -68,7 +69,6 @@ impl Debug for DynOffsetMappedStack {
     }
 }
 
-pub const MARKER_NULL_GUARD: usize = GuardPageType::NullPointer as usize;
 pub fn new_user_paging_context() -> PagingContext {
     klog!(Debug, MEMORY_ALLOCUTIL, "Creating new user paging context.");
     let context = PagingContext::new();
@@ -76,7 +76,7 @@ pub fn new_user_paging_context() -> PagingContext {
     // null guard - 1MiB at the start to catch any null pointers
     const NULL_GUARD_SIZE: PageAllocationSizeT = PageAllocationSizeT::new_const(1*1024*1024);
     let nullguard = context.allocate_at(PageAlignedAddressT::new(0), NULL_GUARD_SIZE).unwrap();
-    nullguard.set_absent(MARKER_NULL_GUARD);
+    nullguard.set_absent((*ABSENT_PAGES_ID_NULL_GUARD).try_into().unwrap());  // point it towards an absent page entry that states it is a guard page
     nullguard.leak();  // (we'll never need to de-allocate the null guard)
 
     // :)

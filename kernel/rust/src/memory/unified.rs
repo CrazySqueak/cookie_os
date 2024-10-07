@@ -619,7 +619,7 @@ impl Drop for UnifiedVirtGuard {
     }
 }
 
-use crate::descriptors::{DescriptorTable,DescriptorHandleA,DescriptorHandleB};
+use crate::descriptors::{DescriptorTable, DescriptorHandleA, DescriptorHandleB, DescriptorID};
 use crate::memory::alloc_util::AnyAllocatedStack;
 
 #[derive(Default)]
@@ -658,6 +658,17 @@ type AbsentPagesHandleA = DescriptorHandleA<'static,AbsentPagesItemT,AbsentPages
 type AbsentPagesHandleB = DescriptorHandleB<'static,AbsentPagesItemT,AbsentPagesItemA,AbsentPagesItemB>;
 lazy_static::lazy_static! {
     static ref ABSENT_PAGES_TABLE: AbsentPagesTab = DescriptorTable::new();
+
+    pub static ref ABSENT_PAGES_ID_NULL_GUARD: DescriptorID = {
+        let initializer = ABSENT_PAGES_TABLE.create_new_descriptor();
+        let handle = initializer.commit(
+            AbsentPagesItemA::StaticGuardPage(GuardPageType::NullPointer),
+            AbsentPagesItemB{}
+        );
+        let id = handle.get_id();
+        core::mem::forget(handle);  // leak the handle so its ID is valid forever
+        id
+    };
 }
 
 // == SPECIALISED ALLOCATIONS ==
@@ -788,5 +799,17 @@ impl OffsetMappedAllocation {
     pub fn get_size(&self) -> PageAllocationSizeT {
         debug_assert!(self.phys.get_size() == self.virt.size());
         self.phys.get_size()
+    }
+
+    /// Leak this allocation, returning its virt ptr, phys addr, and size
+    /// Unlike `forget()`, this correctly drops the Arc<> for the page table,
+    ///  preventing the page table itself from being leaked
+    pub fn leak(self) -> (*mut u8, PageAlignedAddressT, PageAllocationSizeT) {
+        let phys_addr = self.get_phys_addr();
+        let virt_addr = self.get_virt_addr().get() as *mut u8;
+        let size = self.get_size();
+        let Self{phys, virt} = self;
+        core::mem::forget(phys); virt.leak();
+        (virt_addr, phys_addr, size)
     }
 }

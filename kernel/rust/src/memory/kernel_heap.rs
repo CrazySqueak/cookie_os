@@ -130,7 +130,7 @@ unsafe fn _use_rescue(heap: &LockedHeap<32>) -> Result<(),()> {
     let allocation = match GLOBAL_RESCUE.try_lock().and_then(|mut r|r.take()){ Some(x)=>x, None=>return Err(()), };
     heap.lock().init(allocation.get_virt_addr().get(), allocation.get_size().get());
     // Forget allocation so that it doesn't get Drop'd and deallocated
-    core::mem::forget(allocation);  // this is in a global page so it'll be fine (hopefully) - oh god i forgot how many Arc<>s stay around if you leak an allocation like this
+    allocation.leak();
     _notify_rescue_used::spawn();  // we can't log here anymore so we launch a task instead
     Ok(())
 }

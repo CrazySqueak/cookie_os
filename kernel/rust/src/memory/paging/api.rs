@@ -1,5 +1,5 @@
 
-use core::sync::atomic::{AtomicU16,Ordering};
+use core::sync::atomic::{AtomicU16, AtomicU8, Ordering};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use crate::sync::hspin::{HRwLock as RwLock, HRwLockReadGuard as RwLockReadGuard, HRwLockWriteGuard as RwLockWriteGuard, HRwLockUpgradableGuard as RwLockUpgradableGuard, HMutex, HMutexGuard};  // we're now using HLocks because that's what we always should've been using
@@ -416,19 +416,29 @@ pub struct LPAMetadata {
     pub default_options: LPAWGOptions,
 }
 struct LPAInternal<PFA: PageFrameAllocator> {
-    // The locked allocator
+    /// The locked allocator
     lock: HMutex<PFA>,
-    // Other metadata
+    /// Other metadata
     meta: LPAMetadata,
-    // The number of times this is "active" - usually 1 for global tables, or <number of CPUs table is active for> for top-level contexts.
+
+    /// The number of times this is "active" - usually 1 for global tables, or <number of CPUs table is active for> for top-level contexts.
     active_count: AtomicU16,
+    /// The current "active ID" of the page table.
+    /// This is set after active_count is incremented from 0 to 1,
+    ///  and cleared after active_count is decremented from 1 to 0.
+    /// This is mainly used for determining which CPUs to broadcast TLB invalidations to as part of the TLB shootdown.
+    /// 0 = unset, 255 = unknowable (broadcast to all CPUs)
+    active_id: AtomicU8,
 }
+pub const ACTIVE_ID_EMPTY: u8 = 0;
+pub const ACTIVE_ID_UNKNOWABLE: u8 = 255;
 impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
     fn new(alloc: PFA, meta: LPAMetadata) -> Self {
         Self {
             lock: HMutex::new(alloc),
             meta: meta,
             active_count: AtomicU16::new(0),
+            active_id: AtomicU8::new(ACTIVE_ID_EMPTY),
         }
     }
     pub fn metadata(&self) -> LPAMetadata {
@@ -453,11 +463,30 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     /* Lock the allocator for reading until _end_active is called.
     This is intended to be used when the page table is possibly being read/cached by the CPU, as when locked by _begin_active, writes via write_when_active are still possible (as they flush the TLB).
     This returns the lock guard to allow temporary access to the allocator, however: 1. the allocator must only be read from, and 2. the lock should be released (not leaked)s once activation is finished. */
-    pub(super) fn _begin_active(&self) -> impl Deref<Target=PFA> + '_ {
+    pub(super) fn _begin_active(&self,
+                                // called if we need to set the active ID
+                                active_id_initializer: impl FnOnce()->u8,
+    ) -> impl Deref<Target=PFA> + '_ {
+        let no_interruptions = disable_interruptions();  // hold our no_interruptions guard to prevent us from being interrupted
         // Increment active count
-        self.0.active_count.fetch_add(1, Ordering::Acquire);
+        let old_active = self.0.active_count.fetch_add(1, Ordering::Acquire);
+        // Set the active ID, or get it (depending on our responsibility)
+        let active_id = if old_active == 0 {
+            let new_active_id = active_id_initializer();
+            while let Err(_) = self.0.active_id.compare_exchange_weak(ACTIVE_ID_EMPTY, new_active_id, Ordering::AcqRel, Ordering::Relaxed) { spin_loop() }
+            new_active_id
+        } else {
+            // TODO: Fix rare edge case when deactivating and then activating a page twice, all three at the same time
+            //      where the old active_id value may be accepted by thread 2, cleared by thread 0, and then set by thread 1
+            loop {
+                let active_id = self.0.active_id.load(Ordering::Acquire);
+                if active_id != ACTIVE_ID_EMPTY { break active_id }
+                // else, not initialised yet
+                else { spin_loop() }
+                // (it's not our responsibility as we weren't the first to activate the page)
+            }
+        };
 
-        core::sync::atomic::compiler_fence(Ordering::SeqCst);
         // Lock temporarily
         // This ensures that we are not being written to by a writer that is unaware of our existence
         // (we immediately release the lock afterwards as anyone who locks for writing after us will check active_count,
@@ -466,10 +495,19 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         // Return
         lock
     }
-    pub(super) unsafe fn _end_active(&self){
-        // TODO
+    pub(super) unsafe fn _end_active(&self,
+                                     // called if the active ID was cleared
+                                     active_id_destructor: impl FnOnce(u8),
+    ){
+        let no_interruptions = disable_interruptions();  // hold our no_interruptions guard to prevent us from being interrupted
         // Decrement active count
-        self.0.active_count.fetch_sub(1, Ordering::Release);
+        let old_active = self.0.active_count.fetch_sub(1, Ordering::Release);
+        // Clear the active ID, if necessary
+        if old_active == 1 {
+            // It's us! (we decremented from 1 to 0)
+            // (it won't have been overwritten as it's not cleared until we clear it)
+            self.0.active_id.store(ACTIVE_ID_EMPTY, Ordering::Release);
+        }
 
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
     }
@@ -544,7 +582,7 @@ impl PagingContext {
          */
     pub unsafe fn activate(&self){
         // Leak read guard (as the TLB will cache the page table as needed, thus meaning it should not be modified without careful consideration)
-        let allocator = self.0._begin_active();
+        let allocator = self.0._begin_active(||ACTIVE_ID_UNKNOWABLE);  // not implemented yet
         
         // activate table
         let table_addr = ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize);
@@ -564,7 +602,7 @@ impl PagingContext {
         //         counter here will be defined, working as if the guard had been dropped.
         // (N.B. we can't simply store the guard due to borrow checker limitations + programmer laziness)
         if let Some(old_table) = oldpt { unsafe {
-            old_table.0._end_active();
+            old_table.0._end_active(|_id|{});  // not implemented yet
         }}
     }
 }
@@ -959,6 +997,7 @@ impl<PFA:PageFrameAllocator> core::fmt::Debug for PageAllocation<PFA> {
 }
 
 use alloc::boxed::Box;
+use core::hint::spin_loop;
 use core::ops::Deref;
 /* Any page allocation, regardless of PFA. */
 pub trait AnyPageAllocation: core::fmt::Debug + Send {

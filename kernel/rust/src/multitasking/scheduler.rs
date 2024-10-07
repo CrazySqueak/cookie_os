@@ -106,14 +106,15 @@ pub(super) fn schedule(command: SchedulerCommand, rsp: StackPointer) -> ! {
         // Update current task
         current_task.set_rsp(rsp);
         
-        // FIXME: DO NOT allocate/deallocate phys/virt memory while inside the scheduler!
-        // PagingContexts and the physical memory allocator both use WLocks!!
+        // Update: memory management from the scheduler is allowed for the time being
+        // paging now use
         
         // Push previous task back onto the run queue
         match &command {
             SchedulerCommand::Terminate => {
                 // Terminate the task
                 klog!(Debug, SCHEDULER, "Terminating task: {}", current_task.task_id);
+                state.deferred_drop.clear();  // (drop previous stacks)
                 state.deferred_drop.push(current_task)
             }
             

@@ -59,7 +59,7 @@ pub extern "sysv64" fn _kstart() -> ! {
     // Initialise CPU flags
     cpu::init_bsp();
     // Initialise scheduler
-    multitasking::scheduler::init_scheduler(None);
+    multitasking::scheduler::init_scheduler(Some(Box::new(memory::stack::claim_bsp_boostrap_stack())));
 
     // Configure physical memory
     //klog!(Info, BOOT, "Initialising physical memory allocator...");
@@ -78,13 +78,9 @@ pub extern "sysv64" fn _kstart() -> ! {
     assert!(test.1.get().unwrap());
     assert!(!test2.1.get().unwrap());
 
-    let mut test_total: usize = 0;
-    loop {
-        let test1234 = Box::new([0u8; 16*1024]);
-        test_total += size_of_val(test1234.deref());
-        klog!(Info, ROOT, "heap test: {}KiB", test_total/1024);
-        Box::leak(test1234);
-        spin_yield()  // we have to actually yield to allow the rescue to be re-allocated
+    for i in 0..3 {
+        test_task_2::spawn();
+        spin_yield()
     }
 
     // TODO
@@ -103,8 +99,12 @@ multitasking::util::def_task_fn! {
         x == 42
     }
 }
-
-// fixme
-#[no_mangle]
-#[used]
-static next_processor_stack: u8 = 0xaa;
+multitasking::util::def_task_fn! {
+    pub task fn test_task_2() {
+        for i in 0..5 {
+            klog!(Info, ROOT, "Test {}", i);
+            spin_yield()
+        }
+        klog!(Info, ROOT, "Test DONE");
+    }
+}

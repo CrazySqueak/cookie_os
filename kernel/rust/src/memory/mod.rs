@@ -3,3 +3,4 @@ pub mod physical;
 pub mod paging;
 pub mod alloc_util;
 pub mod unified;
+pub mod stack;

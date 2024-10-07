@@ -4,7 +4,7 @@ use core::ptr::addr_of;
 
 use lazy_static::lazy_static;
 
-use crate::sync::YMutex;
+use crate::sync::hspin::HMutex;
 
 use core::fmt::write;
 use crate::logging::klog;
@@ -147,7 +147,7 @@ impl<const MAX_ORDER: usize, const MIN_SIZE: usize> BuddyAllocator<MAX_ORDER,MIN
 }
 pub type PFrameAllocator = BuddyAllocator<27,{super::paging::PAGE_ALIGN}>;
 lazy_static! {
-    static ref PHYSMEM_ALLOCATOR: YMutex<PFrameAllocator> = YMutex::new(BuddyAllocator {
+    static ref PHYSMEM_ALLOCATOR: HMutex<PFrameAllocator> = HMutex::new(BuddyAllocator {
         free_blocks: core::array::from_fn(|_| Vec::new()),
         
         amount_allocated: 0,
@@ -203,7 +203,7 @@ pub fn init_pmem(mmap: &Vec<crate::coredrivers::parse_multiboot::MemoryMapEntry>
             }
         }
     }
-    klog!(Debug, MEMORY_PHYSICAL_RAMMAP, "\nResult:{:#x?}", allocator);
+    klog!(Debug, MEMORY_PHYSICAL_RAMMAP, "\nResult:{:#x?}", &*allocator);
     
     let total_added: usize = allocator.amount_free - prev_free;
     klog!(Info, MEMORY_PHYSICAL_RAMMAP, "Total General-use Memory: {}MiB, Available Memory: {}MiB", total_general_use/(1024*1024), total_added/(1024*1024));

@@ -61,6 +61,7 @@ pub unsafe fn init_kheap(){
 }
 
 pub(super) unsafe fn reclaim_for_heap(start: *mut u8, end: *mut u8) {
+    klog!(Debug, MEMORY_KHEAP, "Reclaiming memory at {:x}-{:x} for heap.", start as usize, end as usize);
     _without_interruptions_noalloc(||
         KHEAP_ALLOCATOR.heap.lock().add_to_heap(start as usize, end as usize)
     );

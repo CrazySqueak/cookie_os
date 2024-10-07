@@ -26,7 +26,7 @@ pub struct HeapReclaimableAllocatedStack {
     end: usize,
 }
 impl HeapReclaimableAllocatedStack {
-    pub unsafe fn new(start: *mut u8, end: *mut u8) -> Self {
+    pub unsafe fn new(start: *const u8, end: *const u8) -> Self {
         Self { start: start as usize, end: end as usize }
     }
 }

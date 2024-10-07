@@ -75,12 +75,16 @@ impl<T: core::fmt::Write, G: core::ops::DerefMut<Target=T>> core::ops::DerefMut 
 // FORMATTER/DESTINATION SELECTION
 pub struct LoggingPipeline {
     formatter: Box<dyn LogFormatter>,
+    /// IMPORTANT: All destinations MUST be writable without interruptions available (i.e. they must not yield to the scheduler)
+    /// kernel_log is called in all sorts of places, including the allocators, scheduler, and interrupt handlers!
+    /// Use KMutexes or lock-free write mechanisms ONLY
+    /// (your best options are to either push to a kmutex-locked queue, or permanently hold a mutex guard and use that inside a [GuardFmtWriter])
     destinations: Vec<Box<dyn core::fmt::Write + Send>>,
 }
 impl core::default::Default for LoggingPipeline {
     fn default() -> Self {
         // Note: the logger permanently locks serial1. Literally nothing else uses serial1 so it's fine.
-        let serial1 = crate::coredrivers::serial_uart::SERIAL1.lock();
+        let serial1 = crate::coredrivers::serial_uart::SERIAL1.try_lock().expect("Attempted to initialise logging pipeline but SERIAL1 was already locked!! Deadlock?");
         let (serial1, ni) = unsafe { crate::sync::nointerruptionslocks::NoInterruptionsGuardWrapper::into_separate_guards(serial1) };
         let serial1 = Box::new(GuardFmtWriter::new(serial1));
         Self {

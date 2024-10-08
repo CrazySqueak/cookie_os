@@ -420,25 +420,17 @@ struct LPAInternal<PFA: PageFrameAllocator> {
     lock: HMutex<PFA>,
     /// Other metadata
     meta: LPAMetadata,
-
-    /// The number of times this is "active" - usually 1 for global tables, or <number of CPUs table is active for> for top-level contexts.
+    /// active_count: If non-zero, we must bother with TLB invalidation
     active_count: AtomicU16,
-    /// The current "active ID" of the page table.
-    /// This is set after active_count is incremented from 0 to 1,
-    ///  and cleared after active_count is decremented from 1 to 0.
-    /// This is mainly used for determining which CPUs to broadcast TLB invalidations to as part of the TLB shootdown.
-    /// 0 = unset, 255 = unknowable (broadcast to all CPUs)
-    active_id: AtomicU8,
 }
-pub const ACTIVE_ID_EMPTY: u8 = 0;
-pub const ACTIVE_ID_UNKNOWABLE: u8 = 255;
+// pub const ACTIVE_ID_EMPTY: u8 = 0;
+// pub const ACTIVE_ID_UNKNOWABLE: u8 = 255;
 impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
     fn new(alloc: PFA, meta: LPAMetadata) -> Self {
         Self {
             lock: HMutex::new(alloc),
             meta: meta,
             active_count: AtomicU16::new(0),
-            active_id: AtomicU8::new(ACTIVE_ID_EMPTY),
         }
     }
     pub fn metadata(&self) -> LPAMetadata {
@@ -463,35 +455,16 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     /* Lock the allocator for reading until _end_active is called.
     This is intended to be used when the page table is possibly being read/cached by the CPU, as when locked by _begin_active, writes via write_when_active are still possible (as they flush the TLB).
     This returns the lock guard to allow temporary access to the allocator, however: 1. the allocator must only be read from, and 2. the lock should be released (not leaked)s once activation is finished. */
-    pub(super) fn _begin_active(&self,
-                                // called if we need to set the active ID
-                                active_id_initializer: impl FnOnce()->u8,
-    ) -> impl Deref<Target=PFA> + '_ {
-        let no_interruptions = disable_interruptions();  // hold our no_interruptions guard to prevent us from being interrupted
-        // Increment active count
-        let old_active = self.0.active_count.fetch_add(1, Ordering::Acquire);
-        // Set the active ID, or get it (depending on our responsibility)
-        let active_id = if old_active == 0 {
-            let new_active_id = active_id_initializer();
-            while let Err(_) = self.0.active_id.compare_exchange_weak(ACTIVE_ID_EMPTY, new_active_id, Ordering::AcqRel, Ordering::Relaxed) { spin_loop() }
-            new_active_id
-        } else {
-            // TODO: Fix rare edge case when deactivating and then activating a page twice, all three at the same time
-            //      where the old active_id value may be accepted by thread 2, cleared by thread 0, and then set by thread 1
-            loop {
-                let active_id = self.0.active_id.load(Ordering::Acquire);
-                if active_id != ACTIVE_ID_EMPTY { break active_id }
-                // else, not initialised yet
-                else { spin_loop() }
-                // (it's not our responsibility as we weren't the first to activate the page)
-            }
-        };
+    pub(super) fn _begin_active(&self) -> impl Deref<Target=PFA> + '_ {
+        // Increment active_count
+        self.0.active_count.fetch_add(1,Ordering::Acquire);
 
         // Lock temporarily
         // This ensures that we are not being written to by a writer that is unaware of our existence
         // (we immediately release the lock afterwards as anyone who locks for writing after us will check active_count,
         //      see that we're active, and issue the correct TLB flush commands as applicable)
         let lock = self.0.lock.lock();
+
         // Return
         lock
     }
@@ -499,17 +472,10 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
                                      // called if the active ID was cleared
                                      active_id_destructor: impl FnOnce(u8),
     ){
-        let no_interruptions = disable_interruptions();  // hold our no_interruptions guard to prevent us from being interrupted
-        // Decrement active count
-        let old_active = self.0.active_count.fetch_sub(1, Ordering::Release);
-        // Clear the active ID, if necessary
-        if old_active == 1 {
-            // It's us! (we decremented from 1 to 0)
-            // (it won't have been overwritten as it's not cleared until we clear it)
-            self.0.active_id.store(ACTIVE_ID_EMPTY, Ordering::Release);
-        }
+        // Decrement active_count
+        self.0.active_count.fetch_sub(1,Ordering::Release);
 
-        core::sync::atomic::compiler_fence(Ordering::SeqCst);
+        //core::sync::atomic::compiler_fence(Ordering::SeqCst);
     }
     
     /* Write to a page table that is currently active, provided there are no other read/write locks.
@@ -520,7 +486,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         let guard = self.0.lock.lock();
 
         let mut options = self.metadata().default_options.clone();
-        options.auto_flush_tlb = self.0.active_count.load(Ordering::Acquire) > 0;  // if we're active, flush the TLB
+        options.auto_flush_tlb = self.0.active_count.load(Ordering::Relaxed) > 0;  // if we're active, flush the TLB
         // Note: this is safe because a page cannot become active before first incrementing active_count and then acquiring the lock
         // Thus, while we're writing, active_count cannot be incremented (there may be some chicanery implemented later on if necessary but active_count will never go from 0 -> 1 while we hold the lock)
 
@@ -582,7 +548,7 @@ impl PagingContext {
          */
     pub unsafe fn activate(&self){
         // Leak read guard (as the TLB will cache the page table as needed, thus meaning it should not be modified without careful consideration)
-        let allocator = self.0._begin_active(||ACTIVE_ID_UNKNOWABLE);  // not implemented yet
+        let allocator = self.0._begin_active();
         
         // activate table
         let table_addr = ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize);
@@ -590,7 +556,7 @@ impl PagingContext {
 
         let ni = disable_interruptions();
         // Set active
-        set_active_page_table(table_addr);
+        set_active_page_table(table_addr);  // TODO
         // store reference (and take old one)
         let oldpt = _ACTIVE_PAGE_TABLE.lock().replace(Self::clone_ref(&self));
         // Enable interruptions
@@ -883,7 +849,7 @@ impl<T> core::ops::DerefMut for ForcedUpgradeGuard<'_, T>{
 // = ACTIVE OR SMTH? =
 // the currently active page table on each CPU
 use crate::sync::kspin::KMutex;
-use crate::multitasking::disable_interruptions;
+use crate::multitasking::{disable_interruptions, get_cpu_num};
 static _ACTIVE_PAGE_TABLE: CpuLocal<KMutex<Option<PagingContext>>,false> = CpuLocal::new();
 
 // = ALLOCATIONS =

@@ -19,7 +19,7 @@ impl GlobalPageTable {
     
     /* Called to leak the pointer that will be put into every page table to reference this global page mapping */
     fn _begin_active(&self) -> impl Deref<Target=GlobalPTType> + '_ {
-        self.0._begin_active(||ACTIVE_ID_UNKNOWABLE)  // we set active_id to unknowable, as global page updates must always be broadcast to all CPUs
+        self.0._begin_active()
     }
 }
 impl core::ops::Deref for GlobalPageTable {

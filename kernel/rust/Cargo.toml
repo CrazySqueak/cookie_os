@@ -49,12 +49,21 @@ enable_amd64_invlpgb = []
 recover_from_task_related_kernel_panic = []
 
 # DEBUGGING FEATURES (dbg_ prefix)
+# These features are intended for debug builds rather than release builds.
+
 # Tracks the location where no_interruption guards are taken
 dbg_track_nointerrupt_source = []
 # Tracks the location where yield_to_scheduler is called,
 #  and includes some extra assertions,
 #  to provide better error reporting when it is called incorrectly
 dbg_scheduler_yield_errinfo = []
+
+# INTERNAL FEATURES (__I prefix)
+# These features are activated internally when corresponding arch-specific features are activated
+# These should not be switched on manually unless you know what you are doing
+
+# Allow non-zero Address Space IDs
+__IallowNonZeroASID = []
 
 [lib]
 crate-type = ["staticlib"]

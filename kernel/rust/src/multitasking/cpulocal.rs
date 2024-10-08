@@ -77,6 +77,12 @@ impl<T: Default + ?Sized> CpuLocal<T,true> {
     pub fn get_for(x: &Self, id: usize) -> &T {
         x._get_for_inner(id)
     }
+
+    pub fn get_all_cpus(x: &Self) -> Vec<(usize,&T)> {
+        x.0.read().iter().enumerate()
+            .flat_map(|(i,o)|o.map(|x|(i,x)))
+            .map(|(i,ptr)|(i,unsafe{ptr.as_ref()})).collect()
+    }
 }
 impl<T: Default + ?Sized,const SHARED: bool> core::ops::Deref for CpuLocal<T,SHARED> {
     type Target = T;

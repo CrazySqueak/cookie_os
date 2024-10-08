@@ -468,10 +468,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         // Return
         lock
     }
-    pub(super) unsafe fn _end_active(&self,
-                                     // called if the active ID was cleared
-                                     active_id_destructor: impl FnOnce(u8),
-    ){
+    pub(super) unsafe fn _end_active(&self){
         // Decrement active_count
         self.0.active_count.fetch_sub(1,Ordering::Release);
 
@@ -547,7 +544,6 @@ impl PagingContext {
          The easiest way to achieve the above three points is to map the kernel to the same position in every page table. This is why the kernel lives in the higher half - it should never be necessary to change its location in virtual memory.
          */
     pub unsafe fn activate(&self){
-        // Leak read guard (as the TLB will cache the page table as needed, thus meaning it should not be modified without careful consideration)
         let allocator = self.0._begin_active();
         
         // activate table
@@ -568,7 +564,7 @@ impl PagingContext {
         //         counter here will be defined, working as if the guard had been dropped.
         // (N.B. we can't simply store the guard due to borrow checker limitations + programmer laziness)
         if let Some(old_table) = oldpt { unsafe {
-            old_table.0._end_active(|_id|{});  // not implemented yet
+            old_table.0._end_active();
         }}
     }
 }

@@ -28,3 +28,4 @@ pub mod strategy;
 pub use strategy::*;
 
 pub mod global_pages;
+pub(in self) mod tlb;

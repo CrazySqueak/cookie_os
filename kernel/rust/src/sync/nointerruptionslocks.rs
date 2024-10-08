@@ -117,6 +117,7 @@ impl<T,S:MutexStrategy> NIMutex<T,S> {
     pub fn data_ptr(&self) -> *mut T {
         self.0.data_ptr()
     }
+    pub fn get_mut(&mut self) -> &mut T { self.0.get_mut() }
     
     ni_wrap_lock!(pub fn lock(&self) -> wrap(BaseMutexGuard<'_,T,S>));
     ni_wrap_lock!(pub fn try_lock(&self) -> wrap_Option(BaseMutexGuard<'_,T,S>));
@@ -158,6 +159,7 @@ impl<T,S:RwLockStrategy> NIRwLock<T,S> {
     pub fn data_ptr(&self) -> *mut T {
         self.0.data_ptr()
     }
+    pub fn get_mut(&mut self) -> &mut T { self.0.get_mut() }
     
     ni_wrap_lock!(pub fn read(&self) -> wrap(BaseRwLockReadGuard<'_,T,S>));
     ni_wrap_lock!(pub fn try_read(&self) -> wrap_Option(BaseRwLockReadGuard<'_,T,S>));

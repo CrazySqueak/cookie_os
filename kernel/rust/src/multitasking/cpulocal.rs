@@ -3,187 +3,113 @@
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 use core::default::Default;
+use core::ptr::NonNull;
 use super::get_cpu_num;
-// TODO: KMutex once i implement proper sync primitives
-//      (we don't need to use LLMutex as LLMutex indirectly depends on fixedcpulocal, not dynamic cpu locals
 type RwLock<T> = crate::sync::kspin::KRwLock<T>;
 
 /// T - the type of the value
 /// 'a - the lifetime of the value
 /// SHARED - If true, other CPUs may use get_for to acquire a reference to the value for another CPU
 /// (items must still be Sync as multiple threads may run on the same CPU)
-pub struct CpuLocal<'a, T: Default + ?Sized + 'a, const SHARED: bool>(RwLock<Vec<&'a T>>);
-impl<'a,T: Default + ?Sized + 'a,const SHARED: bool> CpuLocal<'a,T,SHARED> {
+pub struct CpuLocal<T: Default + ?Sized, const SHARED: bool>(RwLock<Vec<Option<NonNull<T>>>>);
+impl<T: Default + ?Sized,const SHARED: bool> CpuLocal<T,SHARED> {
     pub const fn new() -> Self {
         Self(RwLock::new(Vec::new()))
     }
     
     #[inline]
     fn _initialise_empty(&self, up_to_id_inclusive: usize) {
-        let mut references = self.0.write();
-        while references.len() <= up_to_id_inclusive {
-            // Create a new item in a box
-            let item_box = Box::new(T::default());
-            // Leak and reborrow as immutable
-            let item_ref: &'a T = &*Box::leak(item_box);
-            // Push to our vec
-            references.push(item_ref);
-            
-            // CpuLocals have generally been used in statics, where their values live for the remainder of the program
-            // Therefore, by allocating on the heap and storing a shared reference, we only need to keep a read guard long enough to obtain a reference
-            // Rather than having to keep it for the duration we spend referencing the value
-            // (thus reducing contention)
+        let mut pointers = self.0.write();
+        while pointers.len() <= up_to_id_inclusive {
+            // Push a null pointer to our vec
+            pointers.push(None);
         }
     }
     
-    fn _get_for_inner(&self, id: usize) -> &'a T {
+    fn _get_for_inner(&self, id: usize) -> &T {
         let rg = self.0.read();
         let item = if rg.len() <= id {
+            // Add null pointers if needed
             drop(rg);
             self._initialise_empty(id);
-            (self.0.read())[id]
+            self.0.read()[id]
         } else {
-            rg[id]
+            let item = rg[id];
+            drop(rg);
+            item
         };
-        item
+
+        let item: *const T = match item {
+            Some(ptr) => ptr.as_ptr(),
+            None => {
+                let mut wg = self.0.write();
+                // Create a new item in a box
+                let item_box = Box::new(T::default());
+                // Convert to raw pointer
+                let item_ref = Box::into_raw(item_box);
+                // Store in vec
+                wg[id] = NonNull::new(item_ref);
+                // Release write lock
+                drop(wg);
+                // And return
+                item_ref
+
+                // CpuLocals have generally been used in statics, where their values live for the remainder of the program
+                // Therefore, by allocating on the heap and storing a shared reference, we only need to keep a read guard long enough to obtain a reference
+                // Rather than having to keep it for the duration we spend referencing the value
+                // (thus reducing contention)
+            },
+        };
+
+        // SAFETY: The pointer is guaranteed to live as long as we do
+        //          and in the signature, it's elided for the reference to not outlive us.
+        //          It is impossible to obtain a mutable reference to an item in a CPU local.
+        //          Therefore, it should be safe to turn our pointer into a reference.
+        unsafe { &*item }
     }
     #[inline(always)]
-    pub fn get_current(x: &CpuLocal<'a,T,SHARED>) -> &'a T {
+    pub fn get_current(x: &Self) -> &T  {
         x._get_for_inner(get_cpu_num())
     }
 }
-impl<'a,T: Default + ?Sized + 'a> CpuLocal<'a,T,true> {
+impl<T: Default + ?Sized> CpuLocal<T,true> {
     #[inline(always)]
-    pub fn get_for(x: &CpuLocal<'a,T,true>, id: usize) -> &'a T {
+    pub fn get_for(x: &Self, id: usize) -> &T {
         x._get_for_inner(id)
     }
 }
-impl<'a,T: Default + ?Sized,const SHARED: bool> core::ops::Deref for CpuLocal<'a,T,SHARED> where Self: 'a {
+impl<T: Default + ?Sized,const SHARED: bool> core::ops::Deref for CpuLocal<T,SHARED> {
     type Target = T;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         Self::get_current(self)
     }
 }
-
-/*
-use lock_api::{RawRwLockDowngrade,RwLock,RwLockReadGuard,MappedRwLockReadGuard};
-use crate::sync::kspin::KRwLock;
-use alloc::vec::Vec;
-use alloc::boxed::Box;
-use core::default::Default;
-use crate::multitasking::get_cpu_num;
-use core::ops::{Deref,DerefMut};
-use crate::multitasking::without_interruptions;
-
-pub struct CpuLocal<T: Default>(KRwLock<Vec<&'static T>>);
-impl<T: Default,L:RawRwLockDowngrade> CpuLocal<T,L> {
-    pub const fn new() -> Self {
-        Self(KRwLock::new(Vec::new()))
-    }
-    
-    fn _initialise_empty_values(&self, v: RwLockReadGuard<L,Vec<T>>, id: usize) -> RwLockReadGuard<L,Vec<T>> {
-        drop(v);  // Drop the old guard so it doesn't block us
-        let mut vu = self.0.write();  // currently cannot grab an upgradeable read as that can cause deadlocks in some rare cases
-        while vu.len() <= id { vu.push(T::default()) };  // push new values so that `id` is a valid index
-        lock_api::RwLockWriteGuard::downgrade(vu)  // downgrade back to a read guard now our job is done
-    }
-    
-    /* Get the T for the CPU with the given number. */
-    #[inline(always)]
-    pub fn get_for(&self, id: usize) -> CpuLocalGuard<T,L> {
-        let v = self.0.read();
-        let v = if v.len() <= id {
-            self._initialise_empty_values(v,id)
-        } else { v };
-        RwLockReadGuard::map(v, |v|&v[id])
-    }
-    
-    /* Get the T for the current CPU. */
-    #[inline(always)]
-    pub fn get(&self) -> CpuLocalGuard<T,L> {
-        self.get_for(get_cpu_num())
+impl<T: Default + ?Sized,const SHARED: bool> Drop for CpuLocal<T,SHARED> {
+    fn drop(&mut self) {
+        // Drop all contained values
+        let inner_mut = self.0.get_mut();
+        for ptr in inner_mut.iter_mut() {
+            match ptr.take() {
+                Some(ptr) => unsafe {
+                    // Drop the pointed-to value
+                    // SAFETY: We've used ptr.take() to ensure that the pointer is null-ed after
+                    //          so it cannot be dropped twice by mistake.
+                    //         As this is running in a Drop impl, and our getter methods ensure that
+                    //          their references are bound by our lifetime, we can be sure that we are the only
+                    //          reference to the contained value, so it may safely be dropped.
+                    let contained = Box::from_raw(ptr.as_ptr());
+                    drop(contained)  // drop the box, de-allocating the contained value
+                },
+                None => {},  // already empty
+            }
+        }
     }
 }
-
-// 'cl is CPULocal's lifetime
-pub type CpuLocalGuard<'c1,T,> = MappedRwLockReadGuard<'c1,T>;
-
-
-// Utilities, since CpuLocal does not grant interior mutability due to obvious threading issues + borrow checker not liking nested guards
-
-pub type CpuLocalLockedItem<T,L,LR> = CpuLocal<lock_api::Mutex<L,T>,LR>;
-impl<L:lock_api::RawMutex,LR:RawRwLockDowngrade,T: Default> CpuLocalLockedItem<T,L,LR> {
-    /// Inspect (but do not mutate) the locked item
-    #[inline]
-    pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
-        let cpul = self.get(); let item = cpul.lock();
-        inspector(&item)
-    }
-    /// Inspect and mutate the locked item
-    #[inline]
-    pub fn mutate<R>(&self, mutator: impl FnOnce(&mut T)->R) -> R {
-        let cpul = self.get(); let mut item = cpul.lock();
-        mutator(&mut item)
-    }
-}
-pub type CpuLocalRWLockedItem<T,L> = CpuLocal<RwLock<L,T>,L>;
-impl<L:RawRwLockDowngrade,T: Default> CpuLocalRWLockedItem<T,L> {
-    /// Inspect (but do not mutate) the locked item using a read guard
-    #[inline]
-    pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
-        let cpul = self.get(); let item = cpul.read();
-        inspector(&item)
-    }
-    /// Inspect and mutate the locked item using a write guard
-    #[inline]
-    pub fn mutate<R>(&self, mutator: impl FnOnce(&mut T)->R) -> R {
-        let cpul = self.get(); let mut item = cpul.write();
-        mutator(&mut item)
-    }
-}
-pub struct CpuLocalNoInterruptsLockedItem<T: Default>(pub CpuLocalLockedItem<T,super::kspin::KMutexRaw,super::kspin::KRwLockRaw>);
-impl<T: Default> CpuLocalNoInterruptsLockedItem<T> {
-    pub const fn new() -> Self { Self(CpuLocal::new()) }
-    pub fn inspect<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
-        without_interruptions(||self.0.inspect(inspector))
-    }
-    pub fn mutate<R>(&self, mutator: impl FnOnce(&mut T)->R) -> R {
-        without_interruptions(||self.0.mutate(mutator))
-    }
-}
-
-pub type CpuLocalLockedOption<T,L,LR> = CpuLocalLockedItem<Option<T>,L,LR>;
-impl<L:lock_api::RawMutex,LR:RawRwLockDowngrade,T> CpuLocalLockedOption<T,L,LR> {
-    /// Equivalent of Option.insert(...), but does not return a mutable reference as doing that would violate lifetime rules
-    #[inline]
-    pub fn insert(&self, item: T){
-        self.mutate(move |opt|{let _ = opt.insert(item);});
-    }
-    /// Equivalent of Option.insert(...), using a callback to recieve the mutable reference
-    #[inline]
-    pub fn insert_and<R>(&self, item: T, mutator: impl FnOnce(&mut T)->R) -> R {
-        self.mutate(move |opt|{let r = opt.insert(item); mutator(r)})
-    }
-    /// Equivalent of Option.take()
-    #[inline]
-    pub fn take(&self) -> Option<T> {
-        self.mutate(|opt|opt.take())
-    }
-    /// Equivalent of Option.replace(...)
-    #[inline]
-    pub fn replace(&self, item: T) -> Option<T> {
-        self.mutate(move |opt|opt.replace(item))
-    }
-    
-    #[inline]
-    pub fn inspect_unwrap<R>(&self, inspector: impl FnOnce(&T)->R) -> R {
-        self.inspect(|opt|inspector(opt.as_ref().unwrap()))
-    }
-    #[inline]
-    pub fn inspect_expect<R>(&self, inspector: impl FnOnce(&T)->R, errmsg: &str) -> R {
-        self.inspect(|opt|inspector(opt.as_ref().expect(errmsg)))
-    }
-}
-
-*/
+// SAFETY: Much like Carton (in the rustonomicon https://doc.rust-lang.org/nomicon/send-and-sync.html)
+//          CpuLocal maintains ownership over the contained value. Sending it between threads is valid if T can be sent between threads.
+unsafe impl<T: Default + ?Sized,const SHARED: bool> Send for CpuLocal<T,SHARED> where T: Send {}
+// SAFETY: CpuLocal does not allow mutable access to its contents (users must use their own interior mutability primitive such as a mutex)
+//          It doesn't allow mutating its contents, but does allow accessing them as an immutable reference.
+//          Therefore, it may be Sync if T is Sync
+unsafe impl<T: Default + ?Sized,const SHARED: bool> Sync for CpuLocal<T,SHARED> where T: Sync {}

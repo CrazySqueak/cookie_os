@@ -8,7 +8,7 @@ use crate::multitasking::cpulocal::CpuLocal;
 use super::*;
 
 type BaseTLPageAllocator = arch::TopLevelPageAllocator;
-use arch::{set_active_page_table,inval_tlb_pg};
+use arch::{set_active_page_table};
 
 // Page-Alignable Numbers
 /// The alignment (in bytes) for pages. In other words, the minimum possible amount of memory worth caring about for system-wide memory management.
@@ -580,12 +580,18 @@ impl core::ops::Deref for PagingContext {
 pub struct LPAWGOptions {
     pub(super) auto_flush_tlb: bool,
     pub(super) is_global_page: bool,
+
+    pub(super) address_space_id: Option<AddressSpaceID>,
+    pub(super) active_id: Option<ActivePageID>,
 }
 impl LPAWGOptions {
     pub(super) fn new_default() -> Self {
         Self {
             auto_flush_tlb: false,
             is_global_page: false,
+
+            address_space_id: None,  // this should be filled in when the guard is taken
+            active_id: None,  // this should be filled in when the guard is taken
         }
     }
 }
@@ -961,6 +967,7 @@ impl<PFA:PageFrameAllocator> core::fmt::Debug for PageAllocation<PFA> {
 use alloc::boxed::Box;
 use core::hint::spin_loop;
 use core::ops::Deref;
+use crate::memory::paging::tlb::{ActivePageID, AddressSpaceID};
 /* Any page allocation, regardless of PFA. */
 pub trait AnyPageAllocation: core::fmt::Debug + Send {
     fn normalize(&mut self);

@@ -25,7 +25,7 @@ pub enum AddressSpaceID {
     Assigned(NonZeroU16),
 }
 impl AddressSpaceID {
-    fn into_u16(self) -> u16 {
+    pub fn into_u16(self) -> u16 {
         match self {
             Self::Unassigned => 0,
             #[cfg(feature="__IallowNonZeroASID")]
@@ -48,7 +48,7 @@ It is intended for use on multi-CPU systems when performing a shootdown,
  as a "destination select" operand wherever possible,
  to avoid interrupting CPUs that don't have the page active.
 
-N.B. CPUs that don't have a given page active will check for it's ASID before switching to it,
+N.B. CPUs that don't have a given page active will check for its ASID before switching to it,
  and flush entries then, so you only need to fire an interrupt if the page is *currently* active on that CPU.
 
 Note: For global pages, this shouldn't be present, as global pages are assumed to be present on all CPUs.
@@ -151,11 +151,12 @@ pub fn get_pending_flushes_for_global() -> MappedKMutexGuard<'static, PendingGlo
     let mg = PENDING_FLUSHES.lock();
     KMutexGuard::map(mg, |mg|&mut mg.global)
 }
-/// Push some flushes onto some CPUs' queues (per ASID): Acts based on whether the ASID for each CPU is assigned:
-///  - For ASID [Unassigned](AddressSpaceID::Unassigned) - calls `push_fn` for CPUs who have page #`active_id` currently active.
-///  - For ASID [Assigned](AddressSpaceID::Assigned) - calls `push_fn` for all CPUs.
-pub fn push_flushes(active_id: &OwnedActiveID, asids: &CpuLocal<AddressSpaceID,true>, push_fn: impl Fn(MappedKMutexGuard<'static, PendingTLBFlush>)) {
-    let active_id = active_id.get();  // by using OwnedActiveID, we ensure that the ID won't get re-assigned in the meantime
+/// Push some flushes onto some CPUs' queues (per ASID).\
+/// Acts based on whether the ASID for each CPU is assigned:
+///  - For ASID [Unassigned](AddressSpaceID::Unassigned) - calls `push_fn` if the CPU has page #`active_id` currently active.
+///  - For ASID [Assigned](AddressSpaceID::Assigned) - always calls `push_fn`.
+/// N.B. This only occurs for CPUs who are stored in the CpuLocal (so only CPUs that have activated this page in the past).
+pub fn push_flushes(active_id: &ActivePageID, asids: &CpuLocal<AddressSpaceID,true>, push_fn: impl Fn(MappedKMutexGuard<'static, PendingTLBFlush>)) {
     for (cpu_id, asid) in CpuLocal::get_all_cpus(asids) {
         let should_push = match asid {
             AddressSpaceID::Unassigned => {

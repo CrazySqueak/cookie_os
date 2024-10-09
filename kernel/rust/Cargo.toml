@@ -41,6 +41,9 @@ enable_amd64_TCE = []
 # Enable the use of AMD's INVLPGB instruction if supported
 # Arch: x86_64 (AMD)
 enable_amd64_invlpgb = []
+# Enable the use of PCIDs/ASIDs on x86_64, if supported
+# Arch: x86_64
+enable_x86_64_pcid = ["__IallowNonZeroASID"]
 
 # If enabled, a kernel panic caused by a task will terminate that task instead of shutting down the entire system.
 # Kernel panics should only happen in this way due to bugs or similar conditions, and the resulting system may be unstable.

@@ -1,12 +1,43 @@
-
+use alloc::string::{String, ToString};
 use ::x86_64 as x86_64;
-use x86_64::structures::paging::page_table::{PageTable,PageTableEntry,PageTableFlags};
+use lazy_static::lazy_static;
+use x86_64::structures::paging::page_table::{PageTable, PageTableEntry, PageTableFlags};
 use x86_64::addr::PhysAddr;
-
+use x86_64::instructions::tlb::{InvPicdCommand, Invlpgb, Pcid, PcidTooBig};
+use x86_64::{instructions, VirtAddr};
+use x86_64::registers::control::Cr3;
+use x86_64::structures::paging::{page, PageSize};
+use x86_64::structures::paging::page::PageRange;
 use crate::memory::paging as paging_root;
 use paging_root::*;
 use paging_root::impl_firstfit::MLFFAllocator;
 use crate::logging::klog;
+use crate::memory::paging::tlb::AddressSpaceID;
+use crate::multitasking::cpulocal::CpuLocal;
+use crate::multitasking::disable_interruptions;
+
+impl Into<VirtAddr> for PageAlignedAddressT {
+    fn into(self) -> VirtAddr {
+        VirtAddr::new(self.get() as u64)
+    }
+}
+pub const MAX_ASID: u16 = 4095;
+impl Into<Option<Pcid>> for AddressSpaceID {
+    fn into(self) -> Option<Pcid> {
+        match self {
+            AddressSpaceID::Unassigned => None,
+            #[cfg(feature="__IallowNonZeroASID")]
+            AddressSpaceID::Assigned(x) => {
+                Some(Pcid::new(x.get()).unwrap())
+            },
+        }
+    }
+}
+impl Into<Pcid> for AddressSpaceID {
+    fn into(self) -> Pcid {
+        Pcid::new(self.into_u16()).unwrap()
+    }
+}
 
 const PF_PINNED: PageTableFlags = PageTableFlags::BIT_9;
 
@@ -145,7 +176,7 @@ pub const ALLOCATION_USER_STACK: PageAllocationStrategies = &[PageAllocationStra
 // User Heap: Start 1G inwards
 pub const ALLOCATION_USER_HEAP: PageAllocationStrategies = &[PageAllocationStrategy::new_default(), PageAllocationStrategy::new_default().min_page(1), PageAllocationStrategy::new_default()];
 
-// methods
+// utility methods
 /* Discard the upper 16 bits of an address (for 48-bit vmem) */
 pub fn crop_addr(addr: usize) -> usize {
     addr & 0x0000_ffff_ffff_ffff
@@ -163,98 +194,174 @@ pub const fn canonical_addr(vaddr: usize) -> usize {
     x86_64::VirtAddr::new_truncate(vaddr as u64).as_u64() as usize
 }
 
-pub unsafe fn set_active_page_table(phys_addr: usize){
+fn is_pcid_supported() -> bool {
+    cfg!(feature="enable_x86_64_pcid") && false  // TODO
+}
+// Instructions
+/// Set the current active page table by writing to Cr3.
+///
+/// * `phys_addr` - physical address of the PML4 table
+/// * `asid` - Address Space ID (PCID) to use
+/// * `flush` - Whether the TLB is required to be flushed (e.g. because a PCID is being re-used).
+///
+/// If `flush` is `false`, and (oldaddr,oldasid) == (phys_addr,asid), then no flush or write to Cr3 will occur.
+/// If `asid` is [Assigned](AddressSpaceID::Assigned), then the cached entries for that PCID will be re-used (if flush is false) or cleared (if flush is true).
+/// If `asid` is [Unassigned](AddressSpaceID::Unassigned), then the cached entries for that PCID will always be flushed.
+pub unsafe fn set_active_page_table(phys_addr: usize, asid: AddressSpaceID, flush: bool){
     use x86_64::addr::PhysAddr;
     use x86_64::structures::paging::frame::PhysFrame;
     use x86_64::registers::control::Cr3;
     
-    let (oldaddr, cr3flags) = Cr3::read();
-    klog!(Debug, MEMORY_PAGING_MAPPINGS, "Switching active page table from 0x{:x} to 0x{:x}. (cr3flags={:?})", oldaddr.start_address(), phys_addr, cr3flags);
-    Cr3::write(PhysFrame::from_start_address(PhysAddr::new(phys_addr.try_into().unwrap())).expect("Page Table Address Not Aligned!"), cr3flags)
-}
+    let (oldaddr, old_pcid) = Cr3::read_raw();
+    let newaddr = PhysFrame::from_start_address(PhysAddr::new(phys_addr as u64)).expect("Page Table Address Not Aligned!");
 
-// allocation, voffset - define the vmem addresses to invalidate TLB mappings for
-// include_global - If true, include global pages as well
-// cpu_nums - If Some, assumed to be a broadcast, with the CPUs to invalidate for (if targets may be selected). If None, assumed to be local only (no broadcast is made)
-pub fn inval_tlb_pg(allocation: &paging_root::PartialPageAllocation, voffset: usize, include_global: bool, cpu_nums: Option<&[usize]>){
-    use x86_64::structures::paging::page::{Size4KiB,Size2MiB};
-    let vmem_start = allocation.start_addr()+voffset; let vmem_end_xcl = allocation.end_addr()+voffset; let length = vmem_end_xcl-vmem_start;
-    klog!(Debug, MEMORY_PAGING_TLB, "Flushing TLB for 0x{:x}..0x{:x}", vmem_start, vmem_end_xcl);
-    
-    /*if false && cfg!(feature = "enable_amd64_invlpgb") && INVLPGB.is_some() && cpu_nums.is_some() {
-        // Use INVLPGB instruction if enabled
-        if vmem_start%X64Level2::PAGE_SIZE == 0 && length%X64Level2::PAGE_SIZE == 0 {
-            klog!(Debug, MEMORY_PAGING_TLB, "Flushing using call_invlpgb (size=2MiB).");
-            call_invlpgb::<Size2MiB>(vmem_start, vmem_end_xcl, include_global)
+    // Don't bother if this would have no effect and flush is false
+    if (!flush) && (oldaddr,old_pcid) == (newaddr,asid.into_u16()) {
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Not switching page table, as both are identical and flush is false.");
+        return;
+    }
+
+    klog!(Info, MEMORY_PAGING_MAPPINGS, "Switching active page table from 0x{:06x}[{:03x}] to 0x{:06x}[{}].",
+            oldaddr.start_address(), old_pcid,
+            phys_addr, if is_pcid_supported() { alloc::format!("{:03x}",asid.into_u16()) } else { String::from("N/A") });
+    if is_pcid_supported() {
+        let pcid: Option<Pcid> = asid.into();
+        #[cfg_attr(not(feature="__IallowNonZeroASID"), expect(irrefutable_let_patterns))]
+        if let AddressSpaceID::Unassigned = asid {
+            // write_raw clears the top bit, ensuring that a flush occurs
+            Cr3::write_raw(newaddr, 0);
+        } else if flush {
+            Cr3::write_pcid(newaddr, pcid.unwrap())
         } else {
-            klog!(Debug, MEMORY_PAGING_TLB, "Flushing using call_invlpgb (size=4KiB).");
-            call_invlpgb::<Size4KiB>(vmem_start, vmem_end_xcl, include_global)
+            Cr3::write_pcid_no_flush(newaddr, pcid.unwrap())
         }
-    } else if false && crate::coredrivers::system_apic::is_local_apic_initialised() && cpu_nums.is_some() {
-        // Broadcast invalidation over APIC (using interrupts)
-        klog!(Debug, MEMORY_PAGING_TLB, "Flushing using APIC.");
-        let cpu_nums = cpu_nums.unwrap();
-        if include_global {
-            // This affects all page mappings. No comparisons on CPU IDs need to be made
-            // Invalidate locally
-            klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing global page locally using call_invlpg_recursive.");
-            call_invlpg_recursive(allocation, allocation.start_addr()+voffset);
-            // Invalidate globally
-            klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing global page for all other CPUs using APIC interrupt.");
-            todo!()
-        } else {
-            // Invalidate locally
-            let local_num = crate::multitasking::get_cpu_num();
-            if cpu_nums.contains(&local_num) {
-                klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing locally for CPU{} using call_invlpg_recursive.", local_num);
-                call_invlpg_recursive(allocation, allocation.start_addr()+voffset);
-            }
-            // Broadcast to target CPUs over APIC
-            for cpu_num in cpu_nums.iter() {
-                if *cpu_num == local_num { continue; }
-                klog!(Debug, MEMORY_PAGING_TLB_APIC, "Flushing for CPU{} using APIC interrupt.", local_num);
-                todo!()
-            }
-        }
-    } else */{
-        // Invalidate using the old-fashioned way
-        klog!(Debug, MEMORY_PAGING_TLB, "Flushing locally using call_invlpg_recursive.");
-        call_invlpg_recursive(allocation, allocation.start_addr()+voffset);
-        //panic!("No supported TLB invalidation strategy enabled?!")
+    } else {
+        debug_assert!(matches!(asid, AddressSpaceID::Unassigned));
+        Cr3::write_raw(newaddr, 0)
     }
 }
 
-lazy_static::lazy_static! {
-    static ref INVLPGB: Option<x86_64::instructions::tlb::Invlpgb> = x86_64::instructions::tlb::Invlpgb::new();
-}
-fn call_invlpgb<S: x86_64::structures::paging::page::NotGiantPageSize>(vmem_start: usize, vmem_end_xcl: usize, include_global: bool){
-    use x86_64::addr::VirtAddr;
-    use x86_64::structures::paging::page::{PageRange,Page};
-    use x86_64::instructions::tlb::InvlpgbFlushBuilder;
-    let range = PageRange {
-        start: Page::<S>::from_start_address(VirtAddr::new(vmem_start.try_into().unwrap())).expect("Provided TLB flush start address not page-aligned!"),
-        end: Page::<S>::from_start_address(VirtAddr::new(vmem_end_xcl.try_into().unwrap())).expect("Provided TLB flush end address not page-aligned!"),
+/// Invalidate a set of pages in the local CPU's TLB.
+///
+/// * `allocation` - The allocation to invalidate the mappings for.
+/// * `asid = Some(x)` - The address space to invalidate the mappings for (may skip those tagged global).
+/// * `asid = None` - Invalidate the given global mappings.
+pub fn inval_local_tlb_pg(allocation: &PartialPageAllocation, asid: Option<AddressSpaceID>) {
+    // asid.is_some() = If we are restricting based on ASID
+    // If true, then this is for a specific address space.
+    // If false, then this is for global mappings.
+
+    #[derive(Debug,Clone,Copy)]
+    struct InvalStrategy {
+        /// True if CR3.PCID != asid, (and thus a simple INVLPG won't work)
+        different_asid: bool,
+        /// True if INVPCID is supported on this CPU
+        invpcid_supported: bool,
+    }
+    let mut invstrat = InvalStrategy {
+        // If asid is some() and different to our current PCID, then we must invalidate for a different PCID
+        different_asid: is_pcid_supported() && asid.is_some() && (Cr3::read_raw().1 != asid.unwrap().into_u16()),
+        // If invpcid is supported
+        invpcid_supported: is_pcid_supported() && false,
     };
-    
-    let mut flush = INVLPGB.as_ref().unwrap().build().pages(range);
-    if include_global {flush.include_global();}
-    flush.flush();
+
+    // Disable interruptions while we handle this
+    let no_interruptions = disable_interruptions();
+
+    // Switch pcid if we need to change it + changing for another PCID is unsupported
+    let old_pcid = if asid.is_some() && invstrat.different_asid && !invstrat.invpcid_supported {
+        klog!(Debug, MEMORY_PAGING_TLB, "Temporarily switching PCIDs...");
+        let (oldaddr, oldpcid) = Cr3::read_pcid();
+        // SAFETY: This is safe because we're only using kernel memory (mapped globally) while this is active
+        //          + we're setting it to the same page table as it was already set to
+        unsafe { Cr3::write_pcid_no_flush(oldaddr,asid.unwrap().into()) }
+        // Update the strategy - as we can now use INVLPG like normal
+        invstrat.different_asid = false;
+        Some(oldpcid)
+    } else { None };
+
+    // Perform invalidation
+    __inner(allocation, asid, 0, invstrat);
+    fn __inner(allocation: &PartialPageAllocation, asid: Option<AddressSpaceID>, voffset: usize, invstrat: InvalStrategy) {
+        for item in allocation.entries() {
+            match item {
+                &PAllocItem::Page { index, offset } => {
+                    klog!(Debug, MEMORY_PAGING_TLB_RECUR, "Flushing addr 0x{:x} (vo={:x} o={:x})", voffset+offset, voffset, offset);
+
+                    let virt_addr = VirtAddr::new((voffset + offset).try_into().unwrap());
+                    if asid.is_some() && invstrat.different_asid {
+                        let pcid: Pcid = asid.unwrap().into();
+                        if invstrat.invpcid_supported {
+                            // SAFETY: One must ensure that invpcid_supported is only true if it is supported by the host CPU
+                            unsafe { instructions::tlb::flush_pcid(InvPicdCommand::Address(virt_addr, pcid)) }
+                        } else {
+                            unreachable!("This should never be reached! Restricted by PCID + different PCID, but INVPCID is not supported and we haven't switched?")
+                        }
+                    } else {
+                        // This invalidates for the current address space + the global address space,
+                        // thus meaning that it works for both asid=Some(current) and asid=None
+                        instructions::tlb::flush(virt_addr);
+                    }
+                },
+                &PAllocItem::SubTable { offset, alloc: ref suballocation, .. } => {
+                    klog!(Debug, MEMORY_PAGING_TLB_RECUR, "Recursing with offset 0x{:x} (vo={:x} o={:x})", voffset+offset, voffset, offset);
+                    __inner(suballocation, asid, voffset + offset, invstrat);
+                },
+            }
+        }
+    }
+
+    if let Some(oldpcid) = old_pcid {  // switch back now
+        klog!(Debug, MEMORY_PAGING_TLB, "Switching PCID back to original...");
+        let (oldaddr, _) = Cr3::read_raw();
+        // SAFETY: This is safe because we're returning to our original state
+        unsafe { Cr3::write_pcid_no_flush(oldaddr,oldpcid) }
+        invstrat.different_asid = true;
+    }
 }
 
-// TODO: broadcast this somehow?
-fn call_invlpg_recursive(allocation: &paging_root::PartialPageAllocation, voffset: usize){
-    use x86_64::instructions::tlb::flush;
-    use x86_64::VirtAddr;
-    for item in allocation.entries() {
-        match item {
-            &PAllocItem::Page { index, offset } => {
-                klog!(Debug, MEMORY_PAGING_TLB_RECUR, "Flushing addr 0x{:x} (vo={:x} o={:x})", voffset+offset, voffset, offset);
-                flush(VirtAddr::new((voffset + offset).try_into().unwrap()));
-            },
-            &PAllocItem::SubTable { offset, alloc: ref suballocation, .. } => {
-                klog!(Debug, MEMORY_PAGING_TLB_RECUR, "Recursing with offset 0x{:x} (vo={:x} o={:x})", voffset+offset, voffset, offset);
-                call_invlpg_recursive(suballocation, voffset + offset);
-            },
+lazy_static! {
+    static ref INVLPGB: Option<Invlpgb> = Invlpgb::new();
+}
+/// Remotely invalidate a set of pages on all applicable CPUs' TLBs (for a given ASID).\
+/// Returns true if this was successful.\
+/// Returns false if this was unsuccessful (e.g. unsupported),
+/// and must be done using [push_flushes](crate::memory::paging::tlb::push_flushes) + an IPI broadcast instead.
+///
+/// * `allocation` - The allocation to flush the TLB for.
+/// * `asids` - The CPU-ASID mappings, containing the ASIDs to invalidate for on each CPU (CPUs which are not present are skipped).
+pub fn inval_tlb_pg_broadcast(allocation: &PartialPageAllocation, asids: &CpuLocal<AddressSpaceID,true>) -> bool {
+    // You really think I can be asked to implement INVLPGB for non-globals atm??
+    false
+}
+/// Remotely invalidate a set of pages on all applicable CPUs' TLBs (for the global address space).\
+/// Returns true if this was successful.\
+/// Returns false if this was unsuccessful (e.g. unsupported),
+/// and must be done using [push_global_flushes](crate::memory::paging::tlb::push_global_flushes) + an IPI broadcast instead.
+pub fn inval_tlb_pg_broadcast_global(allocation: &PartialPageAllocation) -> bool {
+    if let Some(invlpgb) = INVLPGB.as_ref() {
+        let start = allocation.start_addr() as u64;
+        let end = allocation.end_addr() as u64;
+
+        fn __flush<S:page::NotGiantPageSize>(invlpgb: &Invlpgb, start:u64, end:u64) {
+            let range: PageRange<S> = PageRange {
+                start: page::Page::from_start_address(VirtAddr::new(start)).unwrap(),
+                end: page::Page::from_start_address(VirtAddr::new(start)).unwrap(),
+            };
+
+            invlpgb.build()
+                .pages(range)
+                .include_global()
+                .flush();
         }
+
+        if start%page::Size2MiB::SIZE == 0 && end%page::Size2MiB::SIZE == 0 {
+            __flush::<page::Size2MiB>(invlpgb, start, end);
+        } else {
+            __flush::<page::Size4KiB>(invlpgb, start, end);
+        }
+        true
+    } else {
+        false
     }
 }

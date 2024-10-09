@@ -581,7 +581,6 @@ pub struct LPAWGOptions {
     pub(super) auto_flush_tlb: bool,
     pub(super) is_global_page: bool,
 
-    pub(super) address_space_id: Option<AddressSpaceID>,
     pub(super) active_id: Option<ActivePageID>,
 }
 impl LPAWGOptions {
@@ -590,8 +589,7 @@ impl LPAWGOptions {
             auto_flush_tlb: false,
             is_global_page: false,
 
-            address_space_id: None,  // this should be filled in when the guard is taken
-            active_id: None,  // this should be filled in when the guard is taken
+            active_id: None,  // this should be filled in when the guard is taken?
         }
     }
 }
@@ -807,14 +805,23 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         ptable.set_absent(index, data);
     }, {});
     
-    /* Invalidate the TLB entries for the given allocation (on the current CPU).
+    /** Invalidate the TLB entries for the given allocation (on all applicable CPUs).
         Note: No check is performed to ensure that the allocation is correct nor that this page table is active, as the only consequence (provided all other code handling Page Tables / TLB is correct) is a performance hit from the unnecessary INVLPG operations + the resulting cache misses.
         Note: Using this method is unnecessary yourself. Usually it is provided by write_when_active or similar. */
     pub(super) fn invalidate_tlb(&mut self, allocation: &PageAllocation<PFA>){
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
-        let vmem_offset = allocation.start();  // (vmem offset is now added by PageAllocation itself)
-        // TODO let active_on = self.allocator.0.active_on.read(); // It's faster to hold the lock here than to clone as read/write contention on the same page allocator is negligble compared to contention on the heap allocator
-        inval_tlb_pg(allocation.into(), allocation.metadata.offset, self.options.is_global_page, None);
+
+        todo!();  // apply base offset to allocation
+
+        let active_id: ActivePageID = (||->ActivePageID{todo!()})();
+        let asids: &CpuLocal<AddressSpaceID,true> = (||->&CpuLocal<AddressSpaceID,true>{todo!()})();
+
+        // Determine which flush instruction to call
+        if self.options.is_global_page {
+            tlb::flush_global(allocation.into())
+        } else {
+            tlb::flush_local(active_id, asids, allocation.into())
+        }
     }
 }
 
@@ -855,9 +862,6 @@ use crate::multitasking::{disable_interruptions, get_cpu_num};
 static _ACTIVE_PAGE_TABLE: CpuLocal<KMutex<Option<PagingContext>>,false> = CpuLocal::new();
 
 // = ALLOCATIONS =
-// Note: Allocations must be allocated/deallocated manually
-// and do not hold a reference to the allocator
-// they are more akin to indices
 pub struct PageAllocation<PFA: PageFrameAllocator> {
     allocator: LockedPageAllocator<PFA>,
     allocation: PartialPageAllocation,

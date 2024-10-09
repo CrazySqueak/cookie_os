@@ -156,7 +156,7 @@ pub fn get_pending_flushes_for_global() -> MappedKMutexGuard<'static, PendingGlo
 ///  - For ASID [Unassigned](AddressSpaceID::Unassigned) - calls `push_fn` if the CPU has page #`active_id` currently active.
 ///  - For ASID [Assigned](AddressSpaceID::Assigned) - always calls `push_fn`.
 /// N.B. This only occurs for CPUs who are stored in the CpuLocal (so only CPUs that have activated this page in the past).
-pub fn push_flushes(active_id: &ActivePageID, asids: &CpuLocal<AddressSpaceID,true>, push_fn: impl Fn(MappedKMutexGuard<'static, PendingTLBFlush>)) {
+pub fn push_flushes(active_id: ActivePageID, asids: &CpuLocal<AddressSpaceID,true>, push_fn: impl Fn(MappedKMutexGuard<'static, PendingTLBFlush>)) {
     for (cpu_id, asid) in CpuLocal::get_all_cpus(asids) {
         let should_push = match asid {
             AddressSpaceID::Unassigned => {
@@ -192,4 +192,48 @@ pub fn push_global_flushes(push_fn: impl Fn(MappedKMutexGuard<'static, PendingGl
         let mg = pgf.lock();
         push_fn(KMutexGuard::map(mg,|pf|&mut pf.global))
     }
+}
+
+
+// ACTUAL FLUSH LOGIC
+use crate::memory::paging::arch::{inval_local_tlb_pg, inval_tlb_pg_broadcast, inval_tlb_pg_broadcast_global};
+use crate::memory::paging::PageAllocation;
+
+/// Flush the given non-global allocation for the given active_id/asids.
+pub fn flush_local(active_id: ActivePageID, asids: &CpuLocal<AddressSpaceID,true>, allocation: &PartialPageAllocation) {
+    if inval_tlb_pg_broadcast(active_id, allocation, asids) {
+        // Nothing to do, we've broadcast it
+    } else {
+        // We must use our workaround
+        // Push flushes to target CPUs
+        push_flushes(active_id, asids, |mut flush_info|{
+            flush_info.target_nonglobal_allocations.push(allocation.clone())
+        });
+        // TODO: Send IPI to handle added flushes
+    }
+}
+/// Flush the given global allocation.
+pub fn flush_global(allocation: &PartialPageAllocation) {
+    if inval_tlb_pg_broadcast_global(allocation) {
+        // Nothing to do, we've broadcast it
+    } else {
+        // Push flushes to all CPUs
+        push_global_flushes(|mut flush_info|{
+            flush_info.by_alloc.push(allocation.clone())
+        });
+        // TODO: Send IPI
+    }
+}
+/// Flush the entire (non-global) address space for the given ASID on the given CPU, if it is not currently active (determined using active_id)
+///
+/// Returns true if successful, false if it failed because the page was in use.
+pub fn flush_asid(cpu_id: usize, active_id: ActivePageID, asid: AddressSpaceID) -> bool {
+    if let Some(state) = CpuLocal::get_for(&PENDING_FLUSHES, cpu_id).lock().per_asid.get_mut(asid.into_u16() as usize) {
+        let is_active: bool = false; let _ = active_id; // TODO
+        if is_active { return false; }  // fail if the page is active
+        state.full_addr_space = true;
+        // We don't need to send an IPI because the page is not currently in use - it will be flushed when next switched to
+
+        true
+    } else { true }  // Not present?? either way this means it's inactive
 }

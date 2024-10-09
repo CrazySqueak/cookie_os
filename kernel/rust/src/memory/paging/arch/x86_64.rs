@@ -12,7 +12,7 @@ use crate::memory::paging as paging_root;
 use paging_root::*;
 use paging_root::impl_firstfit::MLFFAllocator;
 use crate::logging::klog;
-use crate::memory::paging::tlb::AddressSpaceID;
+use crate::memory::paging::tlb::{ActivePageID, AddressSpaceID};
 use crate::multitasking::cpulocal::CpuLocal;
 use crate::multitasking::disable_interruptions;
 
@@ -330,7 +330,7 @@ lazy_static! {
 ///
 /// * `allocation` - The allocation to flush the TLB for.
 /// * `asids` - The CPU-ASID mappings, containing the ASIDs to invalidate for on each CPU (CPUs which are not present are skipped).
-pub fn inval_tlb_pg_broadcast(allocation: &PartialPageAllocation, asids: &CpuLocal<AddressSpaceID,true>) -> bool {
+pub fn inval_tlb_pg_broadcast(active_id: ActivePageID, allocation: &PartialPageAllocation, asids: &CpuLocal<AddressSpaceID,true>) -> bool {
     // You really think I can be asked to implement INVLPGB for non-globals atm??
     false
 }

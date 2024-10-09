@@ -80,6 +80,7 @@ pub trait IPageTableImpl {
 }
 
 // (offset is the offset for the start of the frame/subpage in physmem, measured from the base physmem address)
+#[derive(Clone)]
 pub enum PAllocItem {
     Page{index: usize, offset: usize},
     SubTable{index: usize, offset: usize, alloc: PartialPageAllocation}
@@ -101,6 +102,7 @@ impl PAllocItem {
 // PartialPageAllocation stores the indicies and offsets of page allocations internally
 // (as it is not a generic class, it also stores the size of a "page", since otherwise address calculations are impossible without locking the original allocator or making questionable guesses)
 // Entries MUST be sorted (asc) in order of offset
+#[derive(Clone)]
 pub struct PartialPageAllocation(Vec<PAllocItem>,usize);
 impl PartialPageAllocation {
     pub fn new(items: Vec<PAllocItem>, page_size: usize) -> Self {

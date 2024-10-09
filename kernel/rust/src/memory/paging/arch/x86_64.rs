@@ -246,7 +246,7 @@ pub unsafe fn set_active_page_table(phys_addr: usize, asid: AddressSpaceID, flus
 /// * `allocation` - The allocation to invalidate the mappings for.
 /// * `asid = Some(x)` - The address space to invalidate the mappings for (may skip those tagged global).
 /// * `asid = None` - Invalidate the given global mappings.
-pub fn inval_local_tlb_pg(allocation: &PartialPageAllocation, asid: Option<AddressSpaceID>) {
+pub fn inval_local_tlb_pg(allocation: PPAandOffset, asid: Option<AddressSpaceID>) {
     // asid.is_some() = If we are restricting based on ASID
     // If true, then this is for a specific address space.
     // If false, then this is for global mappings.
@@ -281,7 +281,7 @@ pub fn inval_local_tlb_pg(allocation: &PartialPageAllocation, asid: Option<Addre
     } else { None };
 
     // Perform invalidation
-    __inner(allocation, asid, 0, invstrat);
+    __inner(allocation.ppa, asid, allocation.offset, invstrat);
     fn __inner(allocation: &PartialPageAllocation, asid: Option<AddressSpaceID>, voffset: usize, invstrat: InvalStrategy) {
         for item in allocation.entries() {
             match item {
@@ -330,7 +330,7 @@ lazy_static! {
 ///
 /// * `allocation` - The allocation to flush the TLB for.
 /// * `asids` - The CPU-ASID mappings, containing the ASIDs to invalidate for on each CPU (CPUs which are not present are skipped).
-pub fn inval_tlb_pg_broadcast(active_id: ActivePageID, allocation: &PartialPageAllocation, asids: &CpuLocal<AddressSpaceID,true>) -> bool {
+pub fn inval_tlb_pg_broadcast(active_id: ActivePageID, allocation: PPAandOffset, asids: &CpuLocal<AddressSpaceID,true>) -> bool {
     // You really think I can be asked to implement INVLPGB for non-globals atm??
     false
 }
@@ -338,10 +338,10 @@ pub fn inval_tlb_pg_broadcast(active_id: ActivePageID, allocation: &PartialPageA
 /// Returns true if this was successful.\
 /// Returns false if this was unsuccessful (e.g. unsupported),
 /// and must be done using [push_global_flushes](crate::memory::paging::tlb::push_global_flushes) + an IPI broadcast instead.
-pub fn inval_tlb_pg_broadcast_global(allocation: &PartialPageAllocation) -> bool {
+pub fn inval_tlb_pg_broadcast_global(allocation: PPAandOffset) -> bool {
     if let Some(invlpgb) = INVLPGB.as_ref() {
-        let start = allocation.start_addr() as u64;
-        let end = allocation.end_addr() as u64;
+        let start = (allocation.ppa.start_addr() + allocation.offset) as u64;
+        let end = (allocation.ppa.end_addr() + allocation.offset) as u64;
 
         fn __flush<S:page::NotGiantPageSize>(invlpgb: &Invlpgb, start:u64, end:u64) {
             let range: PageRange<S> = PageRange {

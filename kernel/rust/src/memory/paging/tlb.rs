@@ -4,6 +4,7 @@ use core::num::NonZeroU16;
 use core::ops::{AddAssign, Deref};
 use core::sync::atomic::{AtomicU16, Ordering};
 use lazy_static::lazy_static;
+use crate::memory::paging::api::{PPAandOffset, PPAandOffsetOwned};
 use crate::memory::paging::sealed::PartialPageAllocation;
 use crate::multitasking::cpulocal::CpuLocal;
 use crate::sync::kspin::{KMutex, KMutexGuard, MappedKMutexGuard};
@@ -110,7 +111,7 @@ pub fn next_free_active_id() -> OwnedActiveID {
 #[derive(Debug)]
 pub struct PendingTLBFlush {
     /// Targeted non-global page allocations to be flushed
-    target_nonglobal_allocations: Vec<PartialPageAllocation>,
+    target_nonglobal_allocations: Vec<PPAandOffsetOwned>,
     /// Whether the full address space should be flushed (excluding global pages)
     full_addr_space: bool,
 }
@@ -124,7 +125,7 @@ impl Default for PendingTLBFlush {
 }
 #[derive(Debug,Default)]
 pub struct PendingGlobalFlushes {
-    by_alloc: Vec<PartialPageAllocation>
+    by_alloc: Vec<PPAandOffsetOwned>
 }
 #[derive(Debug,Default)]
 struct PendingFlushes {
@@ -200,26 +201,26 @@ use crate::memory::paging::arch::{inval_local_tlb_pg, inval_tlb_pg_broadcast, in
 use crate::memory::paging::PageAllocation;
 
 /// Flush the given non-global allocation for the given active_id/asids.
-pub fn flush_local(active_id: ActivePageID, asids: &CpuLocal<AddressSpaceID,true>, allocation: &PartialPageAllocation) {
+pub fn flush_local(active_id: ActivePageID, asids: &CpuLocal<AddressSpaceID,true>, allocation: PPAandOffset) {
     if inval_tlb_pg_broadcast(active_id, allocation, asids) {
         // Nothing to do, we've broadcast it
     } else {
         // We must use our workaround
         // Push flushes to target CPUs
         push_flushes(active_id, asids, |mut flush_info|{
-            flush_info.target_nonglobal_allocations.push(allocation.clone())
+            flush_info.target_nonglobal_allocations.push(allocation.to_owned())
         });
         // TODO: Send IPI to handle added flushes
     }
 }
 /// Flush the given global allocation.
-pub fn flush_global(allocation: &PartialPageAllocation) {
+pub fn flush_global(allocation: PPAandOffset) {
     if inval_tlb_pg_broadcast_global(allocation) {
         // Nothing to do, we've broadcast it
     } else {
         // Push flushes to all CPUs
         push_global_flushes(|mut flush_info|{
-            flush_info.by_alloc.push(allocation.clone())
+            flush_info.by_alloc.push(allocation.to_owned())
         });
         // TODO: Send IPI
     }

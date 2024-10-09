@@ -1,4 +1,4 @@
-
+use alloc::borrow::ToOwned;
 use core::sync::atomic::{AtomicU16, AtomicU8, Ordering};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -552,7 +552,7 @@ impl PagingContext {
 
         let ni = disable_interruptions();
         // Set active
-        set_active_page_table(table_addr);  // TODO
+        set_active_page_table(table_addr, todo!(), todo!());
         // store reference (and take old one)
         let oldpt = _ACTIVE_PAGE_TABLE.lock().replace(Self::clone_ref(&self));
         // Enable interruptions
@@ -811,18 +811,41 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
     pub(super) fn invalidate_tlb(&mut self, allocation: &PageAllocation<PFA>){
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Flushing TLB for {:?}", allocation.allocation);
 
-        todo!();  // apply base offset to allocation
+        // Add base offset to allocation
+        let ppa = PPAandOffset {
+            ppa: allocation.into(),
+            offset: allocation.metadata.offset,
+        };
 
         let active_id: ActivePageID = (||->ActivePageID{todo!()})();
         let asids: &CpuLocal<AddressSpaceID,true> = (||->&CpuLocal<AddressSpaceID,true>{todo!()})();
 
         // Determine which flush instruction to call
         if self.options.is_global_page {
-            tlb::flush_global(allocation.into())
+            tlb::flush_global(ppa)
         } else {
-            tlb::flush_local(active_id, asids, allocation.into())
+            tlb::flush_local(active_id, asids, ppa)
         }
     }
+}
+
+#[derive(Clone,Copy,Debug)]
+pub(super) struct PPAandOffset<'p> {
+    pub ppa: &'p PartialPageAllocation,
+    pub offset: usize,
+}
+impl PPAandOffset<'_> {
+    pub fn to_owned(&self) -> PPAandOffsetOwned {
+        PPAandOffsetOwned {
+            ppa: self.ppa.clone(),
+            offset: self.offset,
+        }
+    }
+}
+#[derive(Clone,Debug)]
+pub(super) struct PPAandOffsetOwned {
+    pub ppa: PartialPageAllocation,
+    pub offset: usize,
 }
 
 pub struct ForcedUpgradeGuard<'a, T> {
@@ -969,6 +992,7 @@ impl<PFA:PageFrameAllocator> core::fmt::Debug for PageAllocation<PFA> {
 }
 
 use alloc::boxed::Box;
+use core::borrow::Borrow;
 use core::hint::spin_loop;
 use core::ops::Deref;
 use crate::memory::paging::tlb::{ActivePageID, AddressSpaceID};

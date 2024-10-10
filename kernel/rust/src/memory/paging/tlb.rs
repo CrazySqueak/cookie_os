@@ -3,9 +3,11 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::mem;
 use core::num::NonZeroU16;
-use core::ops::{AddAssign, Deref};
+use core::ops::{AddAssign, Deref, DerefMut};
+use core::ptr::null_mut;
 use core::sync::atomic::{AtomicU16, Ordering};
 use lazy_static::lazy_static;
+use crate::logging::klog;
 use crate::memory::paging::api::{ArcClASIDs, ClASIDs, PPAandOffset, PPAandOffsetOwned, WeakClASIDs};
 use crate::memory::paging::sealed::PartialPageAllocation;
 use crate::multitasking::cpulocal::CpuLocal;
@@ -52,16 +54,22 @@ pub fn get_free_asid(current_state: &ArcClASIDs) -> AddressSpaceID { AddressSpac
 /// A Weak<> to current_state is inserted so it may be seized later if needed, or if the page context is deallocated
 #[cfg(feature = "__IallowNonZeroASID")]
 pub fn claim_asid_for(current_state: &ArcClASIDs) -> AddressSpaceID {
+    if !super::arch::is_asid_supported() { return AddressSpaceID::Unassigned; }
+
     let mut lru_active_states = ASID_LRU.lock();
-    let replace_push_back = |i:usize|->AddressSpaceID{
-        let (id,_) = lru_active_states.remove(i).unwrap();  // we must preserve the ordering as this is a least-recently-used system
-        let new_ptr = Arc::downgrade(current_state);
-        lru_active_states.push_back((id,new_ptr));
-        id
-    };
+    macro_rules! replace_push_back {
+        ($i:expr) => {{
+            let (id,old_ptr): (AddressSpaceID,WeakClASIDs) = lru_active_states.remove($i).unwrap();  // we must preserve the ordering as this is a least-recently-used system
+            let new_ptr = Arc::downgrade(current_state);
+            klog!(Debug, MEMORY_PAGING_TLB_ID, "Assigned ASID {} (from {:p} (sc={}) to {:p}).", id.into_u16(), old_ptr.as_ptr(), old_ptr.strong_count(), current_state);
+            lru_active_states.push_back((id,new_ptr));
+            id
+        }};
+    }
 
     // Step 1: Initialise if needed
     if lru_active_states.is_empty() {
+        klog!(Debug, MEMORY_PAGING_TLB_ID, "Initialising ASIDs on CPU {}...",get_cpu_num());
         const MAX_ASID: u16 = 4095;  // TODO: Make arch-specific
         lru_active_states.reserve(MAX_ASID.into());
         for i in 1..=MAX_ASID {
@@ -75,7 +83,7 @@ pub fn claim_asid_for(current_state: &ArcClASIDs) -> AddressSpaceID {
     for (i,(_,ptr)) in lru_active_states.iter().enumerate() {
         if let None = Weak::upgrade(&ptr) {
             // This paging context has been deallocated, so we know the ASID is now free
-            return replace_push_back(i);
+            return replace_push_back!(i);
         }
     }
 
@@ -84,16 +92,19 @@ pub fn claim_asid_for(current_state: &ArcClASIDs) -> AddressSpaceID {
         if let Some(old_state) = Weak::upgrade(ptr) {
             // It's still here
             // Attempt to obtain the lock, but don't waste time if it's busy
-            let Some(lock) = old_state.try_lock() else {continue};
+            let Some(mut lock) = old_state.try_lock() else {continue};
             // Check whether the given ID is active
             if lock.active_count != 0 { continue }
             // All is good. Seize the ID
             let id = mem::take(&mut lock.asid);
+            // Flush the ID
+            // SAFETY: We have verified that the ASID is not in use by checking active_count.
+            unsafe{flush_asid(get_cpu_num(), id);}
             // And push to the list
-            return replace_push_back(i);
+            return replace_push_back!(i);
         } else {
             // It was deallocated while our back was turned
-            return replace_push_back(i);
+            return replace_push_back!(i);
         }
     }
 
@@ -151,6 +162,7 @@ impl Into<ActivePageID> for &OwnedActiveID {
 }
 impl Drop for OwnedActiveID {
     fn drop(&mut self) {
+        klog!(Debug, MEMORY_PAGING_TLB_ID, "Freed Active ID {}", self.get().0.get());
         FREE_ACTIVE_IDS.lock().push(self.get())
     }
 }
@@ -158,13 +170,15 @@ impl Drop for OwnedActiveID {
 /// Take an active ID from the free list, to mark a now-active paging context
 pub fn next_free_active_id() -> OwnedActiveID {
     let mut v = FREE_ACTIVE_IDS.lock();
-    if v.is_empty() {
+    let id = if v.is_empty() {
         let id = NEXT_CREATED_ACTIVE_ID.fetch_add(1,Ordering::Relaxed);
         if id == 0 { drop(v); return next_free_active_id(); }  // if id == 0, then silently wrap above it instead of panicking
         OwnedActiveID(ActivePageID(NonZeroU16::new(id).unwrap()))
     } else {
         OwnedActiveID(v.pop().unwrap())
-    }
+    };
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Assigned Active ID {}", id.get().0.get());
+    id
 }
 
 #[derive(Debug)]
@@ -217,8 +231,10 @@ pub fn get_pending_flushes_for_global() -> MappedKMutexGuard<'static, PendingGlo
 ///  - For ASID [Assigned](AddressSpaceID::Assigned) - always calls `push_fn`.
 /// N.B. This only occurs for CPUs who are stored in the CpuLocal (so only CPUs that have activated this page in the past).
 pub fn push_flushes(active_id: Option<ActivePageID>, asids: &ClASIDs, push_fn: impl Fn(MappedKMutexGuard<'static, PendingTLBFlush>)) {
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Pushing nonglobal flush for: active_id={:?}", active_id);
     for (cpu_id, asid) in CpuLocal::get_all_cpus(asids) {
         let asid = asid.lock();
+        klog!(Debug, MEMORY_PAGING_TLB_ID, "\tCPU {}: asid={:?}", cpu_id, asid.asid);
         let should_push = match asid.asid {
             AddressSpaceID::Unassigned => {
                 // Unassigned is always flushed between switches, so we only need to flush if it's currently active
@@ -230,6 +246,7 @@ pub fn push_flushes(active_id: Option<ActivePageID>, asids: &ClASIDs, push_fn: i
                 true  // we could still be cached here, even if we're inactive, so we'd better push ourselves to make sure
             },
         };
+        klog!(Debug, MEMORY_PAGING_TLB_ID, "\t\tshould_push={:?}", should_push);
         if should_push {
             // Call push_fn to push
             let mg = CpuLocal::get_for(&PENDING_FLUSHES, cpu_id).lock();
@@ -249,7 +266,9 @@ pub fn push_flushes(active_id: Option<ActivePageID>, asids: &ClASIDs, push_fn: i
 }
 /// Push some flushes onto all CPUs' queues, for the global address space rather than any specific ASID
 pub fn push_global_flushes(push_fn: impl Fn(MappedKMutexGuard<'static, PendingGlobalFlushes>)) {
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Pushing global flush...");
     for (cpu_id, pgf) in CpuLocal::get_all_cpus(&PENDING_FLUSHES) {
+        klog!(Debug, MEMORY_PAGING_TLB_ID, "\tFor CPU {}", cpu_id);
         let mg = pgf.lock();
         push_fn(KMutexGuard::map(mg,|pf|&mut pf.global))
     }
@@ -259,9 +278,11 @@ pub fn push_global_flushes(push_fn: impl Fn(MappedKMutexGuard<'static, PendingGl
 // ACTUAL FLUSH LOGIC
 use crate::memory::paging::arch::{inval_local_tlb_pg, inval_tlb_pg_broadcast, inval_tlb_pg_broadcast_global};
 use crate::memory::paging::PageAllocation;
+use crate::multitasking::get_cpu_num;
 
 /// Flush the given non-global allocation for the given active_id/asids.
 pub fn flush_local(active_id: Option<ActivePageID>, asids: &ClASIDs, allocation: PPAandOffset) {
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Flushing (nonglobal) {allocation:?} for active_id={active_id:?}",);
     if inval_tlb_pg_broadcast(active_id, allocation, asids) {
         // Nothing to do, we've broadcast it
     } else {
@@ -275,6 +296,7 @@ pub fn flush_local(active_id: Option<ActivePageID>, asids: &ClASIDs, allocation:
 }
 /// Flush the given global allocation.
 pub fn flush_global(allocation: PPAandOffset) {
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Flushing (global) {allocation:?}",);
     if inval_tlb_pg_broadcast_global(allocation) {
         // Nothing to do, we've broadcast it
     } else {
@@ -285,16 +307,11 @@ pub fn flush_global(allocation: PPAandOffset) {
         // TODO: Send IPI
     }
 }
-/// Flush the entire (non-global) address space for the given ASID on the given CPU, if it is not currently active (determined using active_id)
-///
-/// Returns true if successful, false if it failed because the page was in use.
-pub fn flush_asid(cpu_id: usize, active_id: ActivePageID, asid: AddressSpaceID) -> bool {
+/// Flush the entire (non-global) address space for the given ASID on the given CPU
+/// WARNING: It is expected that the page is not currently in use. Flushing an ASID that is in use is undefined behaviour.
+pub unsafe fn flush_asid(cpu_id: usize, asid: AddressSpaceID) {
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Flushing (full ASID) for: CPU {} asid={}", cpu_id, asid.into_u16());
     if let Some(state) = CpuLocal::get_for(&PENDING_FLUSHES, cpu_id).lock().per_asid.get_mut(asid.into_u16() as usize) {
-        let is_active: bool = false; let _ = active_id; // TODO
-        if is_active { return false; }  // fail if the page is active
         state.full_addr_space = true;
-        // We don't need to send an IPI because the page is not currently in use - it will be flushed when next switched to
-
-        true
-    } else { true }  // Not present?? either way this means it's inactive
+    } else {}  // Not present?? This ASID is not being used
 }

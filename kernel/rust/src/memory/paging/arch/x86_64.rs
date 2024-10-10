@@ -194,7 +194,7 @@ pub const fn canonical_addr(vaddr: usize) -> usize {
     x86_64::VirtAddr::new_truncate(vaddr as u64).as_u64() as usize
 }
 
-fn is_pcid_supported() -> bool {
+pub(in crate::memory::paging) fn is_asid_supported() -> bool {
     cfg!(feature="enable_x86_64_pcid") && false  // TODO
 }
 // Instructions
@@ -223,16 +223,19 @@ pub(in crate::memory::paging) unsafe fn set_active_page_table(phys_addr: usize, 
 
     klog!(Info, MEMORY_PAGING_MAPPINGS, "Switching active page table from 0x{:06x}[{:03x}] to 0x{:06x}[{}].",
             oldaddr.start_address(), old_pcid,
-            phys_addr, if is_pcid_supported() { alloc::format!("{:03x}",asid.into_u16()) } else { String::from("N/A") });
-    if is_pcid_supported() {
+            phys_addr, if is_asid_supported() { alloc::format!("{:03x}",asid.into_u16()) } else { String::from("N/A") });
+    if is_asid_supported() {
         let pcid: Option<Pcid> = asid.into();
         #[cfg_attr(not(feature="__IallowNonZeroASID"), expect(irrefutable_let_patterns))]
         if let AddressSpaceID::Unassigned = asid {
             // write_raw clears the top bit, ensuring that a flush occurs
+            klog!(Debug, MEMORY_PAGING_MAPPINGS, "Flushing on switch to Unassigned.");
             Cr3::write_raw(newaddr, 0);
         } else if flush {
+            klog!(Debug, MEMORY_PAGING_MAPPINGS, "Flushing on switch to {:?}.", pcid);
             Cr3::write_pcid(newaddr, pcid.unwrap())
         } else {
+            klog!(Debug, MEMORY_PAGING_MAPPINGS, "Not flushing on switch to {:?}.", pcid);
             Cr3::write_pcid_no_flush(newaddr, pcid.unwrap())
         }
     } else {
@@ -243,7 +246,7 @@ pub(in crate::memory::paging) unsafe fn set_active_page_table(phys_addr: usize, 
 
 /// Set the current active page ID
 pub(in crate::memory::paging) fn set_active_id(active_page_id: ActivePageID){
-    todo!()
+    // TODO
 }
 
 /// Invalidate a set of pages in the local CPU's TLB.
@@ -265,9 +268,9 @@ pub(in crate::memory::paging) fn inval_local_tlb_pg(allocation: PPAandOffset, as
     }
     let mut invstrat = InvalStrategy {
         // If asid is some() and different to our current PCID, then we must invalidate for a different PCID
-        different_asid: is_pcid_supported() && asid.is_some() && (Cr3::read_raw().1 != asid.unwrap().into_u16()),
+        different_asid: is_asid_supported() && asid.is_some() && (Cr3::read_raw().1 != asid.unwrap().into_u16()),
         // If invpcid is supported
-        invpcid_supported: is_pcid_supported() && false,
+        invpcid_supported: is_asid_supported() && false,
     };
 
     // Disable interruptions while we handle this

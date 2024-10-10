@@ -170,6 +170,7 @@ pub mod contexts {
         def_context!(MEMORY_PAGING_MAPPINGS, MEMORY_PAGING);
         def_context!(MEMORY_PAGING_TLB, MEMORY_PAGING);
           def_context!(MEMORY_PAGING_TLB_APIC, MEMORY_PAGING_TLB);
+          def_context!(MEMORY_PAGING_TLB_ID, MEMORY_PAGING_TLB, Debug);
           def_context!(MEMORY_PAGING_TLB_RECUR, MEMORY_PAGING_TLB, Info);
       def_context!(MEMORY_KHEAP, MEMORY, Debug);
       def_context!(MEMORY_PHYSICAL, MEMORY);

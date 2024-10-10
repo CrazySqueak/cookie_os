@@ -421,9 +421,6 @@ struct LPAInternal<PFA: PageFrameAllocator> {
     /// Other metadata
     meta: LPAMetadata,
 
-    /// active_count: If non-zero, we must bother with TLB invalidation
-    #[deprecated]
-    active_count: AtomicU16,
     /// Active ID state
     active_state: ActiveIDState,
 }
@@ -434,7 +431,6 @@ impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
         Self {
             lock: HMutex::new(alloc),
             meta: meta,
-            active_count: AtomicU16::new(0),
             active_state: ais,
         }
     }
@@ -470,22 +466,13 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
     This is intended to be used when the page table is possibly being read/cached by the CPU, as when locked by _begin_active, writes via write_when_active are still possible (as they flush the TLB).
     This returns the lock guard to allow temporary access to the allocator, however: 1. the allocator must only be read from, and 2. the lock should be released (not leaked)s once activation is finished. */
     pub(super) fn _begin_active(&self) -> impl Deref<Target=PFA> + '_ {
-        // Increment active_count
-        self.0.active_count.fetch_add(1,Ordering::Acquire);
-
         // Lock temporarily
-        // This ensures that we are not being written to by a writer that is unaware of our existence
-        // (we immediately release the lock afterwards as anyone who locks for writing after us will check active_count,
-        //      see that we're active, and issue the correct TLB flush commands as applicable)
         let lock = self.0.lock.lock();
 
         // Return
         lock
     }
     pub(super) unsafe fn _end_active(&self){
-        // Decrement active_count
-        self.0.active_count.fetch_sub(1,Ordering::Release);
-
         //core::sync::atomic::compiler_fence(Ordering::SeqCst);
     }
     
@@ -496,11 +483,7 @@ impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
         // Once we hold a guard, we guarantee that no more readers will activate the page without us knowing
         let guard = self.0.lock.lock();
 
-        let mut options = self.metadata().default_options.clone();
-        options.auto_flush_tlb = self.0.active_count.load(Ordering::Relaxed) > 0;  // if we're active, flush the TLB
-        // Note: this is safe because a page cannot become active before first incrementing active_count and then acquiring the lock
-        // Thus, while we're writing, active_count cannot be incremented (there may be some chicanery implemented later on if necessary but active_count will never go from 0 -> 1 while we hold the lock)
-
+        let /*mut*/ options = self.metadata().default_options.clone();
         return LockedPageAllocatorWriteGuard { guard, allocator: Self::clone_ref(self), options };
     }
     
@@ -680,8 +663,6 @@ pub(super) type WeakClASIDs = alloc::sync::Weak<ClASIDs>;
 // = GUARDS =
 #[derive(Debug,Clone,Copy)]
 pub struct LPAWGOptions {
-    #[deprecated]
-    pub(super) auto_flush_tlb: bool,
     pub(super) is_global_page: bool,
 
     pub(super) active_id: Option<ActivePageID>,
@@ -689,7 +670,6 @@ pub struct LPAWGOptions {
 impl LPAWGOptions {
     pub(super) fn new_default() -> Self {
         Self {
-            auto_flush_tlb: false,
             is_global_page: false,
 
             active_id: None,  // this should be filled in when the guard is taken?
@@ -871,7 +851,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         allocation.assert_pt_tag(self);
         klog!(Debug, MEMORY_PAGING_CONTEXT, "Deallocating {}", self._fmt_pa(allocation));
         self.get_page_table().deallocate(&allocation.allocation);
-        if self.options.auto_flush_tlb { self.invalidate_tlb(allocation) };
+        self.invalidate_tlb(allocation);
     }
     
     // Managing allocations
@@ -887,7 +867,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         unsafe {
             Self::_set_addr_inner(self.get_page_table(), allocation.into(), 0, base_addr, flags);
         }
-        if self.options.auto_flush_tlb { self.invalidate_tlb(allocation) };
+        self.invalidate_tlb(allocation);
     }
     ppa_define_foreach!(unsafe: _set_addr_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, base_addr: usize, flags: PageFlags, {
         ptable.set_huge_addr(index, base_addr+offset, flags);
@@ -902,7 +882,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         unsafe {
             Self::_set_missing_inner(self.get_page_table(), allocation.into(), 0, data);
         }
-        if self.options.auto_flush_tlb { self.invalidate_tlb(allocation) };
+        self.invalidate_tlb(allocation);
     }
     ppa_define_foreach!(unsafe: _set_missing_inner, allocator: &mut PFA, allocation: &PPA, ptable: &mut IPT, index: usize, offset: usize, data: usize, {
         ptable.set_absent(index, data);
@@ -920,15 +900,16 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
             offset: allocation.metadata.offset,
         };
 
-        let ActiveIDState::PageContext(ref active_state) = self.allocator.0.active_state else {unreachable!()};
-        let active_state_lock = active_state.lock();
-        let active_id: Option<ActivePageID> = active_state_lock.active_id.as_ref().map(|x|x.into());
-        let asids: &ClASIDs = &active_state_lock.asids;
-
         // Determine which flush instruction to call
         if self.options.is_global_page {
             tlb::flush_global(ppa)
         } else {
+            // Load active state to determine which CPUs and ASIDs to flush for
+            let ActiveIDState::PageContext(ref active_state) = self.allocator.0.active_state else {unreachable!()};
+            let active_state_lock = active_state.lock();
+            let active_id: Option<ActivePageID> = active_state_lock.active_id.as_ref().map(|x|x.into());
+            let asids: &ClASIDs = &active_state_lock.asids;
+
             tlb::flush_local(active_id, asids, ppa)
         }
     }

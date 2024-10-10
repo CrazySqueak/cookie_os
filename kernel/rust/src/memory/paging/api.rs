@@ -551,12 +551,7 @@ impl PagingContext {
             (active_id,asid) = pcst_locked.begin_active()
         }
         // determine what local flushes are needed
-        let needs_addr_flush; let needed_alloc_flushes: Vec<_>;
-        {
-            let mut local_flush_info = tlb::get_pending_flushes_for_asid(asid);
-            needs_addr_flush = local_flush_info.full_addr_space;
-            needed_alloc_flushes = local_flush_info.target_nonglobal_allocations.drain(..).collect();
-        }
+        let (needs_addr_flush, finish_tlb_flushing) = tlb::perform_ptswitch_flush(asid);
 
         // activate table
         let table_addr = ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize);
@@ -566,14 +561,8 @@ impl PagingContext {
         set_active_page_table(table_addr, asid, needs_addr_flush);
         // store reference (and take old one)
         let oldpt = _ACTIVE_PAGE_TABLE.lock().replace(Self::clone_ref(&self));
-        // Perform local flushes (if they weren't already cleared by a full address-space flush)
-        if !needs_addr_flush { for alloc in needed_alloc_flushes {
-            arch::inval_local_tlb_pg(alloc.to_borrowed(), Some(asid));
-        }}
-        // Perform global flushes
-        for alloc in tlb::get_pending_flushes_for_global().by_alloc.drain(..) {
-            arch::inval_local_tlb_pg(alloc.to_borrowed(), None);
-        }
+        // Perform pending flushes
+        finish_tlb_flushing();
         // Set the current active_id
         arch::set_active_id(active_id);
         // Enable interruptions

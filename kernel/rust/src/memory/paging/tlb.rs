@@ -277,12 +277,12 @@ pub fn push_global_flushes(push_fn: impl Fn(MappedKMutexGuard<'static, PendingGl
 
 // ACTUAL FLUSH LOGIC
 use crate::memory::paging::arch::{inval_local_tlb_pg, inval_tlb_pg_broadcast, inval_tlb_pg_broadcast_global};
-use crate::memory::paging::PageAllocation;
+use crate::memory::paging::{arch, PageAllocation};
 use crate::multitasking::get_cpu_num;
 
 /// Flush the given non-global allocation for the given active_id/asids.
 pub fn flush_local(active_id: Option<ActivePageID>, asids: &ClASIDs, allocation: PPAandOffset) {
-    klog!(Debug, MEMORY_PAGING_TLB_ID, "Flushing (nonglobal) {allocation:?} for active_id={active_id:?}",);
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Requesting flush (nonglobal) {allocation:?} for active_id={active_id:?}",);
     if inval_tlb_pg_broadcast(active_id, allocation, asids) {
         // Nothing to do, we've broadcast it
     } else {
@@ -296,7 +296,7 @@ pub fn flush_local(active_id: Option<ActivePageID>, asids: &ClASIDs, allocation:
 }
 /// Flush the given global allocation.
 pub fn flush_global(allocation: PPAandOffset) {
-    klog!(Debug, MEMORY_PAGING_TLB_ID, "Flushing (global) {allocation:?}",);
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Requesting flush (global) {allocation:?}",);
     if inval_tlb_pg_broadcast_global(allocation) {
         // Nothing to do, we've broadcast it
     } else {
@@ -310,8 +310,42 @@ pub fn flush_global(allocation: PPAandOffset) {
 /// Flush the entire (non-global) address space for the given ASID on the given CPU
 /// WARNING: It is expected that the page is not currently in use. Flushing an ASID that is in use is undefined behaviour.
 pub unsafe fn flush_asid(cpu_id: usize, asid: AddressSpaceID) {
-    klog!(Debug, MEMORY_PAGING_TLB_ID, "Flushing (full ASID) for: CPU {} asid={}", cpu_id, asid.into_u16());
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Requesting flush (full ASID) for: CPU {} asid={}", cpu_id, asid.into_u16());
     if let Some(state) = CpuLocal::get_for(&PENDING_FLUSHES, cpu_id).lock().per_asid.get_mut(asid.into_u16() as usize) {
         state.full_addr_space = true;
     } else {}  // Not present?? This ASID is not being used
+}
+
+
+// FUNCTIONS FOR PERFORMING FLUSHES
+/// Perform pending flushes for the given ASID on the current CPU.
+/// Intended for use as part of a page table switch.
+/// Returns a boolean stating whether a full address space flush is needed,
+///  and a FnOnce() that performs the allocation-specific flushes once the paging context switch has occurred.
+pub fn perform_ptswitch_flush(asid: AddressSpaceID) -> (bool, impl FnOnce()) {
+    // determine what local flushes are needed
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Loading pending flushes for ASID {}", asid.into_u16());
+    let mut local_flush_info = get_pending_flushes_for_asid(asid);
+    let needs_addr_flush = local_flush_info.full_addr_space;
+    let needed_alloc_flushes: Vec<_> = local_flush_info.target_nonglobal_allocations.drain(..).collect();
+
+    (needs_addr_flush, move ||{
+        if !needs_addr_flush {
+            klog!(Debug, MEMORY_PAGING_TLB_ID, "Performing pending local flushes for ASID {} ({} flushes)", asid.into_u16(), needed_alloc_flushes.len());
+            for alloc in needed_alloc_flushes {
+                inval_local_tlb_pg(alloc.to_borrowed(), Some(asid));
+            }
+        }
+        // Flush globals as well
+        perform_globonly_flush();
+    })
+}
+/// Perform any pending global flushes on the current CPU
+pub fn perform_globonly_flush() {
+    // Perform global flushes
+    let mut pending = get_pending_flushes_for_global();
+    klog!(Debug, MEMORY_PAGING_TLB_ID, "Performing pending global flushes ({} flushes)", pending.by_alloc.len());
+    for alloc in pending.by_alloc.drain(..) {
+        inval_local_tlb_pg(alloc.to_borrowed(), None);
+    }
 }

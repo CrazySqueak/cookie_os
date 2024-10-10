@@ -1,10 +1,12 @@
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
+use core::mem;
 use core::num::NonZeroU16;
 use core::ops::{AddAssign, Deref};
 use core::sync::atomic::{AtomicU16, Ordering};
 use lazy_static::lazy_static;
-use crate::memory::paging::api::{ClASIDs, PPAandOffset, PPAandOffsetOwned};
+use crate::memory::paging::api::{ArcClASIDs, ClASIDs, PPAandOffset, PPAandOffsetOwned, WeakClASIDs};
 use crate::memory::paging::sealed::PartialPageAllocation;
 use crate::multitasking::cpulocal::CpuLocal;
 use crate::sync::kspin::{KMutex, KMutexGuard, MappedKMutexGuard};
@@ -35,12 +37,69 @@ impl AddressSpaceID {
     }
 }
 impl Default for AddressSpaceID {
-    // TODO: Consider the ramifications of using Unassigned to mean both "unavailable" and "unset", and whether they are beneficial or a burden
     fn default() -> Self {
         Self::Unassigned
     }
 }
 // Thanks to rustc magic, this takes up zero bytes if __IallowNonZeroASID is disabled.
+
+lazy_static!{
+    static ref ASID_LRU: CpuLocal<KMutex<VecDeque<(AddressSpaceID,WeakClASIDs)>>,false> = CpuLocal::new();
+}
+#[cfg(not(feature = "__IallowNonZeroASID"))]
+pub fn get_free_asid(current_state: &ArcClASIDs) -> AddressSpaceID { AddressSpaceID::Unassigned }
+/// Claim an ASID for use on the current CPU.
+/// A Weak<> to current_state is inserted so it may be seized later if needed, or if the page context is deallocated
+#[cfg(feature = "__IallowNonZeroASID")]
+pub fn claim_asid_for(current_state: &ArcClASIDs) -> AddressSpaceID {
+    let mut lru_active_states = ASID_LRU.lock();
+    let replace_push_back = |i:usize|->AddressSpaceID{
+        let (id,_) = lru_active_states.remove(i).unwrap();  // we must preserve the ordering as this is a least-recently-used system
+        let new_ptr = Arc::downgrade(current_state);
+        lru_active_states.push_back((id,new_ptr));
+        id
+    };
+
+    // Step 1: Initialise if needed
+    if lru_active_states.is_empty() {
+        const MAX_ASID: u16 = 4095;  // TODO: Make arch-specific
+        lru_active_states.reserve(MAX_ASID.into());
+        for i in 1..=MAX_ASID {
+            // push dangling pointers for empty (available) ASIDs
+            lru_active_states.push_back((AddressSpaceID::Assigned(NonZeroU16::new(i).unwrap()),Weak::new()));
+        }
+    }
+    debug_assert!(!lru_active_states.is_empty());
+
+    // Step 2: Attempt to find a free one
+    for (i,(_,ptr)) in lru_active_states.iter().enumerate() {
+        if let None = Weak::upgrade(&ptr) {
+            // This paging context has been deallocated, so we know the ASID is now free
+            return replace_push_back(i);
+        }
+    }
+
+    // Step 3: Seize the most recent one
+    for (i, (_,ptr)) in lru_active_states.iter().enumerate() {
+        if let Some(old_state) = Weak::upgrade(ptr) {
+            // It's still here
+            // Attempt to obtain the lock, but don't waste time if it's busy
+            let Some(lock) = old_state.try_lock() else {continue};
+            // Check whether the given ID is active
+            if lock.active_count != 0 { continue }
+            // All is good. Seize the ID
+            let id = mem::take(&mut lock.asid);
+            // And push to the list
+            return replace_push_back(i);
+        } else {
+            // It was deallocated while our back was turned
+            return replace_push_back(i);
+        }
+    }
+
+    // We've failed
+    AddressSpaceID::Unassigned
+}
 
 /** Represents an "Active Page ID"
 
@@ -157,7 +216,7 @@ pub fn get_pending_flushes_for_global() -> MappedKMutexGuard<'static, PendingGlo
 ///  - For ASID [Unassigned](AddressSpaceID::Unassigned) - calls `push_fn` if the CPU has page #`active_id` currently active.
 ///  - For ASID [Assigned](AddressSpaceID::Assigned) - always calls `push_fn`.
 /// N.B. This only occurs for CPUs who are stored in the CpuLocal (so only CPUs that have activated this page in the past).
-pub fn push_flushes(active_id: ActivePageID, asids: &ClASIDs, push_fn: impl Fn(MappedKMutexGuard<'static, PendingTLBFlush>)) {
+pub fn push_flushes(active_id: Option<ActivePageID>, asids: &ClASIDs, push_fn: impl Fn(MappedKMutexGuard<'static, PendingTLBFlush>)) {
     for (cpu_id, asid) in CpuLocal::get_all_cpus(asids) {
         let asid = asid.lock();
         let should_push = match asid.asid {
@@ -202,7 +261,7 @@ use crate::memory::paging::arch::{inval_local_tlb_pg, inval_tlb_pg_broadcast, in
 use crate::memory::paging::PageAllocation;
 
 /// Flush the given non-global allocation for the given active_id/asids.
-pub fn flush_local(active_id: ActivePageID, asids: &ClASIDs, allocation: PPAandOffset) {
+pub fn flush_local(active_id: Option<ActivePageID>, asids: &ClASIDs, allocation: PPAandOffset) {
     if inval_tlb_pg_broadcast(active_id, allocation, asids) {
         // Nothing to do, we've broadcast it
     } else {

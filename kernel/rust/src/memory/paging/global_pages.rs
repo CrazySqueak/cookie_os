@@ -11,7 +11,7 @@ pub struct GlobalPageTable(LockedPageAllocator<GlobalPTType>,PageFlags);
 impl GlobalPageTable {
     fn new(vmemaddr: usize, flags: PageFlags) -> Self {
         let mut dopts = LPAWGOptions::new_default(); dopts.is_global_page = true;
-        Self(LockedPageAllocator::new(GlobalPTType::new(), LPAMetadata { offset: canonical_addr(vmemaddr), default_options: dopts }), flags)
+        Self(LockedPageAllocator::new_global(GlobalPTType::new(), LPAMetadata { offset: canonical_addr(vmemaddr), default_options: dopts }), flags)
     }
     pub fn get_vmem_offset(&self) -> PageAlignedAddressT {
         PageAlignedAddressT::new(self.0.metadata().offset)

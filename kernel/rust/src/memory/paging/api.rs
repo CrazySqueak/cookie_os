@@ -430,12 +430,12 @@ struct LPAInternal<PFA: PageFrameAllocator> {
 // pub const ACTIVE_ID_EMPTY: u8 = 0;
 // pub const ACTIVE_ID_UNKNOWABLE: u8 = 255;
 impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
-    fn new(alloc: PFA, meta: LPAMetadata) -> Self {
+    fn new(alloc: PFA, meta: LPAMetadata, ais: ActiveIDState) -> Self {
         Self {
             lock: HMutex::new(alloc),
             meta: meta,
             active_count: AtomicU16::new(0),
-            active_state: todo!(),
+            active_state: ais,
         }
     }
     pub fn metadata(&self) -> LPAMetadata {
@@ -445,8 +445,17 @@ impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
 
 pub struct LockedPageAllocator<PFA: PageFrameAllocator>(Arc<LPAInternal<PFA>>);
 impl<PFA: PageFrameAllocator> LockedPageAllocator<PFA> {
-    pub fn new(alloc: PFA, meta: LPAMetadata) -> Self {
-        Self(Arc::new(LPAInternal::new(alloc, meta)))
+    pub fn new_context(alloc: PFA, meta: LPAMetadata) -> Self {
+        Self(Arc::new(LPAInternal::new(alloc, meta,
+                                       ActiveIDState::PageContext(KMutex::new(PagingContextActiveIDState {
+                                           active_count: 0,
+                                           active_id: None,
+                                           asids: Arc::new(ClASIDs::new()),
+                                       }))
+        )))
+    }
+    pub fn new_global(alloc: PFA, meta: LPAMetadata) -> Self {
+        Self(Arc::new(LPAInternal::new(alloc, meta, ActiveIDState::GlobalPage)))
     }
     
     pub fn clone_ref(x: &Self) -> Self {
@@ -533,7 +542,7 @@ impl PagingContext {
         }
         // Return
         let dopts = LPAWGOptions::new_default();
-        Self(LockedPageAllocator::new(allocator, LPAMetadata { offset: 0, default_options: dopts }))
+        Self(LockedPageAllocator::new_context(allocator, LPAMetadata { offset: 0, default_options: dopts }))
     }
     pub fn clone_ref(x: &Self) -> Self {
         Self(LockedPageAllocator::clone_ref(&x.0))
@@ -640,7 +649,7 @@ impl PagingContextActiveIDState {
         #[cfg(feature="__IallowNonZeroASID")]
         if let AddressSpaceID::Unassigned = asid_lock.asid {
             // Attempt to re-assign, if unassigned and possible to do so
-            todo!()
+            asid_lock.asid = tlb::claim_asid_for(&self.asids);
         }
         // Return active ID and ASID
         (active_id, asid_lock.asid)
@@ -671,6 +680,7 @@ pub(super) type WeakClASIDs = alloc::sync::Weak<ClASIDs>;
 // = GUARDS =
 #[derive(Debug,Clone,Copy)]
 pub struct LPAWGOptions {
+    #[deprecated]
     pub(super) auto_flush_tlb: bool,
     pub(super) is_global_page: bool,
 
@@ -910,8 +920,10 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
             offset: allocation.metadata.offset,
         };
 
-        let active_id: ActivePageID = (||->ActivePageID{todo!()})();
-        let asids: &ClASIDs = (||->&ClASIDs{todo!()})();
+        let ActiveIDState::PageContext(ref active_state) = self.allocator.0.active_state else {unreachable!()};
+        let active_state_lock = active_state.lock();
+        let active_id: Option<ActivePageID> = active_state_lock.active_id.as_ref().map(|x|x.into());
+        let asids: &ClASIDs = &active_state_lock.asids;
 
         // Determine which flush instruction to call
         if self.options.is_global_page {

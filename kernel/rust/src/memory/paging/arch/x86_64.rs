@@ -335,7 +335,7 @@ lazy_static! {
 ///
 /// * `allocation` - The allocation to flush the TLB for.
 /// * `asids` - The CPU-ASID mappings, containing the ASIDs to invalidate for on each CPU (CPUs which are not present are skipped).
-pub(in crate::memory::paging) fn inval_tlb_pg_broadcast(active_id: ActivePageID, allocation: PPAandOffset, asids: &ClASIDs) -> bool {
+pub(in crate::memory::paging) fn inval_tlb_pg_broadcast(active_id: Option<ActivePageID>, allocation: PPAandOffset, asids: &ClASIDs) -> bool {
     // You really think I can be asked to implement INVLPGB for non-globals atm??
     false
 }

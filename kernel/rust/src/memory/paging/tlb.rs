@@ -4,7 +4,7 @@ use core::num::NonZeroU16;
 use core::ops::{AddAssign, Deref};
 use core::sync::atomic::{AtomicU16, Ordering};
 use lazy_static::lazy_static;
-use crate::memory::paging::api::{PPAandOffset, PPAandOffsetOwned};
+use crate::memory::paging::api::{ClASIDs, PPAandOffset, PPAandOffsetOwned};
 use crate::memory::paging::sealed::PartialPageAllocation;
 use crate::multitasking::cpulocal::CpuLocal;
 use crate::sync::kspin::{KMutex, KMutexGuard, MappedKMutexGuard};
@@ -111,9 +111,9 @@ pub fn next_free_active_id() -> OwnedActiveID {
 #[derive(Debug)]
 pub struct PendingTLBFlush {
     /// Targeted non-global page allocations to be flushed
-    target_nonglobal_allocations: Vec<PPAandOffsetOwned>,
+    pub target_nonglobal_allocations: Vec<PPAandOffsetOwned>,
     /// Whether the full address space should be flushed (excluding global pages)
-    full_addr_space: bool,
+    pub full_addr_space: bool,
 }
 impl Default for PendingTLBFlush {
     fn default() -> Self {
@@ -125,7 +125,7 @@ impl Default for PendingTLBFlush {
 }
 #[derive(Debug,Default)]
 pub struct PendingGlobalFlushes {
-    by_alloc: Vec<PPAandOffsetOwned>
+    pub by_alloc: Vec<PPAandOffsetOwned>
 }
 #[derive(Debug,Default)]
 struct PendingFlushes {
@@ -157,9 +157,10 @@ pub fn get_pending_flushes_for_global() -> MappedKMutexGuard<'static, PendingGlo
 ///  - For ASID [Unassigned](AddressSpaceID::Unassigned) - calls `push_fn` if the CPU has page #`active_id` currently active.
 ///  - For ASID [Assigned](AddressSpaceID::Assigned) - always calls `push_fn`.
 /// N.B. This only occurs for CPUs who are stored in the CpuLocal (so only CPUs that have activated this page in the past).
-pub fn push_flushes(active_id: ActivePageID, asids: &CpuLocal<AddressSpaceID,true>, push_fn: impl Fn(MappedKMutexGuard<'static, PendingTLBFlush>)) {
+pub fn push_flushes(active_id: ActivePageID, asids: &ClASIDs, push_fn: impl Fn(MappedKMutexGuard<'static, PendingTLBFlush>)) {
     for (cpu_id, asid) in CpuLocal::get_all_cpus(asids) {
-        let should_push = match asid {
+        let asid = asid.lock();
+        let should_push = match asid.asid {
             AddressSpaceID::Unassigned => {
                 // Unassigned is always flushed between switches, so we only need to flush if it's currently active
                 let is_active = true; let _ = active_id; // TODO
@@ -173,7 +174,7 @@ pub fn push_flushes(active_id: ActivePageID, asids: &CpuLocal<AddressSpaceID,tru
         if should_push {
             // Call push_fn to push
             let mg = CpuLocal::get_for(&PENDING_FLUSHES, cpu_id).lock();
-            if mg.per_asid.len() <= asid.into_u16() as usize {
+            if mg.per_asid.len() <= asid.asid.into_u16() as usize {
                 // Not present
                 // [get_pending_flushes_for_asid] is called in two scenarios:
                 //  1. Before the given page is activated, to check what flushes need to be done (and perform them)
@@ -183,7 +184,7 @@ pub fn push_flushes(active_id: ActivePageID, asids: &CpuLocal<AddressSpaceID,tru
                 // This is less of a killer optimization and more of a "no point handling this in any other way" situation.
                 continue;
             }
-            push_fn(KMutexGuard::map(mg, |pf|&mut pf.per_asid[asid.into_u16() as usize]));
+            push_fn(KMutexGuard::map(mg, |pf|&mut pf.per_asid[asid.asid.into_u16() as usize]));
         }
     }
 }
@@ -201,7 +202,7 @@ use crate::memory::paging::arch::{inval_local_tlb_pg, inval_tlb_pg_broadcast, in
 use crate::memory::paging::PageAllocation;
 
 /// Flush the given non-global allocation for the given active_id/asids.
-pub fn flush_local(active_id: ActivePageID, asids: &CpuLocal<AddressSpaceID,true>, allocation: PPAandOffset) {
+pub fn flush_local(active_id: ActivePageID, asids: &ClASIDs, allocation: PPAandOffset) {
     if inval_tlb_pg_broadcast(active_id, allocation, asids) {
         // Nothing to do, we've broadcast it
     } else {

@@ -1,6 +1,6 @@
 use alloc::borrow::ToOwned;
 use core::sync::atomic::{AtomicU16, AtomicU8, Ordering};
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use crate::sync::hspin::{HRwLock as RwLock, HRwLockReadGuard as RwLockReadGuard, HRwLockWriteGuard as RwLockWriteGuard, HRwLockUpgradableGuard as RwLockUpgradableGuard, HMutex, HMutexGuard};  // we're now using HLocks because that's what we always should've been using
 use crate::multitasking::cpulocal::CpuLocal;
@@ -420,8 +420,12 @@ struct LPAInternal<PFA: PageFrameAllocator> {
     lock: HMutex<PFA>,
     /// Other metadata
     meta: LPAMetadata,
+
     /// active_count: If non-zero, we must bother with TLB invalidation
+    #[deprecated]
     active_count: AtomicU16,
+    /// Active ID state
+    active_state: ActiveIDState,
 }
 // pub const ACTIVE_ID_EMPTY: u8 = 0;
 // pub const ACTIVE_ID_UNKNOWABLE: u8 = 255;
@@ -431,6 +435,7 @@ impl<PFA: PageFrameAllocator> LPAInternal<PFA> {
             lock: HMutex::new(alloc),
             meta: meta,
             active_count: AtomicU16::new(0),
+            active_state: todo!(),
         }
     }
     pub fn metadata(&self) -> LPAMetadata {
@@ -545,16 +550,40 @@ impl PagingContext {
          */
     pub unsafe fn activate(&self){
         let allocator = self.0._begin_active();
-        
+
+        // Acquire active ID and ASID
+        let active_id; let asid;
+        {
+            let ActiveIDState::PageContext(ref pcst) = self.0.0.active_state else {unreachable!()};
+            let mut pcst_locked = pcst.lock();
+            (active_id,asid) = pcst_locked.begin_active()
+        }
+        // determine what local flushes are needed
+        let needs_addr_flush; let needed_alloc_flushes: Vec<_>;
+        {
+            let mut local_flush_info = tlb::get_pending_flushes_for_asid(asid);
+            needs_addr_flush = local_flush_info.full_addr_space;
+            needed_alloc_flushes = local_flush_info.target_nonglobal_allocations.drain(..).collect();
+        }
+
         // activate table
         let table_addr = ptaddr_virt_to_phys(allocator.get_page_table_ptr() as usize);
         klog!(Info, MEMORY_PAGING_CONTEXT, "Switching active context to 0x{:x}", table_addr);
-
         let ni = disable_interruptions();
         // Set active
-        set_active_page_table(table_addr, todo!(), todo!());
+        set_active_page_table(table_addr, asid, needs_addr_flush);
         // store reference (and take old one)
         let oldpt = _ACTIVE_PAGE_TABLE.lock().replace(Self::clone_ref(&self));
+        // Perform local flushes (if they weren't already cleared by a full address-space flush)
+        if !needs_addr_flush { for alloc in needed_alloc_flushes {
+            arch::inval_local_tlb_pg(alloc.to_borrowed(), Some(asid));
+        }}
+        // Perform global flushes
+        for alloc in tlb::get_pending_flushes_for_global().by_alloc.drain(..) {
+            arch::inval_local_tlb_pg(alloc.to_borrowed(), None);
+        }
+        // Set the current active_id
+        arch::set_active_id(active_id);
         // Enable interruptions
         drop(ni);
         
@@ -564,6 +593,8 @@ impl PagingContext {
         //         counter here will be defined, working as if the guard had been dropped.
         // (N.B. we can't simply store the guard due to borrow checker limitations + programmer laziness)
         if let Some(old_table) = oldpt { unsafe {
+            let ActiveIDState::PageContext(ref pcst) = old_table.0.0.active_state else {unreachable!()};
+            pcst.lock().end_active();
             old_table.0._end_active();
         }}
     }
@@ -574,6 +605,68 @@ impl core::ops::Deref for PagingContext {
         &self.0
     }
 }
+
+// = ACTIVE ID / ASID STATE =
+pub(super) enum ActiveIDState {
+    GlobalPage,
+    PageContext(KMutex<PagingContextActiveIDState>),
+}
+pub(super) struct PagingContextActiveIDState {
+    /// The number of CPUs this context is currently active on.
+    /// When incremented to 1, an active ID is assigned.
+    /// When decremented to 0, the active ID is relinquished.
+    active_count: usize,
+
+    active_id: Option<OwnedActiveID>,
+    asids: ArcClASIDs,
+}
+pub(super) type LockedPCAIS = KMutex<PagingContextActiveIDState>;
+impl PagingContextActiveIDState {
+    pub fn begin_active(&mut self) -> (ActivePageID,AddressSpaceID) {
+        // Increment active_count
+        let old_active = self.active_count; self.active_count += 1;
+        let active_id: ActivePageID = if old_active == 0 {
+            // We've just activated it
+            // Obtain an active ID
+            (&*self.active_id.get_or_insert_with(next_free_active_id)).into()
+        } else {
+            if let Some(active_id) = self.active_id.as_ref() {
+                active_id.into()
+            } else {unreachable!()}
+        };
+        // Obtain ASID
+        let mut asid_lock = self.asids.lock();
+        asid_lock.active_count += 1;
+        #[cfg(feature="__IallowNonZeroASID")]
+        if let AddressSpaceID::Unassigned = asid_lock.asid {
+            // Attempt to re-assign, if unassigned and possible to do so
+            todo!()
+        }
+        // Return active ID and ASID
+        (active_id, asid_lock.asid)
+    }
+    /// Calling this more times on a CPU than begin_active will cause undefined behaviour
+    pub unsafe fn end_active(&mut self) {
+        // Decrement active_count
+        self.active_count -= 1; let new_active = self.active_count;
+        if new_active == 0 {
+            // Release the active_id if we're no longer active
+            self.active_id = None;
+        }
+        // Decrement active_count on our ASID, so it may be seized if we run out
+        self.asids.lock().active_count -= 1;
+    }
+}
+#[derive(Debug)]
+pub(super) struct ClASID { pub asid: AddressSpaceID, pub active_count: u8 }  // active_count must be a u8 rather than a u1, in case a paging context is activated while it is active (which would increment active_count to 2, as activating the new one happens before deactivating the old one)
+impl Default for ClASID {
+    fn default() -> Self {
+        Self { asid: Default::default(), active_count: 0 }
+    }
+}
+pub(super) type ClASIDs = CpuLocal<KMutex<ClASID>,true>;
+pub(super) type ArcClASIDs = Arc<ClASIDs>;
+pub(super) type WeakClASIDs = alloc::sync::Weak<ClASIDs>;
 
 // = GUARDS =
 #[derive(Debug,Clone,Copy)]
@@ -818,7 +911,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
         };
 
         let active_id: ActivePageID = (||->ActivePageID{todo!()})();
-        let asids: &CpuLocal<AddressSpaceID,true> = (||->&CpuLocal<AddressSpaceID,true>{todo!()})();
+        let asids: &ClASIDs = (||->&ClASIDs{todo!()})();
 
         // Determine which flush instruction to call
         if self.options.is_global_page {
@@ -830,7 +923,7 @@ impl<PFA: PageFrameAllocator, GuardT> LockedPageAllocatorWriteGuard<PFA, GuardT>
 }
 
 #[derive(Clone,Copy,Debug)]
-pub(super) struct PPAandOffset<'p> {
+pub struct PPAandOffset<'p> {
     pub ppa: &'p PartialPageAllocation,
     pub offset: usize,
 }
@@ -843,9 +936,17 @@ impl PPAandOffset<'_> {
     }
 }
 #[derive(Clone,Debug)]
-pub(super) struct PPAandOffsetOwned {
+pub struct PPAandOffsetOwned {
     pub ppa: PartialPageAllocation,
     pub offset: usize,
+}
+impl PPAandOffsetOwned {
+    pub fn to_borrowed(&self) -> PPAandOffset {
+        PPAandOffset {
+            ppa: &self.ppa,
+            offset: self.offset,
+        }
+    }
 }
 
 pub struct ForcedUpgradeGuard<'a, T> {
@@ -995,7 +1096,7 @@ use alloc::boxed::Box;
 use core::borrow::Borrow;
 use core::hint::spin_loop;
 use core::ops::Deref;
-use crate::memory::paging::tlb::{ActivePageID, AddressSpaceID};
+use crate::memory::paging::tlb::{next_free_active_id, ActivePageID, AddressSpaceID, OwnedActiveID};
 /* Any page allocation, regardless of PFA. */
 pub trait AnyPageAllocation: core::fmt::Debug + Send {
     fn normalize(&mut self);

@@ -207,7 +207,7 @@ fn is_pcid_supported() -> bool {
 /// If `flush` is `false`, and (oldaddr,oldasid) == (phys_addr,asid), then no flush or write to Cr3 will occur.
 /// If `asid` is [Assigned](AddressSpaceID::Assigned), then the cached entries for that PCID will be re-used (if flush is false) or cleared (if flush is true).
 /// If `asid` is [Unassigned](AddressSpaceID::Unassigned), then the cached entries for that PCID will always be flushed.
-pub unsafe fn set_active_page_table(phys_addr: usize, asid: AddressSpaceID, flush: bool){
+pub(in crate::memory::paging) unsafe fn set_active_page_table(phys_addr: usize, asid: AddressSpaceID, flush: bool){
     use x86_64::addr::PhysAddr;
     use x86_64::structures::paging::frame::PhysFrame;
     use x86_64::registers::control::Cr3;
@@ -241,12 +241,17 @@ pub unsafe fn set_active_page_table(phys_addr: usize, asid: AddressSpaceID, flus
     }
 }
 
+/// Set the current active page ID
+pub(in crate::memory::paging) fn set_active_id(active_page_id: ActivePageID){
+    todo!()
+}
+
 /// Invalidate a set of pages in the local CPU's TLB.
 ///
 /// * `allocation` - The allocation to invalidate the mappings for.
 /// * `asid = Some(x)` - The address space to invalidate the mappings for (may skip those tagged global).
 /// * `asid = None` - Invalidate the given global mappings.
-pub fn inval_local_tlb_pg(allocation: PPAandOffset, asid: Option<AddressSpaceID>) {
+pub(in crate::memory::paging) fn inval_local_tlb_pg(allocation: PPAandOffset, asid: Option<AddressSpaceID>) {
     // asid.is_some() = If we are restricting based on ASID
     // If true, then this is for a specific address space.
     // If false, then this is for global mappings.
@@ -330,7 +335,7 @@ lazy_static! {
 ///
 /// * `allocation` - The allocation to flush the TLB for.
 /// * `asids` - The CPU-ASID mappings, containing the ASIDs to invalidate for on each CPU (CPUs which are not present are skipped).
-pub fn inval_tlb_pg_broadcast(active_id: ActivePageID, allocation: PPAandOffset, asids: &CpuLocal<AddressSpaceID,true>) -> bool {
+pub(in crate::memory::paging) fn inval_tlb_pg_broadcast(active_id: ActivePageID, allocation: PPAandOffset, asids: &ClASIDs) -> bool {
     // You really think I can be asked to implement INVLPGB for non-globals atm??
     false
 }
@@ -338,7 +343,7 @@ pub fn inval_tlb_pg_broadcast(active_id: ActivePageID, allocation: PPAandOffset,
 /// Returns true if this was successful.\
 /// Returns false if this was unsuccessful (e.g. unsupported),
 /// and must be done using [push_global_flushes](crate::memory::paging::tlb::push_global_flushes) + an IPI broadcast instead.
-pub fn inval_tlb_pg_broadcast_global(allocation: PPAandOffset) -> bool {
+pub(in crate::memory::paging) fn inval_tlb_pg_broadcast_global(allocation: PPAandOffset) -> bool {
     if let Some(invlpgb) = INVLPGB.as_ref() {
         let start = (allocation.ppa.start_addr() + allocation.offset) as u64;
         let end = (allocation.ppa.end_addr() + allocation.offset) as u64;

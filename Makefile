@@ -145,7 +145,7 @@ check-qemu-var:
 
 run: check-qemu-var $(QEMUTARGETDEPS)
 	@mkdir -p $(dir $(QLOGNAME))
-	$(QEMU) $(QEMUTARGETARGS) -cpu $(QEMUCPU) $(QLOGARGSRUN) $(QEMUARGS) | tee $(QLOGNAME)
+	$(QEMU) $(QEMUTARGETARGS) -cpu $(QEMUCPU) $(QLOGARGSRUN) $(QEMUARGS) | ts -s -m '%M:%.S' | tee $(QLOGNAME)
 debug: check-qemu-var $(QEMUTARGETDEPS) $(KERNEL_BIN)
 	@if [ "$$INCLUDE_DEBUG_SYMBOLS" != "1" ]; then\
 		echo -e "\033[0;33mWARNING: Debug symbols were not included in this build! Set $$INCLUDE_DEBUG_SYMBOLS to 1 to include them!\033[0m";\

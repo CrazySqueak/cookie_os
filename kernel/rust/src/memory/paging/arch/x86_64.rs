@@ -248,7 +248,7 @@ pub(in crate::memory::paging) fn reload_page_table(){
     // SAFETY: We're reloading the current page table, so this should be fine
     unsafe {
         let (addr, pcid) = Cr3::read_raw();
-        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Flushing current page table: addr={addr:x} pcid={pcid:x}",);
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Flushing current page table: addr={:x} pcid={pcid:x}",addr.start_address().as_u64());
         Cr3::write_raw(addr, pcid);
     }
 }

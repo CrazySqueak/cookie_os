@@ -6,6 +6,7 @@ use core::num::NonZeroU16;
 use core::ops::{AddAssign, Deref, DerefMut};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicU16, Ordering};
+use either::Either;
 use lazy_static::lazy_static;
 use crate::logging::klog;
 use crate::memory::paging::api::{ArcClASIDs, ClASIDs, PPAandOffset, PPAandOffsetOwned, WeakClASIDs};
@@ -181,6 +182,22 @@ pub fn next_free_active_id() -> OwnedActiveID {
     id
 }
 
+// ACTIVE STATE
+// An extra copy of ASID/ActiveID is kept for functions here that need to check it
+lazy_static! {
+    static ref CURRENT_ACTIVE_STATE: CpuLocal<KMutex<Option<(ActivePageID,AddressSpaceID)>>,true> = CpuLocal::new();
+}
+/// Set the active ID for the current CPU.
+/// This also calls the arch:: method to update it in any arch-specific ways
+pub fn change_active_state(id: ActivePageID, asid: AddressSpaceID) {
+    *CURRENT_ACTIVE_STATE.lock() = Some((id,asid));
+    arch::set_active_id(id);
+}
+/// Returns the active ID for the given CPU
+pub fn get_active_id(cpu: usize) -> Option<ActivePageID> {
+    Some((*CpuLocal::get_for(&CURRENT_ACTIVE_STATE,cpu).lock())?.0)
+}
+
 #[derive(Debug)]
 pub struct PendingTLBFlush {
     /// Targeted non-global page allocations to be flushed
@@ -229,6 +246,10 @@ pub fn get_pending_flushes_for_global() -> MappedKMutexGuard<'static, PendingGlo
 /// Acts based on whether the ASID for each CPU is assigned:
 ///  - For ASID [Unassigned](AddressSpaceID::Unassigned) - calls `push_fn` if the CPU has page #`active_id` currently active.
 ///  - For ASID [Assigned](AddressSpaceID::Assigned) - always calls `push_fn`.
+///
+/// If `active_id` is None, then the page is considered to be **inactive** on all CPUs by default.
+/// (though it will still queue a flush for non-zero ASIDs as seen above)
+///
 /// N.B. This only occurs for CPUs who are stored in the CpuLocal (so only CPUs that have activated this page in the past).
 pub fn push_flushes(active_id: Option<ActivePageID>, asids: &ClASIDs, push_fn: impl Fn(MappedKMutexGuard<'static, PendingTLBFlush>)) {
     klog!(Debug, MEMORY_PAGING_TLB_ID, "Pushing nonglobal flush for: active_id={:?}", active_id);
@@ -238,7 +259,9 @@ pub fn push_flushes(active_id: Option<ActivePageID>, asids: &ClASIDs, push_fn: i
         let should_push = match asid.asid {
             AddressSpaceID::Unassigned => {
                 // Unassigned is always flushed between switches, so we only need to flush if it's currently active
-                let is_active = true; let _ = active_id; // TODO
+                let cpu_active = get_active_id(cpu_id);
+                // If our active ID is not None (inactive) and it matches, then we're active
+                let is_active = active_id.is_some() && (active_id == cpu_active);
                 is_active
             },
             #[cfg(feature="__IallowNonZeroASID")]
@@ -291,7 +314,7 @@ pub fn flush_local(active_id: Option<ActivePageID>, asids: &ClASIDs, allocation:
         push_flushes(active_id, asids, |mut flush_info|{
             flush_info.target_nonglobal_allocations.push(allocation.to_owned())
         });
-        // TODO: Send IPI to handle added flushes
+        if let Some(target_id) = active_id { send_refresh_notification(RefreshTarget::ActiveID(target_id)) }
     }
 }
 /// Flush the given global allocation.
@@ -304,7 +327,7 @@ pub fn flush_global(allocation: PPAandOffset) {
         push_global_flushes(|mut flush_info|{
             flush_info.by_alloc.push(allocation.to_owned())
         });
-        // TODO: Send IPI
+        send_refresh_notification(RefreshTarget::Globally)
     }
 }
 /// Flush the entire (non-global) address space for the given ASID on the given CPU
@@ -316,6 +339,24 @@ pub unsafe fn flush_asid(cpu_id: usize, asid: AddressSpaceID) {
     } else {}  // Not present?? This ASID is not being used
 }
 
+// FUNCTION FOR SENDING IPIs
+pub(super) enum RefreshTarget {
+    ActiveID(ActivePageID),
+    Globally,
+}
+/// [Either::Left] - Send to the given ID
+/// [Either::Right] - Send globally
+pub(super) fn send_refresh_notification(active_id: RefreshTarget) {
+    // Trigger refresh locally
+    match active_id {
+        RefreshTarget::ActiveID(target_id) => if CURRENT_ACTIVE_STATE.lock().is_some_and(|(id,_)|id==target_id) {
+                perform_pending_flushes();
+        },
+        RefreshTarget::Globally => { perform_pending_flushes() },
+    }
+    // Send IPI to notify other processors of the change
+    // TODO: Send IPI
+}
 
 // FUNCTIONS FOR PERFORMING FLUSHES
 /// Perform pending flushes for the given ASID on the current CPU.
@@ -353,8 +394,12 @@ pub fn perform_globonly_flush() {
 /// Unlike [perform_ptswitch_flush], this is intended for use when not switching to a new page-table
 /// e.g. in an IPI handler, or when one of the flush_ functions is called.
 pub fn perform_pending_flushes() {
-    let asid = ||->AddressSpaceID{todo!()}();
-    let (full_addr_space_flush, finish_tlb_flushing) = perform_ptswitch_flush(asid);
-    if full_addr_space_flush { arch::reload_page_table(); }
-    finish_tlb_flushing();
+    if let Some(asid) = CURRENT_ACTIVE_STATE.lock().map(|(_,asid)|asid) {
+        let (full_addr_space_flush, finish_tlb_flushing) = perform_ptswitch_flush(asid);
+        if full_addr_space_flush { arch::reload_page_table(); }
+        finish_tlb_flushing();
+    } else {
+        // We haven't activated our first kernel-created page table yet
+        perform_globonly_flush();
+    }
 }

@@ -564,7 +564,7 @@ impl PagingContext {
         // Perform pending flushes
         finish_tlb_flushing();
         // Set the current active_id
-        arch::set_active_id(active_id);
+        tlb::change_active_state(active_id, asid);
         // Enable interruptions
         drop(ni);
         

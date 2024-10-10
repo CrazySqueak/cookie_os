@@ -349,3 +349,12 @@ pub fn perform_globonly_flush() {
         inval_local_tlb_pg(alloc.to_borrowed(), None);
     }
 }
+/// Perform all pending flushes for the current ASID.
+/// Unlike [perform_ptswitch_flush], this is intended for use when not switching to a new page-table
+/// e.g. in an IPI handler, or when one of the flush_ functions is called.
+pub fn perform_pending_flushes() {
+    let asid = ||->AddressSpaceID{todo!()}();
+    let (full_addr_space_flush, finish_tlb_flushing) = perform_ptswitch_flush(asid);
+    if full_addr_space_flush { arch::reload_page_table(); }
+    finish_tlb_flushing();
+}

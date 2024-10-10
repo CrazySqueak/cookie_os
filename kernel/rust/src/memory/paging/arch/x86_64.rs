@@ -243,6 +243,15 @@ pub(in crate::memory::paging) unsafe fn set_active_page_table(phys_addr: usize, 
         Cr3::write_raw(newaddr, 0)
     }
 }
+/// Re-load the current value of CR3, flushing the TLB in the process
+pub(in crate::memory::paging) fn reload_page_table(){
+    // SAFETY: We're reloading the current page table, so this should be fine
+    unsafe {
+        let (addr, pcid) = Cr3::read_raw();
+        klog!(Debug, MEMORY_PAGING_MAPPINGS, "Flushing current page table: addr={addr:x} pcid={pcid:x}",);
+        Cr3::write_raw(addr, pcid);
+    }
+}
 
 /// Set the current active page ID
 pub(in crate::memory::paging) fn set_active_id(active_page_id: ActivePageID){

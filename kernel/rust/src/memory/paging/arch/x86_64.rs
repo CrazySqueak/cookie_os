@@ -194,6 +194,7 @@ pub const fn canonical_addr(vaddr: usize) -> usize {
     x86_64::VirtAddr::new_truncate(vaddr as u64).as_u64() as usize
 }
 
+/// Return true if ASIDs are supported, false if they must always be ::Unassigned
 pub(in crate::memory::paging) fn is_asid_supported() -> bool {
     cfg!(feature="enable_x86_64_pcid") && false  // TODO
 }
@@ -259,7 +260,7 @@ pub(in crate::memory::paging) fn set_active_id(active_page_id: ActivePageID){
 }
 /// Send a "Refresh Pages" IPI to the given active ID
 pub(in crate::memory::paging) fn send_refresh_ipi(refresh_target: RefreshTarget) {
-    todo!()
+    // TODO
 }
 
 /// Invalidate a set of pages in the local CPU's TLB.

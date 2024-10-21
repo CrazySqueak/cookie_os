@@ -50,7 +50,7 @@ lazy_static!{
     static ref ASID_LRU: CpuLocal<KMutex<VecDeque<(AddressSpaceID,WeakClASIDs)>>,false> = CpuLocal::new();
 }
 #[cfg(not(feature = "__IallowNonZeroASID"))]
-pub fn get_free_asid(current_state: &ArcClASIDs) -> AddressSpaceID { AddressSpaceID::Unassigned }
+pub fn claim_asid_for(current_state: &ArcClASIDs) -> AddressSpaceID { AddressSpaceID::Unassigned }
 /// Claim an ASID for use on the current CPU.
 /// A Weak<> to current_state is inserted so it may be seized later if needed, or if the page context is deallocated
 #[cfg(feature = "__IallowNonZeroASID")]
@@ -71,7 +71,7 @@ pub fn claim_asid_for(current_state: &ArcClASIDs) -> AddressSpaceID {
     // Step 1: Initialise if needed
     if lru_active_states.is_empty() {
         klog!(Debug, MEMORY_PAGING_TLB_ID, "Initialising ASIDs on CPU {}...",get_cpu_num());
-        const MAX_ASID: u16 = 4095;  // TODO: Make arch-specific
+        use arch::MAX_ASID;
         lru_active_states.reserve(MAX_ASID.into());
         for i in 1..=MAX_ASID {
             // push dangling pointers for empty (available) ASIDs
@@ -89,6 +89,7 @@ pub fn claim_asid_for(current_state: &ArcClASIDs) -> AddressSpaceID {
     }
 
     // Step 3: Seize the most recent one
+    // TODO: Don't we still need to flush the ASID even if it's deallocated?
     for (i, (_,ptr)) in lru_active_states.iter().enumerate() {
         if let Some(old_state) = Weak::upgrade(ptr) {
             // It's still here
@@ -151,11 +152,6 @@ impl OwnedActiveID {
         self.0
     }
 }
-impl Into<ActivePageID> for OwnedActiveID {
-    fn into(self) -> ActivePageID {
-        self.get()
-    }
-}
 impl Into<ActivePageID> for &OwnedActiveID {
     fn into(self) -> ActivePageID {
         self.get()
@@ -173,7 +169,7 @@ pub fn next_free_active_id() -> OwnedActiveID {
     let mut v = FREE_ACTIVE_IDS.lock();
     let id = if v.is_empty() {
         let id = NEXT_CREATED_ACTIVE_ID.fetch_add(1,Ordering::Relaxed);
-        if id == 0 { drop(v); return next_free_active_id(); }  // if id == 0, then silently wrap above it instead of panicking
+        if id == 0 { drop(v); return next_free_active_id(); }  // if id == 0, then silently wrap above it instead of panicking (it's safe to re-use existing active IDs, though it does confer a performance hit from receiving unnecessary IPIs)
         OwnedActiveID(ActivePageID(NonZeroU16::new(id).unwrap()))
     } else {
         OwnedActiveID(v.pop().unwrap())
@@ -344,8 +340,8 @@ pub(super) enum RefreshTarget {
     ActiveID(ActivePageID),
     Globally,
 }
-/// [Either::Left] - Send to the given ID
-/// [Either::Right] - Send globally
+/// [RefreshTarget::ActiveID] - Send to the given ID
+/// [RefreshTarget::Globally] - Send globally
 pub(super) fn send_refresh_notification(refresh_target: RefreshTarget) {
     // Trigger refresh locally
     match refresh_target {

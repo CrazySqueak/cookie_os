@@ -188,4 +188,5 @@ pub mod contexts {
     def_context!(COREDRIVERS, ROOT);
       def_context!(COREDRIVERS_XAPIC, COREDRIVERS);
       def_context!(COREDRIVERS_VGA, COREDRIVERS);
+    def_context!(INTERRUPTS, ROOT);
 }

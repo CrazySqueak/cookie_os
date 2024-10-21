@@ -140,8 +140,8 @@ macro_rules! define_interrupts {
     }
 }
 define_interrupts! { init=fn init_idt_body;
-    handle_undefined=|vector,stack_frame|{
-        klog!(Warning, INTERRUPTS, "Got unexpected interrupt (no handler defined): V={:02x} stack_frame={:?}", vector, stack_frame)
+    handle_undefined=|vector,_stack_frame|{
+        klog!(Warning, INTERRUPTS, "Got unexpected interrupt (no handler defined): V={:02x}", vector)
     };
 
     interrupt(exception named general_protection_fault) fn gp_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> () {
@@ -165,9 +165,9 @@ define_interrupts! { init=fn init_idt_body;
         todo!() // crate::memory::paging::tlb::perform_pending_flushes
     }
 
-    interrupt(exception vector SPURIOUS_INTERRUPT_VECTOR) fn spurious_interrupt_handler(stack_frame: InterruptStackFrame) {
+    interrupt(exception vector SPURIOUS_INTERRUPT_VECTOR) fn spurious_interrupt_handler(_stack_frame: InterruptStackFrame) {
         // Do nothing. spurious interrupts are not our problem
-        klog!(Info, INTERRUPTS, "Got spurious interrupt: {:?}", stack_frame);
+        klog!(Info, INTERRUPTS, "Got spurious interrupt.");
     }
 }
 

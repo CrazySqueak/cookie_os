@@ -12,7 +12,7 @@ use crate::memory::paging as paging_root;
 use paging_root::*;
 use paging_root::impl_firstfit::MLFFAllocator;
 use crate::logging::klog;
-use crate::memory::paging::tlb::{ActivePageID, AddressSpaceID};
+use crate::memory::paging::tlb::{ActivePageID, AddressSpaceID, RefreshTarget};
 use crate::multitasking::cpulocal::CpuLocal;
 use crate::multitasking::disable_interruptions;
 
@@ -256,6 +256,10 @@ pub(in crate::memory::paging) fn reload_page_table(){
 /// Set the current active page ID
 pub(in crate::memory::paging) fn set_active_id(active_page_id: ActivePageID){
     // TODO
+}
+/// Send a "Refresh Pages" IPI to the given active ID
+pub(in crate::memory::paging) fn send_refresh_ipi(refresh_target: RefreshTarget) {
+    todo!()
 }
 
 /// Invalidate a set of pages in the local CPU's TLB.

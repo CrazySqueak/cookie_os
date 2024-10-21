@@ -346,16 +346,16 @@ pub(super) enum RefreshTarget {
 }
 /// [Either::Left] - Send to the given ID
 /// [Either::Right] - Send globally
-pub(super) fn send_refresh_notification(active_id: RefreshTarget) {
+pub(super) fn send_refresh_notification(refresh_target: RefreshTarget) {
     // Trigger refresh locally
-    match active_id {
+    match refresh_target {
         RefreshTarget::ActiveID(target_id) => if CURRENT_ACTIVE_STATE.lock().is_some_and(|(id,_)|id==target_id) {
                 perform_pending_flushes();
         },
         RefreshTarget::Globally => { perform_pending_flushes() },
     }
     // Send IPI to notify other processors of the change
-    // TODO: Send IPI
+    arch::send_refresh_ipi(refresh_target);
 }
 
 // FUNCTIONS FOR PERFORMING FLUSHES

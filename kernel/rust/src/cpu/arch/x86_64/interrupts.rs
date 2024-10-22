@@ -144,11 +144,14 @@ define_interrupts! { init=fn init_idt_body;
         klog!(Warning, INTERRUPTS, "Got unexpected interrupt (no handler defined): V={:02x}", vector)
     };
 
+    interrupt(exception named divide_error) fn zero_div_handler(stack_frame: InterruptStackFrame) {
+        panic!("Divide Error! {:?}", stack_frame)
+    }
     interrupt(exception named general_protection_fault) fn gp_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> () {
-        panic!("General Protection Fault!\n{:?}", stack_frame);
+        panic!("General Protection Fault! {:?}", stack_frame);
     }
     interrupt(exception named double_fault) fn double_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> ! {
-        panic!("Double Fault!\n{:?}", stack_frame);  // TODO: setup interrupt handler stacks
+        panic!("Double Fault! {:?}", stack_frame);  // TODO: setup interrupt handler stacks
     }
     interrupt(exception named page_fault) fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode){
         use x86_64::registers::control::Cr2;
@@ -156,6 +159,9 @@ define_interrupts! { init=fn init_idt_body;
 
         // Page faults are always an error at this point in time
         panic!("Page Fault! Frame={:?} Code={:?} Addr={:?}", stack_frame, error_code, accessed_addr);
+    }
+    interrupt(exception named x87_floating_point) fn fpu_error(stack_frame: InterruptStackFrame) {
+        panic!("FPU Error! {:?}", stack_frame)
     }
 
     interrupt(apic vector KERNEL_PANIC_VECTOR) fn kernel_panic_interrupt(_stack_frame: InterruptStackFrame){

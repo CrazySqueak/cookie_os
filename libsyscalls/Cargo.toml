@@ -9,4 +9,7 @@ handle = []
 # Facilities for invoking system calls (for use by applications)
 invoke = []
 
+# (whether to include the example definitions)
+examples = []
+
 [dependencies]

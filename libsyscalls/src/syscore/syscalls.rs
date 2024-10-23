@@ -1,4 +1,4 @@
-use crate::marshal::FFIMarshalled;
+use crate::syscore::marshal::FFIMarshalled;
 
 macro_rules! define_syscalls {
     (@resolve_rtype, $rtype:ty) => {$rtype};
@@ -14,7 +14,7 @@ macro_rules! define_syscalls {
         )+
     } => {
         // Syscall ID enum
-        $crate::marshal::ffi_enum! {
+        $crate::syscore::marshal::ffi_enum! {
             #[warn(non_camel_case_types, reason="Syscalls should have upper camel case names")]
             $tagvis extern($tagty) enum $tagname {
                 $(
@@ -53,12 +53,14 @@ macro_rules! define_syscalls {
         };
         // Assert that all parameter types are safe
         $(
-            $(const _:() = $crate::safety::assert_ffi_safe::<$argtype>();)*
-            $(const _:() = $crate::safety::assert_ffi_safe::<$rtype>();)?
+            $(const _:() = $crate::syscore::safety::assert_ffi_safe::<$argtype>();)*
+            $(const _:() = $crate::syscore::safety::assert_ffi_safe::<$rtype>();)?
         )+
     }
 }
+pub(crate) use define_syscalls;
 
+#[cfg(feature="examples")]
 define_syscalls! {
     tag = pub enum(u32) SyscallTag;
     handler_table = pub struct SyscallHandlerTable;
@@ -73,6 +75,7 @@ define_syscalls! {
     extern syscall(5) fn Test47(a:u32,b:FFIMarshalled<bool>) -> FFIMarshalled<core::ptr::NonNull<u32>>;
 }
 
+#[cfg(feature="examples")]
 pub fn x() -> u32 {
     NUM_SYSCALLS
 }

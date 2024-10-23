@@ -1,4 +1,4 @@
-use crate::safety::{SyscallFFISafe,SyscallFFIMarshallable};
+use crate::syscore::safety::{SyscallFFISafe, SyscallFFIMarshallable};
 
 // == ENUMS ==
 /// Define an enum that is Syscall FFI-compatible, with an automatic implementation of [SyscallFFIMarshallable].
@@ -26,7 +26,7 @@ macro_rules! ffi_enum {
             )+
         }
         #[automatically_derived]
-        impl $crate::safety::SyscallFFIMarshallable for $name {
+        impl $crate::syscore::safety::SyscallFFIMarshallable for $name {
             type As = $inttype;
             fn marshall(value: Self) -> Self::As {
                 value as $inttype
@@ -58,7 +58,7 @@ macro_rules! ffi_enum {
         mod $mname {
             #![allow(non_snake_case)]
             // Tags
-            $crate::marshal::ffi_enum! {
+            $crate::syscore::marshal::ffi_enum! {
                 pub extern($inttype) enum Tag {
                     $(
                         $vname = 
@@ -73,22 +73,22 @@ macro_rules! ffi_enum {
                 pub mod $vname {
                     $(
                         pub type Item = ();
-                        pub type ItemFFI = <Item as $crate::safety::SyscallFFIMarshallable>::As;
+                        pub type ItemFFI = <Item as $crate::syscore::safety::SyscallFFIMarshallable>::As;
                         
                         #[allow(dead_code)]
                         const _MARKER: $inttype = $empty_vtag;  // _marker is only here to ensure this path is only generated for empty members
                         // Used for deconstructing $vname later on (since it has no other unique variables to match on)
                         #[inline]
                         pub fn new_ffi(_x: $inttype) -> ItemFFI {
-                            $crate::safety::SyscallFFIMarshallable::marshall(())
+                            $crate::syscore::safety::SyscallFFIMarshallable::marshall(())
                         }
                     )?
                     $(
                         pub type Item = $tuple1_itype;
-                        pub type ItemFFI = <Item as $crate::safety::SyscallFFIMarshallable>::As;
+                        pub type ItemFFI = <Item as $crate::syscore::safety::SyscallFFIMarshallable>::As;
                     )?
                     $(
-                        $crate::marshal::ffi_struct! {
+                        $crate::syscore::marshal::ffi_struct! {
                             pub extern struct Item marshalled as ItemFFI {
                                 $(
                                     pub $struct_iname: $struct_itype,
@@ -104,15 +104,15 @@ macro_rules! ffi_enum {
             pub union Item {
                 $( pub $vname: ::core::mem::ManuallyDrop<$vname::ItemFFI> ),+
             }
-            unsafe impl $crate::safety::SyscallFFISafe for Item {}
+            unsafe impl $crate::syscore::safety::SyscallFFISafe for Item {}
             // Ensure all items are FFI-safe (you can never be too careful)
             const _: () = const { $(
-                $crate::safety::assert_ffi_safe::<$vname::ItemFFI>();
+                $crate::syscore::safety::assert_ffi_safe::<$vname::ItemFFI>();
             )+ };
             
             // Tag+Union format for FFI
             pub type FFIRaw = (Tag, Item);
-            pub type FFI = <FFIRaw as $crate::safety::SyscallFFIMarshallable>::As;
+            pub type FFI = <FFIRaw as $crate::syscore::safety::SyscallFFIMarshallable>::As;
             // And finally! Implement the actual enum itself
             $(#[$attrs])*
             pub enum Rust {
@@ -123,7 +123,7 @@ macro_rules! ffi_enum {
                     $( {$($struct_iname: $struct_itype),+} )?
                 ),+
             }
-            impl $crate::safety::SyscallFFIMarshallable for Rust {
+            impl $crate::syscore::safety::SyscallFFIMarshallable for Rust {
                 type As = FFI;
                 fn marshall(value: Self) -> Self::As {
                     let (tag,item) = match value {
@@ -142,7 +142,7 @@ macro_rules! ffi_enum {
                                 (item) => {(
                                     Tag::$vname,
                                     Item { $vname: core::mem::ManuallyDrop::new(
-                                        <$tuple1_itype as $crate::safety::SyscallFFIMarshallable>::marshall(item)
+                                        <$tuple1_itype as $crate::syscore::safety::SyscallFFIMarshallable>::marshall(item)
                                     )},
                                 )}
                             )?
@@ -150,23 +150,23 @@ macro_rules! ffi_enum {
                                 {$($struct_iname),+} => {(
                                     Tag::$vname,
                                     Item { $vname: core::mem::ManuallyDrop::new(
-                                        $crate::safety::SyscallFFIMarshallable::marshall($vname::Item { $($struct_iname),+ })
+                                        $crate::syscore::safety::SyscallFFIMarshallable::marshall($vname::Item { $($struct_iname),+ })
                                     )},
                                 )}
                             )?
                         ),+
                     };
-                    $crate::safety::SyscallFFIMarshallable::marshall((tag,item))
+                    $crate::syscore::safety::SyscallFFIMarshallable::marshall((tag,item))
                 }
                 fn demarshall(value: Self::As) -> Option<Self> {
-                    let (tag, item) = $crate::safety::SyscallFFIMarshallable::demarshall(value)?;
+                    let (tag, item) = $crate::syscore::safety::SyscallFFIMarshallable::demarshall(value)?;
                     match tag { $(
                         Tag::$vname => {
                             // Safety: We've checked that the tag is correct
                             // And ffi-safety mandates that any value may be correct for item (as it's FFISafe currently)
                             let item_ffi: $vname::ItemFFI = ::core::mem::ManuallyDrop::into_inner(unsafe { item.$vname });
                             // Then, we de-marshall it
-                            let _item: $vname::Item = $crate::safety::SyscallFFIMarshallable::demarshall(item_ffi)?;
+                            let _item: $vname::Item = $crate::syscore::safety::SyscallFFIMarshallable::demarshall(item_ffi)?;
                             // Now, we finally need to de-structure and re-structure everything into the equivalent Rust enum
                             $(
                                 // Empty variant
@@ -193,6 +193,7 @@ macro_rules! ffi_enum {
 }
 // Rust doesn't allow commenting macros, but we accept any of the three enum member syntaxes
 pub(crate) use ffi_enum;
+#[cfg(feature="examples")]
 ffi_enum! {
     #[allow(dead_code)]
     pub(crate) extern(u16) enum Example {
@@ -202,6 +203,7 @@ ffi_enum! {
         FourTwenty = 420,
     }
 }
+#[cfg(feature="examples")]
 ffi_enum! {
     #[allow(dead_code)]
     pub(crate) extern(u16) union(internals=mod exun) enum ExampleUnion {
@@ -223,41 +225,41 @@ macro_rules! ffi_struct {
     (@impl_ffi for $name:ident, $vis:vis, $(($($repr:ident),+))?, ; $($ivis:vis $iname:ident: $itype:ty),+) => {
         // SAFETY: As the struct is repr(C) and all items are robust, the struct itself can be considered robust
         #[automatically_derived]
-        unsafe impl $crate::safety::SyscallFFISafe for $name {}
+        unsafe impl $crate::syscore::safety::SyscallFFISafe for $name {}
         // Ensure all items are FFI-safe
         const _: () = const { $(
-            $crate::safety::assert_ffi_safe::<$itype>();
+            $crate::syscore::safety::assert_ffi_safe::<$itype>();
         )+ };
     };
     (@impl_ffi for $name:ident, $vis:vis, $(($($repr:ident),+))?, $mname:ident ; $($ivis:vis $iname:ident: $itype:ty),+) => {
         // Create Marshalled variant
-        $crate::marshal::ffi_struct! {
+        $crate::syscore::marshal::ffi_struct! {
             #[allow(dead_code)]
             $vis extern$(($($repr),+))? struct $mname {
-                $( $ivis $iname: <$itype as $crate::safety::SyscallFFIMarshallable>::As ),+
+                $( $ivis $iname: <$itype as $crate::syscore::safety::SyscallFFIMarshallable>::As ),+
             }
         }
         // Impl SyscallFFIMarshallable
         #[automatically_derived]
-        impl $crate::safety::SyscallFFIMarshallable for $name {
+        impl $crate::syscore::safety::SyscallFFIMarshallable for $name {
             type As = $mname;
             
             fn marshall(value: Self) -> Self::As {
                 $(
-                    let $iname = $crate::safety::SyscallFFIMarshallable::marshall(value.$iname);  // SyscallFFISafe also implement SyscallFFIMarshallable (even though it's a no-op)
+                    let $iname = $crate::syscore::safety::SyscallFFIMarshallable::marshall(value.$iname);  // SyscallFFISafe also implement SyscallFFIMarshallable (even though it's a no-op)
                 )+
                 $mname { $($iname:$iname),+ }
             }
             fn demarshall(value: Self::As) -> Option<Self> {
                 $(
-                    let $iname = $crate::safety::SyscallFFIMarshallable::demarshall(value.$iname)?;  // SyscallFFISafe also implement SyscallFFIMarshallable (even though it's a no-op)
+                    let $iname = $crate::syscore::safety::SyscallFFIMarshallable::demarshall(value.$iname)?;  // SyscallFFISafe also implement SyscallFFIMarshallable (even though it's a no-op)
                 )+
                 Some(Self { $($iname:$iname),+ })
             }
         }
         // Assert that all items may be marshalled
         const _: () = const { $(
-            $crate::safety::assert_ffi_marshallable::<$itype>();
+            $crate::syscore::safety::assert_ffi_marshallable::<$itype>();
         )+ };
     };
     
@@ -280,10 +282,11 @@ macro_rules! ffi_struct {
             )+
         }
         // Implement either safe or marshall
-        $crate::marshal::ffi_struct!(@impl_ffi for $name, $vis, $(($($repr),+))?, $($mname)? ; $($ivis $iname: $itype),+);
+        $crate::syscore::marshal::ffi_struct!(@impl_ffi for $name, $vis, $(($($repr),+))?, $($mname)? ; $($ivis $iname: $itype),+);
     };
 }
 pub(crate) use ffi_struct;
+#[cfg(feature="examples")]
 ffi_struct! {
     #[allow(dead_code)]
     pub(crate) extern struct A {
@@ -292,6 +295,7 @@ ffi_struct! {
         z: u16,
     }
 }
+#[cfg(feature="examples")]
 ffi_struct! {
     #[allow(dead_code)]
     pub(crate) extern(packed) struct B marshalled as BFFI {
@@ -309,26 +313,26 @@ macro_rules! impl_tuple_marshal {
         #[allow(dead_code)]
         #[allow(non_snake_case)]
         #[repr(C)]
-        pub struct $typename<$($tparam: $crate::safety::SyscallFFIMarshallable),+> {
+        pub struct $typename<$($tparam: $crate::syscore::safety::SyscallFFIMarshallable),+> {
             $($tparam: $tparam::As),+
         }
         // SAFETY: As $typename contains the marshalled version of each type (::As), which is required to be safe, this struct is safe as well
-        unsafe impl<$($tparam: $crate::safety::SyscallFFIMarshallable),+> $crate::safety::SyscallFFISafe for $typename<$($tparam),+> {}
+        unsafe impl<$($tparam: $crate::syscore::safety::SyscallFFIMarshallable),+> $crate::syscore::safety::SyscallFFISafe for $typename<$($tparam),+> {}
         
-        impl<$($tparam: $crate::safety::SyscallFFIMarshallable),+> $crate::safety::SyscallFFIMarshallable for ($($tparam,)+) {
+        impl<$($tparam: $crate::syscore::safety::SyscallFFIMarshallable),+> $crate::syscore::safety::SyscallFFIMarshallable for ($($tparam,)+) {
             type As = $typename<$($tparam),+>;
             fn marshall(value: Self) -> Self::As {
                 #[allow(non_snake_case)]
                 let ($($tparam,)+) = value;
                 $typename {$(
-                    $tparam: $crate::safety::SyscallFFIMarshallable::marshall($tparam),
+                    $tparam: $crate::syscore::safety::SyscallFFIMarshallable::marshall($tparam),
                 )+}
             }
             fn demarshall(value: Self::As) -> Option<Self> {
                 #[allow(non_snake_case)]
                 let $typename { $($tparam,)+ } = value;
                 Some(($(
-                    $crate::safety::SyscallFFIMarshallable::demarshall($tparam)?,
+                    $crate::syscore::safety::SyscallFFIMarshallable::demarshall($tparam)?,
                 )+))
             }
         }
@@ -348,9 +352,9 @@ impl_tuple_marshal!(FFI11Tuple, A, B, C, D, E, F, G, H, I, J, K);
 impl_tuple_marshal!(FFI12Tuple, A, B, C, D, E, F, G, H, I, J, K, L);
 
 const _: () = {
-    crate::safety::assert_ffi_marshallable::<(u32,u32)>();
-    crate::safety::assert_ffi_marshallable::<(u32,bool)>();
-    crate::safety::assert_ffi_marshallable::<(u32,(u32,u32,bool))>();
+    crate::syscore::safety::assert_ffi_marshallable::<(u32,u32)>();
+    crate::syscore::safety::assert_ffi_marshallable::<(u32,bool)>();
+    crate::syscore::safety::assert_ffi_marshallable::<(u32,(u32,u32,bool))>();
 };
 
 //  == UTIL TYPE ==

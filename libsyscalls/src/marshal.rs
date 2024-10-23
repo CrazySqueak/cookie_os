@@ -1,10 +1,11 @@
 use crate::safety::{SyscallFFISafe,SyscallFFIMarshallable};
 
 // == ENUMS ==
-/// Define an enum that is Syscall FFI-compatible, with an automatic implementation of SyscallFFIMarshallable.
+/// Define an enum that is Syscall FFI-compatible, with an automatic implementation of [SyscallFFIMarshallable].
 /// (for convenience this also derives Clone,Copy,Debug as these are all applicable to any int-backed C-style enum)
-/// Syntax: [pub] enum(<integer type>) <name> { [variants with explicit discriminants...] }
+/// Syntax: \[pub] enum(<integer type>) <name> { \[variants with explicit discriminants...] }
 macro_rules! ffi_enum {
+    // == C-STYLE ENUMS ==
     {
         $(#[$attrs:meta])*
         $vis:vis extern($inttype:ty) enum $name:ident {
@@ -38,7 +39,8 @@ macro_rules! ffi_enum {
             }
         }
     };
-    
+
+    // == RUST ENUMS ==
     {
         $(#[$attrs:meta])*
         $vis:vis extern($inttype:ty) union(internals=mod $mname:ident) enum $name:ident {

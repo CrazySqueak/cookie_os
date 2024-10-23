@@ -44,11 +44,11 @@ decl_ffi_safe!(u8,u16,u32,u64,u128,usize);
 decl_ffi_safe!(i8,i16,i32,i64,i128,isize);
 
 // Safety: These are safe to accept, as they cannot be dereferenced except in unsafe code (where one should check they are not dangling and are correctly aligned)
-unsafe impl<T> SyscallFFISafe for *const T where T: SyscallFFISafe{}
-unsafe impl<T> SyscallFFISafe for *mut T where T: SyscallFFISafe{}
+unsafe impl<T> SyscallFFISafe for *const T where T: SyscallFFISafe + Sized {}
+unsafe impl<T> SyscallFFISafe for *mut T where T: SyscallFFISafe + Sized {}
 // Same goes for optional pointers, thanks to null-pointer optimization
-unsafe impl<T> SyscallFFISafe for Option<core::ptr::NonNull<T>> where T: SyscallFFISafe{}
-impl<T> SyscallFFIMarshallable for core::ptr::NonNull<T> where T: SyscallFFISafe{
+unsafe impl<T> SyscallFFISafe for Option<core::ptr::NonNull<T>> where T: SyscallFFISafe + Sized {}
+impl<T> SyscallFFIMarshallable for core::ptr::NonNull<T> where T: SyscallFFISafe + Sized {
     type As = Option<core::ptr::NonNull<T>>;
     fn marshall(value: Self) -> Self::As { Some(value) }
     fn demarshall(value: Self::As) -> Option<Self> { value }

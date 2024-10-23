@@ -1,3 +1,4 @@
 #![no_std]
 
-pub mod syscore;
+mod syscore;
+pub mod cookie;

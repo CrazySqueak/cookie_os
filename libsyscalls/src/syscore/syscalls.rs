@@ -10,6 +10,7 @@ macro_rules! define_syscalls {
         handler_types = $hmvis:vis mod $hmname:ident;
         num_syscalls = $nsvis:vis const $nsname:ident;
         $(
+            $(#[doc=$doc:literal])*
             extern syscall($callid:literal) fn $callname:ident ($($argname:ident: $argtype:ty),*) $(-> $rtype:ty)?;
         )+
     } => {
@@ -18,6 +19,7 @@ macro_rules! define_syscalls {
             #[warn(non_camel_case_types, reason="Syscalls should have upper camel case names")]
             $tagvis extern($tagty) enum $tagname {
                 $(
+                    $(#[doc=$doc])*
                     $callname = $callid,
                 )+
             }
@@ -29,6 +31,7 @@ macro_rules! define_syscalls {
         #[repr(C)]
         $hvis struct $hname {
             $(
+                $(#[doc=$doc])*
                 $callname: Option<$hmname::$callname>,
             )+
         }
@@ -37,6 +40,7 @@ macro_rules! define_syscalls {
         $hmvis mod $hmname {
             use super::*;
             $(
+                $(#[doc=$doc])*
                 pub type $callname = extern "sysv64" fn($($argtype),*) $(-> $rtype)?;
             )+
         }

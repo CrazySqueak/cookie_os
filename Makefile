@@ -48,8 +48,20 @@ KERNEL_BIN := kernel/$(KBINNAME)
 $(KERNEL_BIN): FORCE libsyscalls
 	$(MAKE) -C kernel
 # libsyscalls - this uses cargo (and is imported using cargo) so we actually only run `cargo check` rather than producing any artifacts
+# This contains the syscall definitions
 libsyscalls: FORCE
 	export RUSTFLAGS="-Awarnings" && cd libsyscalls && cargo check --all-features $(CARGOFLAGS)
+# libsysinvoke - this generates the c dylib and header files
+# similar to NT, applications should be load-time dynamically-linked to the libsysinvoke wrapper
+# which handles using `syscall` or `int 0x80` or whatever, and silently includes vsyscalls as well
+LIBSYSINVOKE_SO := $(DISTROOT)/libsysinvoke.so
+LIBSYSINVOKE_SO_FROM := libsysinvoke/$(LIBSYSINVOKE_SO)
+libsysinvoke: $(LIBSYSINVOKE_SO)
+
+$(LIBSYSINVOKE_SO): $(LIBSYSINVOKE_SO_FROM)
+	cp -u $^ $@
+$(LIBSYSINVOKE_SO_FROM): FORCE
+	$(MAKE) -C libsysinvoke
 
 # QEMU config
 export QLOGSDIR := logs
@@ -118,6 +130,8 @@ clean:
 
 clean-all: clean
 	$(MAKE) -C kernel clean
+	cd libsyscalls && cargo clean
+	$(MAKE) -C libsysinvoke clean
 
 # build targets 
 iso-grub: $(GISONAME)
@@ -164,4 +178,4 @@ compile: $(KERNEL_BIN)
 # special targets
 FORCE:
 
-.PHONY: all clean clean-all iso-grub iso-limine run debug check compile check-qemu-var libsyscalls
+.PHONY: all clean clean-all iso-grub iso-limine run debug check compile check-qemu-var libsyscalls libsysinvoke

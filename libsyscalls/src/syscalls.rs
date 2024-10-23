@@ -13,6 +13,7 @@ define_syscalls! {
     tag = pub enum(u32) SyscallTag;
     handler_table = pub struct SyscallHandlerTable;
     handler_types = pub mod handlers;
+    invokers = pub mod invokers;
     num_syscalls = pub const NUM_SYSCALLS;
 
     /// Get the highest known syscall tags used by the kernel's version of the library.

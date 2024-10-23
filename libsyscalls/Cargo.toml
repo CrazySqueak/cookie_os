@@ -6,6 +6,8 @@ edition = "2021"
 [features]
 # Facilities for setting up system call handlers (used by the kernel)
 handle = []
+# Methods for invoking system calls (used by applications/libsysinvoke)
+invokers = []
 # (whether to include the example definitions)
 examples = []
 

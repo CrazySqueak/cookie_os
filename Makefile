@@ -48,12 +48,13 @@ KERNEL_BIN := kernel/$(KBINNAME)
 $(KERNEL_BIN): FORCE libsyscalls
 	$(MAKE) -C kernel
 # libsyscalls - this uses cargo (and is imported using cargo) so we actually only run `cargo check` rather than producing any artifacts
-# This contains the syscall definitions
+# This contains the syscall definitions, and methods for directly interacting with syscalls
 libsyscalls: FORCE
 	export RUSTFLAGS="-Awarnings" && cd libsyscalls && cargo check --all-features $(CARGOFLAGS)
 # libsysinvoke - this generates the c dylib and header files
-# similar to NT, applications should be load-time dynamically-linked to the libsysinvoke wrapper
+# similar to NT, applications should be dynamically-linked to the libsysinvoke wrapper
 # which handles using `syscall` or `int 0x80` or whatever, and silently includes vsyscalls as well
+# In other words, it's a dll-compatible wrapper for libsyscalls, that includes a lot of utilites and such as well (such as vsyscalls).
 LIBSYSINVOKE_SO := $(DISTROOT)/libsysinvoke.so
 LIBSYSINVOKE_SO_FROM := libsysinvoke/$(LIBSYSINVOKE_SO)
 libsysinvoke: $(LIBSYSINVOKE_SO)

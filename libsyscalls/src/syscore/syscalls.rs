@@ -8,6 +8,7 @@ macro_rules! define_syscalls {
         tag = $tagvis:vis enum($tagty:ty) $tagname:ident;
         handler_table = $hvis:vis struct $hname:ident;
         handler_types = $hmvis:vis mod $hmname:ident;
+        invokers = $ivis:vis mod $iname:ident;
         num_syscalls = $nsvis:vis const $nsname:ident;
         $(
             $(#[doc=$doc:literal])*
@@ -44,6 +45,34 @@ macro_rules! define_syscalls {
                 pub type $callname = extern "sysv64" fn($($argtype),*) $(-> $rtype)?;
             )+
         }
+
+        // Syscall invoker utilites
+        #[cfg(feature="invokers")]
+        $ivis mod $iname {
+            use super::*;
+            $(
+                $(#[doc=$doc])*
+                #[allow(non_snake_case)]
+                pub fn $callname($($argname:$argtype),*) $(-> $rtype)? {
+                    todo!()
+                }
+            )+
+            pub mod automarshall {
+                use super::*;
+                $(
+                    $(#[doc=$doc])*
+                    #[allow(non_snake_case)]
+                    #[allow(non_camel_case_types)]
+                    pub fn $callname
+                    <$($argname),*>($($argname:$argname),*) $(-> $rtype)?
+                    where $($argname: ::core::convert::Into<$argtype>),*
+                    {
+                        $(let $argname: $argtype = $argname.into();)*
+                        super::$callname($($argname),*)
+                    }
+                )+
+            }
+        }
         
         // Assert that all syscall numbers are continuous and in order. (this is necessary to allow the handler table to be used as a lookup table using the syscall ID as an index)
         // Fun side-effect: The value of i after this has run is the total number of syscalls! Might as well use it (was probably going to need it eventually).
@@ -69,6 +98,7 @@ define_syscalls! {
     tag = pub enum(u32) SyscallTag;
     handler_table = pub struct SyscallHandlerTable;
     handler_types = pub mod handlers;
+    invokers = pub mod invokers;
     num_syscalls = pub const NUM_SYSCALLS;
     
     extern syscall(0x00) fn Test0(x:u32, y:u64);
@@ -82,4 +112,9 @@ define_syscalls! {
 #[cfg(feature="examples")]
 pub fn x() -> u32 {
     NUM_SYSCALLS
+}
+
+#[cfg(feature="examples")]
+pub fn y() {
+    invokers::automarshall::Test47(69u32, true);
 }

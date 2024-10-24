@@ -1,17 +1,17 @@
 pub struct RegisterSet {
     /// In: Tag of the syscall to execute.
     /// Out: Error code on failure, or zero on success.
-    eax: u32,
+    pub eax: u32,
 
     // In: First four parameters
     // Out: Inline return value (up to 256bits)
     //      (rdi = first 8 bytes, rsi = second 8 bytes, rdx = third 8 bytes, rcx = final 8 bytes)
-    rdi: u64, rsi: u64,
-    rdx: u64, rcx: u64,
+    pub rdi: u64, pub rsi: u64,
+    pub rdx: u64, pub rcx: u64,
     /// Extra parameters are put into a struct, with the struct pointer placed in r8.
-    r8: *mut (),
+    pub r8: *mut u8,
     /// Return value pointer, required if the return value is >256bits in size.
-    r9: *mut (),
+    pub r9: *mut u8,
 }
 
 pub unsafe fn invoke(reg: &mut RegisterSet){
@@ -29,3 +29,9 @@ pub unsafe fn invoke(reg: &mut RegisterSet){
         out("r10") _, out("r11") _,
     )
 }
+
+// N.B. The callee will have to manually unpack the registers into a single RegisterSet
+//      in the interrupt/STAR handler using raw ASM, as rust cannot guarantee that it will not
+//      overwrite any registers before that point.
+
+// TODO: Packing/unpacking impls

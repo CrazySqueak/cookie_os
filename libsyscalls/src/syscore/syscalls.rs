@@ -1,16 +1,17 @@
 use crate::syscore::marshal::FFIMarshalled;
 
-macro_rules! define_syscalls {
+/// Define the syscall interface.
+///
+/// The syscall interface defines the names and tag numbers of the syscalls,
+/// as well as their "theoretical" argument and return types.
+macro_rules! define_syscall_interface {
     (@resolve_rtype, $rtype:ty) => {$rtype};
     (@resolve_rtype) => {()};
     
     {
         tag = $tagvis:vis enum($tagty:ty) $tagname:ident;
-        handler_table = $hvis:vis struct $hname:ident;
-        handler_types = $hmvis:vis mod $hmname:ident;
-        invokers = $ivis:vis mod $iname:ident;
+        interfacedefs = $(#[$scdmeta:meta])* $scdvis:vis macro $scdname:ident;
         num_syscalls = $nsvis:vis const $nsname:ident;
-        //use $abip:path as abi;
         $(
             $(#[doc=$doc:literal])*
             extern syscall($callid:literal) fn $callname:ident ($($argname:ident: $argtype:ty),*) $(-> $rtype:ty)?;
@@ -26,55 +27,12 @@ macro_rules! define_syscalls {
                 )+
             }
         }
-        
-        // Syscall handler table
-        #[cfg(feature="handle")]
-        #[allow(non_snake_case)]
-        #[repr(C)]
-        $hvis struct $hname {
-            $(
-                $(#[doc=$doc])*
-                $callname: Option<$hmname::$callname>,
-            )+
-        }
-        // Syscall function pointers
-        #[cfg(feature="handle")]
-        $hmvis mod $hmname {
-            use super::*;
-            $(
-                $(#[doc=$doc])*
-                pub type $callname = extern "sysv64" fn($($argtype),*) $(-> $rtype)?;
-            )+
-        }
 
-        // Syscall invoker utilites
-        #[cfg(feature="invokers")]
-        $ivis mod $iname {
-            use super::*;
-            //use $abip as __abi;
-            $(
-                $(#[doc=$doc])*
-                #[allow(non_snake_case)]
-                pub fn $callname($($argname:$argtype),*) -> Result<$crate::syscore::syscalls::define_syscalls!(@resolve_rtype $(,$rtype)?),u32> {unsafe{
-                    todo!()
-                }}
-            )+
-            pub mod automarshall {
-                use super::*;
-                $(
-                    $(#[doc=$doc])*
-                    #[allow(non_snake_case)]
-                    #[allow(non_camel_case_types)]
-                    pub fn $callname
-                    <$($argname),*>($($argname:$argname),*) -> Result<$crate::syscore::syscalls::define_syscalls!(@resolve_rtype $(,$rtype)?),u32>
-                    where $($argname: ::core::convert::Into<$argtype>),*
-                    {
-                        $(let $argname: $argtype = $argname.into();)*
-                        super::$callname($($argname),*)
-                    }
-                )+
-            }
+        $(#[$scdmeta:meta])*
+        macro_rules! $scdname {
+            ()=>{} // TODO
         }
+        $scdvis use $scdname;
         
         // Assert that all syscall numbers are continuous and in order. (this is necessary to allow the handler table to be used as a lookup table using the syscall ID as an index)
         // Fun side-effect: The value of i after this has run is the total number of syscalls! Might as well use it (was probably going to need it eventually).
@@ -93,14 +51,62 @@ macro_rules! define_syscalls {
         )+
     }
 }
-pub(crate) use define_syscalls;
+pub(crate) use define_syscall_interface;
+
+/// Define the syscall ABI.
+macro_rules! define_syscall_abi {
+    {
+        for interface $iface:path;
+        as $mvis:vis mod $mname:ident;
+        in {
+            tag -> $tagreg:ident;
+            // $($(#[$mreg_meta:meta])* $mreg_name:ident: $mreg_type:ty,)+
+            // $(,)?
+        }
+        out{
+            errcode -> $errreg:ident;
+            // $($(#[$rreg_meta:meta])* $rreg_name:ident: $rreg_type:ty,)*
+            // $(,)?
+        }
+
+        $($callname:ident {
+            args = ( $($caname:ident: $catype:ty),* ) -> ( $($crgname:ident: $crgtype:ty),* );
+
+            args->reg $a2rg_body:block
+            args<-reg $rg2a_body:block
+
+            //return = ( $(rvname:ident: $rvtype:ty),* ) -> ( $($rrgname:ident: $rrgtype:ty),* );
+        })+
+    } => {
+        $mvis mod $mname {
+            #[allow(unused_imports)]
+            use super::*;
+
+            $(#[allow(non_snake_case)] pub mod $callname {
+                #[allow(unused_imports)]
+                use super::*;
+
+                pub fn args2reg($($caname:$catype),*) -> ($($crgtype),*) {
+                    // TODO: Figure out how to ensure this gets inlined (and ensures lifetimes last long enough for invoke())
+                    $(let $crgname: $crgtype;)*
+                    $a2rg_body
+                    ($($crgname),*)
+                }
+                pub fn reg2args($($crgname:$crgtype),*) -> ($($catype),*) {
+                    $(let $caname: $catype;)*
+                    $rg2a_body
+                    ($($caname),*)
+                }
+            })+
+        }
+    };
+}
+pub(crate) use define_syscall_abi;
 
 #[cfg(feature="examples")]
-define_syscalls! {
+define_syscall_interface! {
     tag = pub enum(u32) SyscallTag;
-    handler_table = pub struct SyscallHandlerTable;
-    handler_types = pub mod handlers;
-    invokers = pub mod invokers;
+    interfacedefs = pub(crate) macro example_sc_defs;
     num_syscalls = pub const NUM_SYSCALLS;
     
     extern syscall(0x00) fn Test0(x:u32, y:u64);
@@ -110,13 +116,42 @@ define_syscalls! {
     extern syscall(4) fn DoesLiterallyNothing();
     extern syscall(5) fn Test47(a:u32,b:FFIMarshalled<bool>) -> FFIMarshalled<core::ptr::NonNull<u32>>;
 }
+#[cfg(all(feature="examples",target_arch="x86_64"))]
+define_syscall_abi! {
+    for interface example_sc_defs;
+    as pub mod example_x86_64;
+    in {
+        tag -> eax;
+        // // Main registers
+        // rdi: u64, rsi: u64, rdx: u64, rcx: u64,
+        // /// The "extra parameters" register.
+        // r8: u64,
+    }
+    out {
+        errcode -> eax;
+        // // Main return registers
+        // rdi: u64, rsi: u64, rdx: u64, rcx: u64,
+    }
+
+    Test0 {
+        args = (x: u32, y: u64) -> (edi: u32, rsi: u64);
+        args->reg {
+            edi = x; rsi = y;
+        }
+        args<-reg {
+            x = edi; y = rsi;
+        }
+
+        //return = () -> ();
+    }
+}
 
 #[cfg(feature="examples")]
 pub fn x() -> u32 {
     NUM_SYSCALLS
 }
 
-#[cfg(feature="examples")]
-pub fn y() {
-    invokers::automarshall::Test47(69u32, true);
-}
+//#[cfg(feature="examples")]
+//pub fn y() {
+//    invokers::automarshall::Test47(69u32, true);
+//}

@@ -10,6 +10,7 @@ macro_rules! define_syscalls {
         handler_types = $hmvis:vis mod $hmname:ident;
         invokers = $ivis:vis mod $iname:ident;
         num_syscalls = $nsvis:vis const $nsname:ident;
+        //use $abip:path as abi;
         $(
             $(#[doc=$doc:literal])*
             extern syscall($callid:literal) fn $callname:ident ($($argname:ident: $argtype:ty),*) $(-> $rtype:ty)?;
@@ -50,6 +51,7 @@ macro_rules! define_syscalls {
         #[cfg(feature="invokers")]
         $ivis mod $iname {
             use super::*;
+            //use $abip as __abi;
             $(
                 $(#[doc=$doc])*
                 #[allow(non_snake_case)]

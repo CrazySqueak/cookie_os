@@ -3,6 +3,8 @@ use crate::syscore::marshal::FFIMarshalled;
 macro_rules! define_syscalls {
     (@resolve_rtype, $rtype:ty) => {$rtype};
     (@resolve_rtype) => {()};
+    (@unpack_rtype, $rtype:ty, $regs:ident) => {$crate::abi::unpack_return_value($regs)};
+    (@unpack_rtype, $regs:ident) => {$crate::abi::unpack_zst_return_value($regs)};
     
     {
         tag = $tagvis:vis enum($tagty:ty) $tagname:ident;
@@ -55,9 +57,13 @@ macro_rules! define_syscalls {
             $(
                 $(#[doc=$doc])*
                 #[allow(non_snake_case)]
-                pub fn $callname($($argname:$argtype),*) $(-> $rtype)? {
-                    todo!()
-                }
+                pub fn $callname($($argname:$argtype),*) -> Result<$crate::syscore::syscalls::define_syscalls!(@resolve_rtype $(,$rtype)?),u32> {unsafe{
+                    let mut regs = $crate::abi::pack_argument_values!($($argname:$argtype),*);
+                    $crate::abi::pack_tag_and_alloc_rval!(regs <- $callid $(, rval: $rtype)?);
+                    $crate::abi::invoke(&mut regs);
+                    // Unpack return value
+                    $crate::syscore::syscalls::define_syscalls!(@unpack_rtype $(,$rtype)?, regs)
+                }}
             )+
             pub mod automarshall {
                 use super::*;
@@ -66,7 +72,7 @@ macro_rules! define_syscalls {
                     #[allow(non_snake_case)]
                     #[allow(non_camel_case_types)]
                     pub fn $callname
-                    <$($argname),*>($($argname:$argname),*) $(-> $rtype)?
+                    <$($argname),*>($($argname:$argname),*) -> Result<$crate::syscore::syscalls::define_syscalls!(@resolve_rtype $(,$rtype)?),u32>
                     where $($argname: ::core::convert::Into<$argtype>),*
                     {
                         $(let $argname: $argtype = $argname.into();)*

@@ -49,10 +49,9 @@ macro_rules! declare_syscall_tag {
                     $($callname: $htmod::$callname),+
                 }
             };
-            //$( (@add_doc, $callname, $itm:item) => {
-            //     $(#[doc=$doc])*
-            //     $itm
-            // };)+
+            $((@get_tag $callname -> const $cname:ident) => {
+                const $cname: $tagty = $calltag;
+            };)+
         }
         $rmvis use $rmname;
 
@@ -91,33 +90,44 @@ macro_rules! declare_syscall_abi {
         callconv = $callconv:literal;
         iface_def = $ifdmacro:path;
 
+        syscall_fn_types = $htmvis:vis mod $htmname:ident;
+        $(#[doc=$htdoc:literal])*
+        handler_table = $htvis:vis struct $htname:ident;
+        $(#[doc=$indoc:literal])*
+        invokers = $invis:vis mod $inname:ident;
+
         abi {
-            syscall_fn_types = $htmvis:vis mod $htmname:ident;
             $(
                 $(#[doc=$fn_abi_doc:literal])*
                 syscall fn $callname:ident($($regtype:ty),*) $(-> $rty:ty)?;
             )+
         }
-        $(handlers {
-            $(#[doc=$htdoc:literal])*
-            handler_table = $htvis:vis struct $htname:ident;
 
-            $(
-                impl $imhcallname:ident($($hregname:ident : $hregty:ty),*) $imhbody:block
-            )+
-        })?
+        invoke($itname:ident) $invoker:block
     } => {
-            $htmvis mod $htmname {
-                $(
-                    $(#[doc=$fn_abi_doc])*
-                    pub type $callname = extern $callconv fn($($regtype),*) $(-> $rty)?;
-                )+
-            }
-
+        $htmvis mod $htmname {
             $(
-                // TODO $(#[doc=$htdoc])*
-                $ifdmacro!(@build_handler_table, $htvis $htname, $htmname);
-            )?
+                $(#[doc=$fn_abi_doc])*
+                pub type $callname = extern $callconv fn($($regtype),*) $(-> $rty)?;
+            )+
+        }
+
+        // TODO $(#[doc=$htdoc])*
+        #[cfg(feature="handle")]
+        $ifdmacro!(@build_handler_table, $htvis $htname, $htmname);
+
+        #[cfg(feature="invokers")]
+        $invis mod $inname {
+            $(
+                $(#[doc=$fn_abi_doc])*
+                #[allow(non_snake_case)]
+                #[naked]
+                pub extern $callconv fn $callname($(_:$regtype),*) $(-> $rty)? {
+                    $ifdmacro!(@get_tag $callname -> const $itname);
+                    $invoker
+                }
+            )+
+        }
     };
 }
 pub(crate) use declare_syscall_abi;
@@ -125,27 +135,25 @@ pub(crate) use declare_syscall_abi;
 #[cfg(all(feature = "examples", target_arch = "x86_64"))]
 declare_syscall_abi! {
     /// Arguments are passed in: rdi, rsi, rdx, rcx, r8, and r9
-    /// Additional scratch registers: rax, r10, r11
+    /// Additional scratch registers: rax (tag / return value), r10, r11
     callconv = "sysv64";
     iface_def = example_iface;
 
-    abi {
-        syscall_fn_types = pub mod example_handler_types;
+    syscall_fn_types = pub mod example_handler_types;
+    handler_table = pub struct ExampleHandlerTable;
+    invokers = pub mod example_invokers;
 
+    abi {
         syscall fn Test0(u64, u64);
         syscall fn Test1();
         /// Test2 - X and Y are packed into a single u64.
         syscall fn Test2(u64, u8) -> u32;
     }
-    handlers {
-        handler_table = pub struct ExampleHandlerTable;
-
-        impl Test2(rdi: u64, esi: u8) {
-            let lhs = rdi >> 32 as u32;
-            let rhs = rdi as u32;
-            if lhs > rhs { return lhs; }
-            return rhs;
-        }
-    }
+    invoke(TAG){unsafe{
+        // Load the tag value into eax, then perform a syscall
+        // Since the invoker function is naked, we can patch this in
+        // maybe?
+        core::arch::asm!("mov {tag}, eax", "syscall", tag = const TAG, options(noreturn))
+    }}
 }
 

@@ -75,7 +75,9 @@ macro_rules! define_syscall_abi {
             args->reg $a2rg_body:block
             args<-reg $rg2a_body:block
 
-            //return = ( $(rvname:ident: $rvtype:ty),* ) -> ( $($rrgname:ident: $rrgtype:ty),* );
+            return = ($($rvname:ident: $rvtype:ty)?) -> ( $($rrgname:ident: $rrgtype:ty),* );
+            return->reg $r2rg_body:block
+            return<-reg $rg2r_body:block
         })+
     } => {
         $mvis mod $mname {
@@ -86,17 +88,40 @@ macro_rules! define_syscall_abi {
                 #[allow(unused_imports)]
                 use super::*;
 
-                pub fn args2reg($($caname:$catype),*) -> ($($crgtype),*) {
-                    // TODO: Figure out how to ensure this gets inlined (and ensures lifetimes last long enough for invoke())
+                #[cfg(feature="invokers")]
+                pub fn invoke($($caname:$catype),*) -> Result<($($rvtype)?),u32> {
+                    // args -> registers
                     $(let $crgname: $crgtype;)*
                     $a2rg_body
-                    ($($crgname),*)
+
+                    // TODO: pack registers
+                    todo!(); // TODO: invoke
+                    let ($($rrgname),*): ($($rrgtype),*) = todo!();  // TODO: unpack registers
+
+                    // registers -> return values
+                    $(let $rvname: $rvtype;)?
+                    $rg2r_body
+                    Ok(($($rvname)?))
                 }
-                pub fn reg2args($($crgname:$crgtype),*) -> ($($catype),*) {
+                #[cfg(feature="handle")]
+                pub fn handle_invoke($($crgname:$crgtype),*) -> Result<($($rrgtype),*),u32> {
+                    // registers -> args
                     $(let $caname: $catype;)*
                     $rg2a_body
-                    ($($caname),*)
+
+                    // TODO: call handler
+                    let ($($rvname)?): ($($rvtype)?) = todo!();
+
+                    // return values -> registers
+                    $(let $rrgname: $rrgtype;)*
+                    $r2rg_body
+                    Ok(($($rrgname),*))
                 }
+                // pub fn reg2args($($crgname:$crgtype),*) -> ($($catype),*) {
+                //     $(let $caname: $catype;)*
+                //     $rg2a_body
+                //     ($($caname),*)
+                // }
             })+
         }
     };
@@ -142,7 +167,26 @@ define_syscall_abi! {
             x = edi; y = rsi;
         }
 
-        //return = () -> ();
+        return = () -> ();
+        return->reg{}
+        return<-reg{}
+    }
+    BleegleTheBlarp {
+        args = (z: u32, a: u32) -> (edi: u32, esi: u32);
+        args->reg {
+            edi = z; esi = a;
+        }
+        args<-reg {
+            z = edi; a = esi;
+        }
+
+        return = (rval: u64) -> (rdi: u64);
+        return->reg{
+            rdi = rval
+        }
+        return<-reg{
+            rval = rdi
+        }
     }
 }
 

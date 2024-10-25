@@ -3,11 +3,11 @@
 ///
 /// This does not declare the actual ABI used, but instead provides a high-level overview
 /// of the system calls, separate from their (platform-specific) implementation.
-macro_rules! declare_syscall_tag {
+macro_rules! declare_syscalls {
     {
         tag = $tagvis:vis enum($tagty:ty) $tagname:ident;
         num_syscalls = $nsvis:vis const $nsname:ident;
-        iface_def_macro = $rmvis:vis macro $rmname:ident;
+        handler_table = $htvis:vis struct $htname:ident;
 
         $(
             $(#[doc=$doc:literal])*
@@ -20,6 +20,7 @@ macro_rules! declare_syscall_tag {
         $tagvis enum $tagname {
             $(
                 $(#[doc=$doc])*
+                #[warn(non_camel_case_types, reason="Syscalls should have upper camel case names")]
                 $callname = $calltag,
             )+
         }
@@ -40,20 +41,55 @@ macro_rules! declare_syscall_tag {
             }
         }
 
-        // A macro to allow inspection of the interface
-        macro_rules! $rmname {
-            (@build_handler_table, $htvis:vis $htname:ident, $htmod:ident) => {
-                #[repr(C)]
-                #[allow(non_snake_case)]
-                $htvis struct $htname {
-                    $($callname: $htmod::$callname),+
-                }
-            };
-            $((@get_tag $callname -> const $cname:ident) => {
-                const $cname: $tagty = $calltag;
-            };)+
+        // Handler table
+        // N.B. table[tag] should = the handler
+        #[repr(C)]
+        #[allow(non_snake_case)]
+        $htvis struct $htname<RegisterSet,ErrorCode,HandlerType>
+          where HandlerType: Fn(RegisterSet)->Result<RegisterSet,ErrorCode>
+        {
+            $(
+                $(#[doc=$doc])*
+                $callname: Option<HandlerType>,
+            )+
+            __phantom: ::core::marker::PhantomData<(RegisterSet,ErrorCode)>,
         }
-        $rmvis use $rmname;
+        impl<RegisterSet,ErrorCode,HandlerType> $htname<RegisterSet,ErrorCode,HandlerType>
+          where HandlerType: Fn(RegisterSet)->Result<RegisterSet,ErrorCode> {
+            const _CHECK_1:() = {assert!(size_of::<Option<HandlerType>>() == size_of::<Option<fn()>>())};
+            const _CHECK_2:() = {assert!(size_of::<Self>() == size_of::<[Option<fn()>;$nsname as usize]>())};
+            // const _CHECK_3:() = unsafe{assert!(core::mem::transmute::<usize,Option<HandlerType>>(0).is_none())};
+        }
+        impl<RegisterSet,ErrorCode,HandlerType> core::ops::Index<$tagname> for $htname<RegisterSet,ErrorCode,HandlerType>
+          where HandlerType: Fn(RegisterSet)->Result<RegisterSet,ErrorCode> {
+            type Output = Option<HandlerType>;
+            fn index(&self, index: $tagname) -> &Self::Output {
+                // Safety: We are repr(C), the same size as a [Option<fn()>;num_syscalls],
+                // and each handler pointer is the same size as a Option<fn()>
+                // Thus, our layout is guaranteed
+                unsafe {
+                    let self_arr: &[Option<fn()>;$nsname as usize] = core::mem::transmute(self);
+                    let index: $tagty = index.into();
+                    let index = index as usize;
+                    let handler_raw = &self_arr[index];
+                    let handler: &Option<HandlerType> = core::mem::transmute(handler_raw);
+                    handler
+                }
+            }
+        }
+        impl<RegisterSet,ErrorCode,HandlerType> core::ops::IndexMut<$tagname> for $htname<RegisterSet,ErrorCode,HandlerType>
+          where HandlerType: Fn(RegisterSet)->Result<RegisterSet,ErrorCode> {
+            fn index_mut(&mut self, index: $tagname) -> &mut Self::Output {
+                unsafe {
+                    let self_arr: &mut [Option<fn()>;$nsname as usize] = core::mem::transmute(self);
+                    let index: $tagty = index.into();
+                    let index = index as usize;
+                    let handler_raw = &mut self_arr[index];
+                    let handler: &mut Option<HandlerType> = core::mem::transmute(handler_raw);
+                    handler
+                }
+            }
+        }
 
         // Assert that all syscall numbers are continuous and in order. (this is necessary to allow the handler table to be used as a lookup table using the syscall ID as an index)
         // Fun side-effect: The value of i after this has run is the total number of syscalls! Might as well use it (was probably going to need it eventually).
@@ -67,13 +103,13 @@ macro_rules! declare_syscall_tag {
         };
     };
 }
-pub(crate) use declare_syscall_tag;
+pub(crate) use declare_syscalls;
 
 #[cfg(feature = "examples")]
-declare_syscall_tag! {
+declare_syscalls! {
     tag = pub enum(u32) ExampleSyscall;
     num_syscalls = pub const NUM_EXAMPLE_SYSCALLS;
-    iface_def_macro = pub(crate) macro example_iface;
+    handler_table = pub struct ExampleHandlerTable;
 
     /// Test0
     extern syscall(0x00) fn Test0(x, y);
@@ -81,79 +117,5 @@ declare_syscall_tag! {
     extern syscall(0x01) fn Test1() -> abc;
     /// Test2
     extern syscall(0x02) fn Test2((x,y), z) -> x_or_y;
-}
-
-/// Declare the ABI for system calls, including creating a "handler table" to hold them.
-macro_rules! declare_syscall_abi {
-    {
-        $(#[doc=$ccdoc:literal])*
-        callconv = $callconv:literal;
-        iface_def = $ifdmacro:path;
-
-        syscall_fn_types = $htmvis:vis mod $htmname:ident;
-        $(#[doc=$htdoc:literal])*
-        handler_table = $htvis:vis struct $htname:ident;
-        $(#[doc=$indoc:literal])*
-        invokers = $invis:vis mod $inname:ident;
-
-        abi {
-            $(
-                $(#[doc=$fn_abi_doc:literal])*
-                syscall fn $callname:ident($($regtype:ty),*) $(-> $rty:ty)?;
-            )+
-        }
-
-        invoke($itname:ident) $invoker:block
-    } => {
-        $htmvis mod $htmname {
-            $(
-                $(#[doc=$fn_abi_doc])*
-                pub type $callname = extern $callconv fn($($regtype),*) $(-> $rty)?;
-            )+
-        }
-
-        // TODO $(#[doc=$htdoc])*
-        #[cfg(feature="handle")]
-        $ifdmacro!(@build_handler_table, $htvis $htname, $htmname);
-
-        #[cfg(feature="invokers")]
-        $invis mod $inname {
-            $(
-                $(#[doc=$fn_abi_doc])*
-                #[allow(non_snake_case)]
-                #[naked]
-                pub extern $callconv fn $callname($(_:$regtype),*) $(-> $rty)? {
-                    $ifdmacro!(@get_tag $callname -> const $itname);
-                    $invoker
-                }
-            )+
-        }
-    };
-}
-pub(crate) use declare_syscall_abi;
-
-#[cfg(all(feature = "examples", target_arch = "x86_64"))]
-declare_syscall_abi! {
-    /// Arguments are passed in: rdi, rsi, rdx, rcx, r8, and r9
-    /// Additional scratch registers: rax (tag / return value), r10, r11
-    callconv = "sysv64";
-    iface_def = example_iface;
-
-    syscall_fn_types = pub mod example_handler_types;
-    handler_table = pub struct ExampleHandlerTable;
-    invokers = pub mod example_invokers;
-
-    abi {
-        syscall fn Test0(u64, u64);
-        syscall fn Test1();
-        /// Test2 - X and Y are packed into a single u64.
-        syscall fn Test2(u64, u8) -> u32;
-    }
-    invoke(TAG){unsafe{
-        // Load the tag value into eax, then perform a syscall
-        // Since the invoker function is naked, we can patch this in
-        // maybe?
-        core::arch::asm!("mov {tag}, eax", "syscall", tag = const TAG, options(noreturn))
-    }}
 }
 

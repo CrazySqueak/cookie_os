@@ -41,52 +41,31 @@ macro_rules! declare_syscalls {
             }
         }
 
-        // Handler table
-        // N.B. table[tag] should = the handler
-        #[repr(C)]
+        /// Handler table
+        /// This is dispatched from a rust stub which handles the Result<> and register interactions,
+        ///  therefore we don't need any fancy "extern" or unsafe layout-manip business.
+        /// If a given handler is `None`, then ErrUnsupported should be returned to the calling application.
         #[allow(non_snake_case)]
-        $htvis struct $htname<RegisterSet,ErrorCode,HandlerType>
-          where HandlerType: Fn(RegisterSet)->Result<RegisterSet,ErrorCode>
-        {
+        #[derive(Default)]
+        #[cfg(feature = "handle")]
+        $htvis struct $htname<RegisterSet,ErrorCode> {
             $(
                 $(#[doc=$doc])*
-                $callname: Option<HandlerType>,
+                $callname: Option<fn(RegisterSet)->Result<RegisterSet,ErrorCode>>,
             )+
-            __phantom: ::core::marker::PhantomData<(RegisterSet,ErrorCode)>,
         }
-        impl<RegisterSet,ErrorCode,HandlerType> $htname<RegisterSet,ErrorCode,HandlerType>
-          where HandlerType: Fn(RegisterSet)->Result<RegisterSet,ErrorCode> {
-            const _CHECK_1:() = {assert!(size_of::<Option<HandlerType>>() == size_of::<Option<fn()>>())};
-            const _CHECK_2:() = {assert!(size_of::<Self>() == size_of::<[Option<fn()>;$nsname as usize]>())};
-            // const _CHECK_3:() = unsafe{assert!(core::mem::transmute::<usize,Option<HandlerType>>(0).is_none())};
-        }
-        impl<RegisterSet,ErrorCode,HandlerType> core::ops::Index<$tagname> for $htname<RegisterSet,ErrorCode,HandlerType>
-          where HandlerType: Fn(RegisterSet)->Result<RegisterSet,ErrorCode> {
-            type Output = Option<HandlerType>;
+        impl<RegisterSet,ErrorCode> core::ops::Index<$tagname> for $htname<RegisterSet,ErrorCode> {
+            type Output = Option<fn(RegisterSet)->Result<RegisterSet,ErrorCode>>;
             fn index(&self, index: $tagname) -> &Self::Output {
-                // Safety: We are repr(C), the same size as a [Option<fn()>;num_syscalls],
-                // and each handler pointer is the same size as a Option<fn()>
-                // Thus, our layout is guaranteed
-                unsafe {
-                    let self_arr: &[Option<fn()>;$nsname as usize] = core::mem::transmute(self);
-                    let index: $tagty = index.into();
-                    let index = index as usize;
-                    let handler_raw = &self_arr[index];
-                    let handler: &Option<HandlerType> = core::mem::transmute(handler_raw);
-                    handler
+                match index {
+                    $($tagname::$callname => &self.$callname,)+
                 }
             }
         }
-        impl<RegisterSet,ErrorCode,HandlerType> core::ops::IndexMut<$tagname> for $htname<RegisterSet,ErrorCode,HandlerType>
-          where HandlerType: Fn(RegisterSet)->Result<RegisterSet,ErrorCode> {
+        impl<RegisterSet,ErrorCode> core::ops::IndexMut<$tagname> for $htname<RegisterSet,ErrorCode> {
             fn index_mut(&mut self, index: $tagname) -> &mut Self::Output {
-                unsafe {
-                    let self_arr: &mut [Option<fn()>;$nsname as usize] = core::mem::transmute(self);
-                    let index: $tagty = index.into();
-                    let index = index as usize;
-                    let handler_raw = &mut self_arr[index];
-                    let handler: &mut Option<HandlerType> = core::mem::transmute(handler_raw);
-                    handler
+                match index {
+                    $($tagname::$callname => &mut self.$callname,)+
                 }
             }
         }
@@ -119,3 +98,7 @@ declare_syscalls! {
     extern syscall(0x02) fn Test2((x,y), z) -> x_or_y;
 }
 
+fn x(ht: ExampleHandlerTable<(),u32>){
+    let x = ht[ExampleSyscall::Test0];
+    todo!()
+}

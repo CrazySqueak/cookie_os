@@ -6,6 +6,7 @@
 macro_rules! declare_syscalls {
     {
         tag = $tagvis:vis enum($tagty:ty) $tagname:ident;
+        error_code = $eevis:vis enum($eety:ty) $eename:ident;
         num_syscalls = $nsvis:vis const $nsname:ident;
         handler_table = $htvis:vis struct $htname:ident;
 
@@ -13,9 +14,13 @@ macro_rules! declare_syscalls {
             $(#[doc=$doc:literal])*
             extern syscall($calltag:literal) fn $callname:ident ($($argdocname:ty),*) $( -> $docrt:ty)?;
         )+
+
+        $(  ;
+            $(#[doc=$errdoc:literal])*
+            error code $errname:ident = $errcode:literal;
+        )*
     } => {
         // Syscall ID enum
-        #[repr($tagty)]
         #[derive(Debug,Clone,Copy)]
         $tagvis enum $tagname {
             $(
@@ -40,6 +45,43 @@ macro_rules! declare_syscalls {
                 }
             }
         }
+        // Error Code enum
+        #[repr($eety)]
+        #[derive(Debug,Clone,Copy)]
+        $eevis enum $eename {
+            /// Success signifies that no error is present.
+            /// In an ideal world, this would be an Option<$eename> instead,
+            /// but the motherfucking orphan rule prevents me from implementing TryFrom and From
+            /// so instead we get this.
+            Success = 0 as $eety,
+            /// Unsupported signals that the system call is unsupported, has no defined handler, is undefined, or is otherwise unrecognised.
+            UnsupportedCall = u128::MAX as $eety,  // truncate MAX down to the correct value
+            $(
+                $(#[doc=$errdoc])*
+                #[warn(non_camel_case_types, reason="Syscall error codes should have upper camel case names")]
+                $errname = $errcode,
+            )*
+        }
+        impl ::core::convert::From<$eename> for $eety {
+            fn from(value: $eename) -> Self {
+                match value {
+                    $eename::Success => 0,
+                    $eename::UnsupportedCall => u128::MAX as $eety,
+                    $($eename::$errname => $errcode,)*
+                }
+            }
+        }
+        impl ::core::convert::TryFrom<$eety> for $eename {
+            type Error = u32;
+            fn try_from(value: $eety) -> Result<Self, Self::Error> {
+                if value == u128::MAX as $eety { return Ok($eename::UnsupportedCall); }
+                match value {
+                    0 => Ok($eename::Success),
+                    $($errcode => Ok($eename::$errname),)*
+                    _ => Err(value),
+                }
+            }
+        }
 
         /// Handler table
         /// This is dispatched from a rust stub which handles the Result<> and register interactions,
@@ -48,21 +90,26 @@ macro_rules! declare_syscalls {
         #[allow(non_snake_case)]
         #[derive(Default)]
         #[cfg(feature = "handle")]
-        $htvis struct $htname<RegisterSet,ErrorCode> {
+        $htvis struct $htname<RegisterSet> {
             $(
                 $(#[doc=$doc])*
-                $callname: Option<fn(RegisterSet)->Result<RegisterSet,ErrorCode>>,
+                $callname: Option<fn(&mut RegisterSet)->Result<(),$eename>>,
             )+
         }
-        impl<RegisterSet,ErrorCode> core::ops::Index<$tagname> for $htname<RegisterSet,ErrorCode> {
-            type Output = Option<fn(RegisterSet)->Result<RegisterSet,ErrorCode>>;
+        impl<RegisterSet> $htname<RegisterSet> {
+            pub fn dispatch(&self, tag: $tagname, rs: &mut RegisterSet) -> Result<(),$eename> {
+                self[tag].ok_or($eename::UnsupportedCall)?(rs)
+            }
+        }
+        impl<RegisterSet> core::ops::Index<$tagname> for $htname<RegisterSet> {
+            type Output = Option<fn(&mut RegisterSet)->Result<(),$eename>>;
             fn index(&self, index: $tagname) -> &Self::Output {
                 match index {
                     $($tagname::$callname => &self.$callname,)+
                 }
             }
         }
-        impl<RegisterSet,ErrorCode> core::ops::IndexMut<$tagname> for $htname<RegisterSet,ErrorCode> {
+        impl<RegisterSet> core::ops::IndexMut<$tagname> for $htname<RegisterSet> {
             fn index_mut(&mut self, index: $tagname) -> &mut Self::Output {
                 match index {
                     $($tagname::$callname => &mut self.$callname,)+
@@ -87,6 +134,7 @@ pub(crate) use declare_syscalls;
 #[cfg(feature = "examples")]
 declare_syscalls! {
     tag = pub enum(u32) ExampleSyscall;
+    error_code = pub enum(u32) ExampleSyscallErrorCode;
     num_syscalls = pub const NUM_EXAMPLE_SYSCALLS;
     handler_table = pub struct ExampleHandlerTable;
 
@@ -98,7 +146,7 @@ declare_syscalls! {
     extern syscall(0x02) fn Test2((x,y), z) -> x_or_y;
 }
 
-fn x(ht: ExampleHandlerTable<(),u32>){
+fn x(ht: ExampleHandlerTable<()>){
     let x = ht[ExampleSyscall::Test0];
     todo!()
 }
